@@ -631,6 +631,8 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
     imageCI.extent.width = _gpuObject.getWidth();
     imageCI.extent.height = _gpuObject.getHeight();
     imageCI.extent.depth = 1;
+    _imageWidth = imageCI.extent.width;
+    _imageHeight = imageCI.extent.height;
     imageCI.arrayLayers = _gpuObject.isArray() ? _gpuObject.getNumSlices() : 1;
     imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
