@@ -944,6 +944,19 @@ void VulkanDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
             }
         }
         _vkWindow->_swapchain.queuePresent(_vkWindow->_context.graphicsQueue, currentImageIndex, _vkWindow->_renderCompleteSemaphore);
+
+        { // If we have any snapshots this frame, handle them. Done after the frame is submitted so the readback sees it.
+            PROFILE_RANGE_EX(render, "snapshotOperators", 0xffff00ff, frameId)
+            while (!_currentFrame->snapshotOperators.empty()) {
+                auto& snapshotOperator = _currentFrame->snapshotOperators.front();
+                if (std::get<2>(snapshotOperator)) {
+                    std::get<0>(snapshotOperator)(getScreenshot(std::get<1>(snapshotOperator)));
+                } else {
+                    std::get<0>(snapshotOperator)(getSecondaryCameraScreenshot());
+                }
+                _currentFrame->snapshotOperators.pop();
+            }
+        }
         _vkWindow->_previousAcquireCompleteSemaphore = _vkWindow->_acquireCompleteSemaphore;
         _vkWindow->_previousRenderCompleteSemaphore = _vkWindow->_renderCompleteSemaphore;
         _vkWindow->_acquireCompleteSemaphore = VK_NULL_HANDLE;
@@ -1018,7 +1031,14 @@ bool VulkanDisplayPlugin::setDisplayTexture(const QString& name) {
 }
 
 QImage VulkanDisplayPlugin::getScreenshot(float aspectRatio) {
-    auto size = _compositeFramebuffer->getSize();
+    // The Vulkan plugin doesn't composite into _compositeFramebuffer yet; the frame that reaches the swapchain
+    // is the backend's output framebuffer, so read that back. Runs on the present thread.
+    auto vkBackend = std::dynamic_pointer_cast<gpu::vk::VKBackend>(getBackend());
+    auto size = vkBackend->getOutputFramebufferSize();
+    if (size.x == 0 || size.y == 0) {
+        qWarning() << "VulkanDisplayPlugin::getScreenshot: no output framebuffer available yet";
+        return QImage();
+    }
     if (isHmd()) {
         size.x /= 2;
     }
@@ -1034,9 +1054,7 @@ QImage VulkanDisplayPlugin::getScreenshot(float aspectRatio) {
         corner.y = round((size.y - bestSize.y) / 2.0f);
     }
     QImage screenshot(bestSize.x, bestSize.y, QImage::Format_ARGB32);
-    withOtherThreadContext([&] {
-        getBackend()->downloadFramebuffer(_compositeFramebuffer, ivec4(corner, bestSize), screenshot);
-    });
+    vkBackend->downloadOutputFramebuffer(ivec4(corner, bestSize), screenshot);
     return screenshot.mirrored(false, true);
 }
 
@@ -1046,9 +1064,8 @@ QImage VulkanDisplayPlugin::getSecondaryCameraScreenshot() {
     gpu::Vec4i region(0, 0, secondaryCameraFramebuffer->getWidth(), secondaryCameraFramebuffer->getHeight());
 
     QImage screenshot(region.z, region.w, QImage::Format_ARGB32);
-    withOtherThreadContext([&] {
-        getBackend()->downloadFramebuffer(secondaryCameraFramebuffer, region, screenshot);
-    });
+    // Runs on the present thread, which owns the Vulkan queue; no context switch needed.
+    getBackend()->downloadFramebuffer(secondaryCameraFramebuffer, region, screenshot);
     return screenshot.mirrored(false, true);
 }
 

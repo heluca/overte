@@ -17,6 +17,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <QtCore/QProcessEnvironment>
+#include <QtGui/QImage>
 
 // For hash_combine
 #include <RegisteredMetaTypes.h>
@@ -2656,7 +2657,152 @@ void VKBackend::transferTransformState(const Batch& batch) {
 
 
 void VKBackend::downloadFramebuffer(const FramebufferPointer& srcFramebuffer, const Vec4i& region, QImage& destImage) {
-    // VKTODO
+    if (!srcFramebuffer) {
+        return;
+    }
+    if ((srcFramebuffer->getWidth() < (uint32_t)(region.x + region.z)) || (srcFramebuffer->getHeight() < (uint32_t)(region.y + region.w))) {
+        qCWarning(gpu_vk_logging) << "VKBackend::downloadFramebuffer : srcFramebuffer is too small to provide the region queried";
+        return;
+    }
+    readbackFramebuffer(syncGPUObject(srcFramebuffer.get()), region, destImage);
+}
+
+bool VKBackend::downloadOutputFramebuffer(const Vec4i& region, QImage& destImage) {
+    return readbackFramebuffer(_outputTexture, region, destImage);
+}
+
+glm::uvec2 VKBackend::getOutputFramebufferSize() const {
+    if (!_outputTexture) {
+        return glm::uvec2(0);
+    }
+    return glm::uvec2(_outputTexture->_gpuObject.getWidth(), _outputTexture->_gpuObject.getHeight());
+}
+
+// Copies a region of the first color attachment into destImage. The rows are written bottom-up, matching what
+// glReadPixels produces, so callers can treat the result exactly like the OpenGL backend's (they mirror it afterwards).
+bool VKBackend::readbackFramebuffer(VKFramebuffer* vkFramebuffer, const Vec4i& region, QImage& destImage) {
+    if (!vkFramebuffer) {
+        qCWarning(gpu_vk_logging) << "VKBackend::readbackFramebuffer : no framebuffer to read from";
+        return false;
+    }
+    if (region.z <= 0 || region.w <= 0) {
+        return false;
+    }
+    if ((destImage.width() < region.z) || (destImage.height() < region.w)) {
+        qCWarning(gpu_vk_logging) << "VKBackend::readbackFramebuffer : destImage is too small to receive the region of the framebuffer";
+        return false;
+    }
+    if (destImage.format() != QImage::Format_ARGB32) {
+        qCWarning(gpu_vk_logging) << "VKBackend::readbackFramebuffer : destImage format must be FORMAT_ARGB32 to receive the region of the framebuffer";
+        return false;
+    }
+
+    const VKFramebuffer::FramebufferAttachment* colorAttachment = nullptr;
+    for (auto& attachment : vkFramebuffer->attachments) {
+        if (!attachment.isDepthStencil()) {
+            colorAttachment = &attachment;
+            break;
+        }
+    }
+    if (!colorAttachment || colorAttachment->image == VK_NULL_HANDLE) {
+        qCWarning(gpu_vk_logging) << "VKBackend::readbackFramebuffer : framebuffer has no color attachment";
+        return false;
+    }
+
+    bool sourceIsBGRA = false;
+    switch (colorAttachment->format) {
+        case VK_FORMAT_R8G8B8A8_UNORM:
+        case VK_FORMAT_R8G8B8A8_SRGB:
+            sourceIsBGRA = false;
+            break;
+        case VK_FORMAT_B8G8R8A8_UNORM:
+        case VK_FORMAT_B8G8R8A8_SRGB:
+            sourceIsBGRA = true;
+            break;
+        default:
+            qCWarning(gpu_vk_logging) << "VKBackend::readbackFramebuffer : unsupported color attachment format" << colorAttachment->format;
+            return false;
+    }
+
+    const uint32_t width = (uint32_t)region.z;
+    const uint32_t height = (uint32_t)region.w;
+    const size_t rowBytes = (size_t)width * 4;
+    const VkDeviceSize bufferSize = (VkDeviceSize)rowBytes * height;
+    auto device = _context.device;
+
+    // Host-visible staging buffer that receives the pixels.
+    VkBuffer stagingBuffer { VK_NULL_HANDLE };
+    VkDeviceMemory stagingMemory { VK_NULL_HANDLE };
+    VkBufferCreateInfo bufferCreateInfo = vks::initializers::bufferCreateInfo();
+    bufferCreateInfo.size = bufferSize;
+    bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VK_CHECK_RESULT(vkCreateBuffer(device->logicalDevice, &bufferCreateInfo, nullptr, &stagingBuffer));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(device->logicalDevice, stagingBuffer, &memReqs);
+    VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = device->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &stagingMemory));
+    VK_CHECK_RESULT(vkBindBufferMemory(device->logicalDevice, stagingBuffer, stagingMemory, 0));
+
+    VkImageSubresourceRange subresourceRange {};
+    subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    subresourceRange.baseMipLevel = 0;
+    subresourceRange.levelCount = 1;
+    subresourceRange.baseArrayLayer = 0;
+    subresourceRange.layerCount = 1;
+
+    // Render passes and the present blit leave color attachments in COLOR_ATTACHMENT_OPTIMAL.
+    VkCommandBuffer copyCmd = device->createCommandBuffer(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+    vks::tools::insertImageMemoryBarrier(copyCmd, colorAttachment->image,
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, subresourceRange);
+
+    VkBufferImageCopy copyRegion {};
+    copyRegion.bufferOffset = 0;
+    copyRegion.bufferRowLength = 0;
+    copyRegion.bufferImageHeight = 0;
+    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copyRegion.imageSubresource.mipLevel = 0;
+    copyRegion.imageSubresource.baseArrayLayer = 0;
+    copyRegion.imageSubresource.layerCount = 1;
+    copyRegion.imageOffset = { region.x, region.y, 0 };
+    copyRegion.imageExtent = { width, height, 1 };
+    vkCmdCopyImageToBuffer(copyCmd, colorAttachment->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer, 1, &copyRegion);
+
+    vks::tools::insertImageMemoryBarrier(copyCmd, colorAttachment->image,
+        VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, subresourceRange);
+
+    // Submits and waits for completion.
+    device->flushCommandBuffer(copyCmd, _context.graphicsQueue, device->graphicsCommandPool);
+
+    uint8_t* mapped = nullptr;
+    VK_CHECK_RESULT(vkMapMemory(device->logicalDevice, stagingMemory, 0, VK_WHOLE_SIZE, 0, (void**)&mapped));
+    for (uint32_t y = 0; y < height; ++y) {
+        const uint8_t* src = mapped + (size_t)y * rowBytes;
+        // Vulkan images are top-down; store bottom-up like glReadPixels.
+        uint8_t* dst = destImage.scanLine((int)(height - 1 - y));
+        if (sourceIsBGRA) {
+            // QImage::Format_ARGB32 is stored as B, G, R, A on little-endian hosts.
+            memcpy(dst, src, rowBytes);
+        } else {
+            for (uint32_t x = 0; x < width; ++x) {
+                dst[4 * x + 0] = src[4 * x + 2];
+                dst[4 * x + 1] = src[4 * x + 1];
+                dst[4 * x + 2] = src[4 * x + 0];
+                dst[4 * x + 3] = src[4 * x + 3];
+            }
+        }
+    }
+    vkUnmapMemory(device->logicalDevice, stagingMemory);
+    vkDestroyBuffer(device->logicalDevice, stagingBuffer, nullptr);
+    vkFreeMemory(device->logicalDevice, stagingMemory, nullptr);
+    return true;
 }
 
 gpu::Primitive VKBackend::getPrimitiveTopologyFromCommand(Batch::Command command, const gpu::Batch& batch, size_t paramOffset) {
