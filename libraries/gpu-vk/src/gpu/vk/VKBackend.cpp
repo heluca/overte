@@ -1422,10 +1422,23 @@ void VKBackend::renderPassDraw(const Batch& batch) {
             vkCmdSetViewport(_currentCommandBuffer, 0, 1, &viewport);
             // VKTODO: this will create too many set scissor commands, but should work
             VkRect2D scissor;
-            scissor.offset.x = _currentScissorRect.x;
-            scissor.offset.y = _currentScissorRect.y;
-            scissor.extent.width = _currentScissorRect.z;
-            scissor.extent.height = _currentScissorRect.w;
+            const auto& pipelineState = _cache.pipelineState.pipeline->getState();
+            if (pipelineState && pipelineState->isScissorEnable()) {
+                scissor.offset.x = _currentScissorRect.x;
+                scissor.offset.y = _currentScissorRect.y;
+                scissor.extent.width = _currentScissorRect.z;
+                scissor.extent.height = _currentScissorRect.w;
+            } else {
+                // Vulkan has no scissor test enable: the scissor is always applied. OpenGL only honours the
+                // scissor rect when the pipeline state enables the scissor test, so emulate a disabled scissor
+                // test by scissoring to the viewport (which is also the render area). Otherwise a stale rect
+                // left by an earlier pass (e.g. the resolution-scaled deferred passes) clips later full-size
+                // passes such as ToneMapAndResample.
+                scissor.offset.x = _transform._viewport.x;
+                scissor.offset.y = _transform._viewport.y;
+                scissor.extent.width = static_cast<uint32_t>(_transform._viewport.z);
+                scissor.extent.height = static_cast<uint32_t>(_transform._viewport.w);
+            }
             vkCmdSetScissor(_currentCommandBuffer, 0, 1, &scissor);
 
             // VKTODO: Descriptor sets and associated buffers should be set up during pre-pass
