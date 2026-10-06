@@ -197,7 +197,10 @@ public:
             }
 
 #if defined(Q_OS_MAC)
-            currentPlugin->_vkWindow->_primaryWidget->context()->makeCurrent();
+            // The QML readback needs an OpenGL context on this thread. It must not be the window's context:
+            // making that current from a secondary thread while the window is being resized makes Qt call
+            // -[NSOpenGLContext update], which AppKit only allows on the main thread (it traps otherwise).
+            _glCanvas->makeCurrent();
 #endif
             // Execute the frame and present it to the display device.
             {
@@ -208,18 +211,28 @@ public:
                 //CHECK_GL_ERROR();
             }
 #if defined(Q_OS_MAC)
-            currentPlugin->_vkWindow->_primaryWidget->context()->doneCurrent();
+            _glCanvas->doneCurrent();
 #endif
 
             _refreshRateController->sleepThreadIfNeeded(this, currentPlugin->isHmd());
         }
 
         //_context->doneCurrent();
+#if defined(Q_OS_MAC)
+        delete _glCanvas;
+        _glCanvas = nullptr;
+#endif
         Lock lock(_mutex);
         //_context->moveToThread(qApp->thread()); // VKTODO: is this needed?
         _shutdown = false;
         _condition.notify_one();
     }
+
+#if defined(Q_OS_MAC)
+    // Offscreen OpenGL context used by this thread, shared with the window's context. Created on the main
+    // thread and moved here before the thread starts; destroyed at the end of run().
+    void setGLCanvas(OffscreenGLCanvas* canvas) { _glCanvas = canvas; }
+#endif
 
     void withOtherThreadContext(std::function<void()> f) {
         // Signal to the thread that there is work to be done on the main thread
@@ -259,6 +272,9 @@ private:
     std::queue<VulkanDisplayPlugin*> _newPluginQueue;
     vks::Context* _context { nullptr };
     std::shared_ptr<RefreshRateController> _refreshRateController { nullptr };
+#if defined(Q_OS_MAC)
+    OffscreenGLCanvas* _glCanvas { nullptr };
+#endif
 };
 
 bool VulkanDisplayPlugin::activate() {
@@ -296,7 +312,17 @@ bool VulkanDisplayPlugin::activate() {
         }
         //CHECK_GL_ERROR();
         widget->context()->doneCurrent();
+#if defined(Q_OS_MAC)
+        // The present thread gets an offscreen context in the window context's share group instead of the
+        // window context itself; see VulkanPresentThread::run for why.
+        auto presentCanvas = new OffscreenGLCanvas();
+        presentCanvas->setObjectName("VulkanPresentThreadContext");
+        presentCanvas->create(widget->context()->qglContext());
+        presentCanvas->moveToThreadWithContext(presentThread.get());
+        presentThread->setGLCanvas(presentCanvas);
+#else
         widget->context()->moveToThread(presentThread.get());
+#endif
 #ifdef USE_GL
 #else
         VKWidget *vkWidget = _container->getPrimaryWidget();
@@ -784,12 +810,17 @@ void VulkanDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
             });
             // Execute the frame rendering commands
             PROFILE_RANGE_EX(render, "execute", 0xff00ff00, frameId)
+#if !defined(Q_OS_MAC)
             auto context = _container->getPrimaryWidget()->context();
             context->moveToThread(QThread::currentThread());
             context->makeCurrent();
+#endif
+            // On macOS the present thread's own offscreen context is current (VulkanPresentThread::run).
             vkBackend->setDrawCommandBuffer(commandBuffer);
             _gpuContext->executeFrame(_currentFrame);
+#if !defined(Q_OS_MAC)
             context->doneCurrent();
+#endif
             _renderedFrameCount++;
         }
 
