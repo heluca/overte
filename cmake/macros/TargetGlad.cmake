@@ -21,6 +21,15 @@ macro(TARGET_GLAD)
         find_package(glad QUIET REQUIRED)
     endif()
 
-    target_link_libraries(${TARGET_NAME} OpenGL::GL glad::glad)
+    if (APPLE AND NOT "${TARGET_NAME}" STREQUAL "gl")
+        # macOS uses a two-level namespace, so every dylib that links the static glad archive gets its own
+        # copy of the glad function pointer tables. Only the copy inside libgl (which runs gladLoadGLLoader)
+        # ever gets initialized, and the executable would bind to an uninitialized copy and crash.
+        # Link glad only into the gl library and let everything else resolve the symbols through it.
+        target_link_libraries(${TARGET_NAME} OpenGL::GL)
+        target_include_directories(${TARGET_NAME} PRIVATE $<TARGET_PROPERTY:glad::glad,INTERFACE_INCLUDE_DIRECTORIES>)
+    else()
+        target_link_libraries(${TARGET_NAME} OpenGL::GL glad::glad)
+    endif()
     # target_link_libraries(${TARGET_NAME} ${GLAD_EXTRA_LIBRARIES})       
 endmacro()
