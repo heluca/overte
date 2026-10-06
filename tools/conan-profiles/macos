@@ -10,7 +10,8 @@ compiler.libcxx=libc++
 compiler.cppstd=20
 # This changes the minimum macOS SDK deployment target and therefore the minimum supported macOS version. Equivalent to `CMAKE_OSX_DEPLOYMENT_TARGET`.
 # To check which macOS versions are apparently still supported by Apple: https://en.wikipedia.org/wiki/MacOS_version_history#Overview
-os.version=10.15
+# 14.0 (Sonoma) is the oldest release still receiving security updates as of October 2026.
+os.version=14.0
 
 [tool_requires]
 # Many of our dependencies don't support CMake 4 yet.
