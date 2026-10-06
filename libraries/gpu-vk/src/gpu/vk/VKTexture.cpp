@@ -16,6 +16,7 @@
 #include <QtCore/QThread>
 #include <NumericalConstants.h>
 #include <gl/GLHelpers.h>
+#include <gl/IOSurfaceTexture.h>
 
 #include "VKBackend.h"
 #include "vk/Allocation.h"
@@ -625,6 +626,17 @@ VKStrictResourceTexture::~VKStrictResourceTexture() {
 void VKExternalTexture::createTexture(VKBackend &backend) {
     auto device = backend.getContext().device;
 
+#ifdef Q_OS_MAC
+    if (backend.getContext().metalObjectsEnabled && ::gl::useIOSurfaceTextures()) {
+        // Zero copy path: images are created per IOSurface in bindIOSurface, nothing fixed to allocate here.
+        _usingIOSurface = true;
+        _imageWidth = _gpuObject.getWidth();
+        _imageHeight = _gpuObject.getHeight();
+        _vkImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        return;
+    }
+#endif
+
     VkImageCreateInfo imageCI = vks::initializers::imageCreateInfo();
     imageCI.imageType = VK_IMAGE_TYPE_2D;
     imageCI.format = evalTexelFormatInternal(_gpuObject.getTexelFormat(), backend.getContext());
@@ -841,6 +853,9 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
 #ifdef Q_OS_MAC
 
 void VKExternalTexture::initGL(gpu::vk::VKBackend& backend) {
+    if (_usingIOSurface) {
+        return;
+    }
     // No OpenGL side objects are needed: the source texture is read back with glGetTexImage.
     // Create the persistently mapped, host visible staging buffer used for the readback.
     auto device = backend.getContext().device;
@@ -864,7 +879,28 @@ void VKExternalTexture::initGL(gpu::vk::VKBackend& backend) {
 }
 
 void VKExternalTexture::transferGL(VKBackend &backend) {
-    if (!_openGLSourceId || !_stagingMapped) {
+    if (!_openGLSourceId) {
+        return;
+    }
+    if (_usingIOSurface) {
+        uint32_t surfaceWidth = 0, surfaceHeight = 0;
+        void* surface = ::gl::ioSurfaceForTexture(_openGLSourceId, &surfaceWidth, &surfaceHeight);
+        if (!surface) {
+            qCWarning(gpu_vk_logging) << "VKExternalTexture::transferGL: OpenGL texture" << _openGLSourceId
+                                      << "is not IOSurface backed; the UI texture cannot be shared";
+            return;
+        }
+        if (surfaceWidth != _imageWidth || surfaceHeight != _imageHeight) {
+            // The QML surface was resized but the gpu::Texture has not caught up yet (or vice versa);
+            // the backend replaces this object once the sizes agree.
+            qCDebug(gpu_vk_logging) << "VKExternalTexture::transferGL: IOSurface is" << surfaceWidth << "x" << surfaceHeight
+                                    << "but the texture is" << _imageWidth << "x" << _imageHeight << "; waiting for resize";
+            return;
+        }
+        bindIOSurface(backend, surface);
+        return;
+    }
+    if (!_stagingMapped) {
         return;
     }
     auto device = backend.getContext().device;
@@ -932,6 +968,116 @@ void VKExternalTexture::transferGL(VKBackend &backend) {
     device->flushCommandBuffer(copyCmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
 }
 
+// Makes the VkImage wrapping `surface` the one sampled by the shader, creating it on first use.
+void VKExternalTexture::bindIOSurface(VKBackend& backend, void* surface) {
+    ++_ioSurfaceBindCounter;
+    auto existing = _ioSurfaceImages.find(surface);
+    if (existing != _ioSurfaceImages.end()) {
+        existing->second.lastUsed = _ioSurfaceBindCounter;
+        _vkImageView = existing->second.view;
+        return;
+    }
+
+    auto device = backend.getContext().device;
+    auto& recycler = backend.getContext().recycler;
+    // The IOSurface is allocated as BGRA (the format both CGL and Metal accept); the shader still
+    // receives the channels in RGBA order, so no swizzle is needed.
+    const VkFormat format = VK_FORMAT_B8G8R8A8_UNORM;
+
+    IOSurfaceImage entry;
+    entry.surface = surface;
+    entry.lastUsed = _ioSurfaceBindCounter;
+
+    VkImportMetalIOSurfaceInfoEXT importInfo {};
+    importInfo.sType = VK_STRUCTURE_TYPE_IMPORT_METAL_IO_SURFACE_INFO_EXT;
+    importInfo.ioSurface = static_cast<IOSurfaceRef>(surface);
+
+    VkImageCreateInfo imageCI = vks::initializers::imageCreateInfo();
+    imageCI.pNext = &importInfo;
+    imageCI.imageType = VK_IMAGE_TYPE_2D;
+    imageCI.format = format;
+    imageCI.extent = { _imageWidth, _imageHeight, 1 };
+    imageCI.mipLevels = 1;
+    imageCI.arrayLayers = 1;
+    imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageCI.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkResult result = vkCreateImage(device->logicalDevice, &imageCI, nullptr, &entry.image);
+    if (result != VK_SUCCESS) {
+        qCWarning(gpu_vk_logging) << "VKExternalTexture::bindIOSurface: vkCreateImage failed:" << vks::tools::errorString(result).c_str();
+        return;
+    }
+
+    // MoltenVK backs the MTLTexture with the IOSurface itself, but Vulkan still requires memory to be bound.
+    VkMemoryRequirements memReqs {};
+    vkGetImageMemoryRequirements(device->logicalDevice, entry.image, &memReqs);
+    VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = device->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &entry.memory));
+    VK_CHECK_RESULT(vkBindImageMemory(device->logicalDevice, entry.image, entry.memory, 0));
+
+    VkImageViewCreateInfo viewCI = vks::initializers::imageViewCreateInfo();
+    viewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewCI.format = format;
+    viewCI.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    viewCI.image = entry.image;
+    VK_CHECK_RESULT(vkCreateImageView(device->logicalDevice, &viewCI, nullptr, &entry.view));
+
+    // Move the image to the layout getDescriptorImageInfo reports. Layouts are a formality on Metal, but
+    // keep the Vulkan side consistent with the readback path.
+    VkCommandBuffer cmd = device->createCommandBuffer(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+    vks::tools::setImageLayout(cmd, entry.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                               viewCI.subresourceRange, device->queueFamilyIndices.graphics, device->queueFamilyIndices.graphics,
+                               VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    device->flushCommandBuffer(cmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
+
+    ::gl::retainIOSurface(surface);
+    _ioSurfaceImages[surface] = entry;
+    _vkImageView = entry.view;
+    if (_ioSurfaceImages.size() == 1) {
+        qCDebug(gpu_vk_logging) << "External texture" << _imageWidth << "x" << _imageHeight
+                               << "is shared with OpenGL through an IOSurface (zero copy)";
+    }
+
+    // The QML texture cache keeps a handful of textures per size; anything beyond that is a surface that
+    // was destroyed and whose address got reused, so drop the least recently bound entries.
+    const size_t MAX_CACHED_SURFACES = 8;
+    while (_ioSurfaceImages.size() > MAX_CACHED_SURFACES) {
+        auto oldest = _ioSurfaceImages.end();
+        for (auto it = _ioSurfaceImages.begin(); it != _ioSurfaceImages.end(); ++it) {
+            if (it->first != surface && (oldest == _ioSurfaceImages.end() || it->second.lastUsed < oldest->second.lastUsed)) {
+                oldest = it;
+            }
+        }
+        recycler.trashVkImageView(oldest->second.view);
+        recycler.trashVkImage(oldest->second.image);
+        recycler.trashVkDeviceMemory(oldest->second.memory);
+        ::gl::releaseIOSurface(oldest->first);
+        _ioSurfaceImages.erase(oldest);
+    }
+}
+
+void VKExternalTexture::releaseIOSurfaceImages() {
+    auto backend = _backend.lock();
+    if (!backend) {
+        return;
+    }
+    auto& recycler = backend->getContext().recycler;
+    for (auto& pair : _ioSurfaceImages) {
+        recycler.trashVkImageView(pair.second.view);
+        recycler.trashVkImage(pair.second.image);
+        recycler.trashVkDeviceMemory(pair.second.memory);
+        ::gl::releaseIOSurface(pair.first);
+    }
+    _ioSurfaceImages.clear();
+    if (_usingIOSurface) {
+        // The view belonged to one of the cached images; never hand it to the destructor twice.
+        _vkImageView = VK_NULL_HANDLE;
+    }
+}
+
 #else
 
 void VKExternalTexture::initGL(gpu::vk::VKBackend& backend) {
@@ -988,6 +1134,11 @@ void VKExternalTexture::postTransfer(VKBackend &backend) {
     samplerCreateInfo.maxAnisotropy = 1.0f;
     VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
 
+    if (_vkImage == VK_NULL_HANDLE) {
+        // IOSurface mode: views are created per surface in bindIOSurface.
+        return;
+    }
+
     // Create image view
     VkImageViewCreateInfo viewCreateInfo = {};
     viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -1030,12 +1181,21 @@ VKExternalTexture::~VKExternalTexture() {
     releaseExternalTexture();
     auto backend = _backend.lock();
     auto &recycler = backend->getContext().recycler;
-    recycler.trashVkImageView(_vkImageView);
+#ifdef Q_OS_MAC
+    releaseIOSurfaceImages();
+#endif
+    if (_vkImageView) {
+        recycler.trashVkImageView(_vkImageView);
+    }
     if (_vkSampler) {
         recycler.trashVkSampler(_vkSampler);
     }
-    recycler.trashVkImage(_vkImage);
-    recycler.trashVkDeviceMemory(_sharedMemory);
+    if (_vkImage) {
+        recycler.trashVkImage(_vkImage);
+    }
+    if (_sharedMemory) {
+        recycler.trashVkDeviceMemory(_sharedMemory);
+    }
 #ifdef Q_OS_MAC
     if (_stagingBuffer) {
         if (_stagingMapped) {
@@ -1051,7 +1211,9 @@ VKExternalTexture::~VKExternalTexture() {
 VkDescriptorImageInfo VKExternalTexture::getDescriptorImageInfo() {
     VkDescriptorImageInfo result {};
     result.sampler = _vkSampler;
-    result.imageLayout = _vkImageLayout;
+    // No view yet (IOSurface mode before the first surface was bound): report UNDEFINED so the backend
+    // substitutes its default texture instead of writing a null view into the descriptor set.
+    result.imageLayout = _vkImageView ? _vkImageLayout : VK_IMAGE_LAYOUT_UNDEFINED;
     result.imageView = _vkImageView;
     return result;
 }

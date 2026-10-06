@@ -1607,7 +1607,16 @@ VKTexture* VKBackend::syncGPUObject(const std::shared_ptr<Texture> &texture) {
             // Check for a fence, and if it exists, inject a wait into the command stream, then destroy the fence
             if (update.second) {
                 GLsync fence = static_cast<GLsync>(update.second);
+#ifdef Q_OS_MAC
+                // The texture is consumed by Metal through an IOSurface (or by glGetTexImage), neither of which is
+                // ordered by a server side wait, so block until the QML render has actually completed. The QML
+                // thread flushed after creating the fence, and by the time the update is picked up here it has
+                // almost always signalled already.
+                const GLuint64 ONE_SECOND_NS = 1000000000ull;
+                glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, ONE_SECOND_NS);
+#else
                 glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); // VKTODO: Maybe take earlier texture instead of waiting to avoid stall?
+#endif
                 glDeleteSync(fence);
             }
 

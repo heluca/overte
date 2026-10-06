@@ -83,6 +83,9 @@ public:
 
     void setValidationEnabled(bool enable);
 
+    // macOS: VK_EXT_metal_objects was enabled on the device, so IOSurfaces can be imported as VkImages.
+    bool metalObjectsEnabled { false };
+
     void createInstance();
 
     void destroyContext();

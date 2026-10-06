@@ -258,6 +258,19 @@ void Context::buildDevice() {
     }
     enabledExtensions.push_back(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
 
+    Q_ASSERT(!device);
+    device.reset(new VulkanDevice(physicalDevice));
+
+#ifdef Q_OS_MAC
+    // Lets VkImages be created on IOSurfaces shared with OpenGL (QML UI hand-off without a readback).
+    if (device->extensionSupported(VK_EXT_METAL_OBJECTS_EXTENSION_NAME)) {
+        enabledExtensions.push_back(VK_EXT_METAL_OBJECTS_EXTENSION_NAME);
+        metalObjectsEnabled = true;
+    } else {
+        qWarning() << "VK_EXT_metal_objects is not supported by this MoltenVK; QML textures will be read back through the CPU";
+    }
+#endif
+
     // Needed for OpenGL depth buffer compatibility
     VkPhysicalDeviceDepthClipControlFeaturesEXT depthClipControl{};
     depthClipControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT;
@@ -268,8 +281,6 @@ void Context::buildDevice() {
     enabledFeatures.depthClamp = true;
     enabledFeatures.fillModeNonSolid = true;
 
-    Q_ASSERT(!device);
-    device.reset(new VulkanDevice(physicalDevice));
     device->createLogicalDevice(enabledFeatures, enabledExtensions, pNextChain, true,
                                 VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_TRANSFER_BIT | VK_QUEUE_COMPUTE_BIT);
 }
