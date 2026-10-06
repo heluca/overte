@@ -631,6 +631,8 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
     imageCI.extent.width = _gpuObject.getWidth();
     imageCI.extent.height = _gpuObject.getHeight();
     imageCI.extent.depth = 1;
+    _imageWidth = imageCI.extent.width;
+    _imageHeight = imageCI.extent.height;
     imageCI.arrayLayers = _gpuObject.isArray() ? _gpuObject.getNumSlices() : 1;
     imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -873,7 +875,19 @@ void VKExternalTexture::transferGL(VKBackend &backend) {
     glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glBindTexture(GL_TEXTURE_2D, _openGLSourceId);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, _stagingMapped);
+    // glGetTexImage writes the whole source texture; never let it run past the staging buffer.
+    GLint sourceWidth = 0, sourceHeight = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &sourceWidth);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &sourceHeight);
+    if (sourceWidth == (GLint)_imageWidth && sourceHeight == (GLint)_imageHeight) {
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, _stagingMapped);
+    } else {
+        qCWarning(gpu_vk_logging) << "VKExternalTexture::transferGL: source texture is" << sourceWidth << "x" << sourceHeight
+                                  << "but the Vulkan image is" << _imageWidth << "x" << _imageHeight << "; skipping readback";
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+        return;
+    }
     glBindTexture(GL_TEXTURE_2D, 0);
     glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
     ::gl::checkGLError("GL to VK readback");
@@ -900,7 +914,7 @@ void VKExternalTexture::transferGL(VKBackend &backend) {
     region.bufferImageHeight = 0;
     region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     region.imageOffset = { 0, 0, 0 };
-    region.imageExtent = { _gpuObject.getWidth(), _gpuObject.getHeight(), 1 };
+    region.imageExtent = { _imageWidth, _imageHeight, 1 };
     vkCmdCopyBufferToImage(copyCmd, _stagingBuffer, _vkImage, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
 
     vks::tools::insertImageMemoryBarrier(

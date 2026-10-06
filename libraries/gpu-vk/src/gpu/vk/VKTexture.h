@@ -395,6 +395,9 @@ public:
     void releaseExternalTexture(); // Called on destructor and when new texture is set
     void setSource(GLuint source);
     void transferGL(VKBackend &backend);
+    // The Vulkan image is sized when the object is created; the gpu::Texture can be resized afterwards
+    // (the QML UI texture is, whenever the window changes size), in which case the backend replaces the object.
+    bool matchesGpuObjectSize() const { return _imageWidth == _gpuObject.getWidth() && _imageHeight == _gpuObject.getHeight(); }
 
 protected:
     Size size() const override { return _size; }
@@ -423,6 +426,8 @@ protected:
 #endif
     GLuint _openGLMemoryObject = 0;
     GLuint _openGLId = 0;
+    uint32_t _imageWidth { 0 };
+    uint32_t _imageHeight { 0 };
 #ifdef Q_OS_MAC
     // MoltenVK has no exportable memory and Apple's OpenGL has no GL_EXT_memory_object, so on macOS the
     // QML texture is read back from OpenGL into a host visible staging buffer and copied into the image.

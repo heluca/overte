@@ -1611,14 +1611,24 @@ VKTexture* VKBackend::syncGPUObject(const std::shared_ptr<Texture> &texture) {
                 glDeleteSync(fence);
             }
 
+            auto externalTexture = dynamic_cast<VKExternalTexture*>(object);
+            if (externalTexture && !externalTexture->matchesGpuObjectSize()) {
+                // The gpu::Texture was resized (e.g. the QML UI after a window resize). The Vulkan image and
+                // its OpenGL side objects are fixed size, so replace the whole object; constructing the new
+                // one deletes the old one through the GPUObject pointer, and its Vulkan resources go through
+                // the recycler.
+                _textures.erase(object);
+                object = nullptr;
+                externalTexture = nullptr;
+            }
             if (!object) {
-                object = new VKExternalTexture(shared_from_this(), *texture);
+                externalTexture = new VKExternalTexture(shared_from_this(), *texture);
+                object = externalTexture;
                 _textures.insert(object);
             }
-            auto externalTexture = dynamic_cast<VKExternalTexture*>(object);
             Q_ASSERT(externalTexture);
             externalTexture->setSource(update.first);
-            externalTexture->transferGL(*this); // VKTODO: add texture resizing if needed
+            externalTexture->transferGL(*this);
 
             // Create the new texture object (replaces any previous texture object)
 
