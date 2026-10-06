@@ -423,6 +423,14 @@ protected:
 #endif
     GLuint _openGLMemoryObject = 0;
     GLuint _openGLId = 0;
+#ifdef Q_OS_MAC
+    // MoltenVK has no exportable memory and Apple's OpenGL has no GL_EXT_memory_object, so on macOS the
+    // QML texture is read back from OpenGL into a host visible staging buffer and copied into the image.
+    VkBuffer _stagingBuffer { VK_NULL_HANDLE };
+    VkDeviceMemory _stagingMemory { VK_NULL_HANDLE };
+    void* _stagingMapped { nullptr };
+    VkDeviceSize _stagingSize { 0 };
+#endif
     GLuint _openGLSourceId = 0;
 };
 

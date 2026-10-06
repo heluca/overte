@@ -716,6 +716,7 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
 
     imageCI.mipLevels = 1;
 
+#ifndef Q_OS_MAC
     VkExternalMemoryImageCreateInfo externalMemoryImageCI {};
     externalMemoryImageCI.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
 #ifdef WIN32
@@ -724,6 +725,7 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
     externalMemoryImageCI.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
 #endif
     imageCI.pNext = &externalMemoryImageCI;
+#endif
 
     VK_CHECK_RESULT(vkCreateImage(device->logicalDevice, &imageCI, nullptr, &_vkImage));
 
@@ -761,10 +763,17 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
     memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     memoryAllocateInfo.allocationSize = memoryRequirements2.memoryRequirements.size;
     memoryAllocateInfo.memoryTypeIndex = device->getMemoryType(memoryRequirements2.memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+#ifdef Q_OS_MAC
+    // Plain device memory: the image is filled from a staging buffer instead of being shared with OpenGL.
+    memoryAllocateInfo.pNext = nullptr;
+#else
     memoryAllocateInfo.pNext = &exportMemoryAllocateInfo;
+#endif
 
     VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memoryAllocateInfo, nullptr, &_sharedMemory));
-#ifdef WIN32
+#if defined(Q_OS_MAC)
+    // Nothing to export.
+#elif defined(WIN32)
     VkMemoryGetWin32HandleInfoKHR memoryGetWin32HandleInfoKHR {};
     memoryGetWin32HandleInfoKHR.sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
     memoryGetWin32HandleInfoKHR.memory = _sharedMemory,
@@ -802,7 +811,12 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT);
 
+#ifdef Q_OS_MAC
+    // Fully transparent until the first UI frame is read back, so the HUD does not tint the scene.
+    VkClearColorValue color = { .float32 = {0.0, 0.0, 0.0, 0.0} };
+#else
     VkClearColorValue color = { .float32 = {0.5, 0.0, 0.0} };
+#endif
     VkImageSubresourceRange imageSubresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     vkCmdClearColorImage(transferCmd, _vkImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &imageSubresourceRange);
 
@@ -821,6 +835,90 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
 
     device->flushCommandBuffer(transferCmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
 }
+
+#ifdef Q_OS_MAC
+
+void VKExternalTexture::initGL(gpu::vk::VKBackend& backend) {
+    // No OpenGL side objects are needed: the source texture is read back with glGetTexImage.
+    // Create the persistently mapped, host visible staging buffer used for the readback.
+    auto device = backend.getContext().device;
+    Q_ASSERT(evalTexelFormatInternal(_gpuObject.getTexelFormat(), backend.getContext()) == VK_FORMAT_R8G8B8A8_UNORM);
+    _stagingSize = (VkDeviceSize)_gpuObject.getWidth() * _gpuObject.getHeight() * 4;
+
+    VkBufferCreateInfo bufferCreateInfo = vks::initializers::bufferCreateInfo();
+    bufferCreateInfo.size = _stagingSize;
+    bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VK_CHECK_RESULT(vkCreateBuffer(device->logicalDevice, &bufferCreateInfo, nullptr, &_stagingBuffer));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(device->logicalDevice, _stagingBuffer, &memReqs);
+    VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = device->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &_stagingMemory));
+    VK_CHECK_RESULT(vkBindBufferMemory(device->logicalDevice, _stagingBuffer, _stagingMemory, 0));
+    VK_CHECK_RESULT(vkMapMemory(device->logicalDevice, _stagingMemory, 0, memReqs.size, 0, &_stagingMapped));
+}
+
+void VKExternalTexture::transferGL(VKBackend &backend) {
+    if (!_openGLSourceId || !_stagingMapped) {
+        return;
+    }
+    auto device = backend.getContext().device;
+
+    // Read the QML texture back from OpenGL. The caller has already issued glWaitSync on the fence that
+    // guards the source texture, and glGetTexImage blocks until the GPU has finished producing it.
+    GLint previousPackAlignment = 4;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, _openGLSourceId);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, _stagingMapped);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+    ::gl::checkGLError("GL to VK readback");
+
+    // Copy the staging buffer into the image. The image stays in VK_IMAGE_LAYOUT_GENERAL, which is what
+    // getDescriptorImageInfo reports and what the shared-memory path on other platforms uses.
+    VkCommandBuffer copyCmd = device->createCommandBuffer(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+    VkImageSubresourceRange subresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    vks::tools::insertImageMemoryBarrier(
+        copyCmd,
+        _vkImage,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        subresourceRange);
+
+    VkBufferImageCopy region {};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    region.imageOffset = { 0, 0, 0 };
+    region.imageExtent = { _gpuObject.getWidth(), _gpuObject.getHeight(), 1 };
+    vkCmdCopyBufferToImage(copyCmd, _stagingBuffer, _vkImage, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+
+    vks::tools::insertImageMemoryBarrier(
+        copyCmd,
+        _vkImage,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        subresourceRange);
+
+    // VKTODO: fold this into the frame command buffer instead of a synchronous submit.
+    device->flushCommandBuffer(copyCmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
+}
+
+#else
 
 void VKExternalTexture::initGL(gpu::vk::VKBackend& backend) {
     glCreateMemoryObjectsEXT(1, &_openGLMemoryObject); // VKTODO: clean these up later
@@ -855,6 +953,8 @@ void VKExternalTexture::transferGL(VKBackend &backend) {
     ::gl::checkGLError("GL to VK");
     // VKTODO: generate mipmaps
 }
+
+#endif // Q_OS_MAC
 
 void VKExternalTexture::postTransfer(VKBackend &backend) {
     auto device = backend.getContext().device;
@@ -922,6 +1022,16 @@ VKExternalTexture::~VKExternalTexture() {
     }
     recycler.trashVkImage(_vkImage);
     recycler.trashVkDeviceMemory(_sharedMemory);
+#ifdef Q_OS_MAC
+    if (_stagingBuffer) {
+        if (_stagingMapped) {
+            vkUnmapMemory(backend->getContext().device->logicalDevice, _stagingMemory);
+            _stagingMapped = nullptr;
+        }
+        recycler.trashVkBuffer(_stagingBuffer);
+        recycler.trashVkDeviceMemory(_stagingMemory);
+    }
+#endif
 }
 
 VkDescriptorImageInfo VKExternalTexture::getDescriptorImageInfo() {

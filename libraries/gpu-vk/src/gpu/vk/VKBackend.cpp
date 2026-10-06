@@ -1582,8 +1582,10 @@ VKTexture* VKBackend::syncGPUObject(const std::shared_ptr<Texture> &texture) {
         if (_isFramePlayer) {
             return nullptr; // Frame player does not support external textures
         }
+#ifndef Q_OS_MAC
         Q_ASSERT(GLAD_GL_EXT_memory_object);
         Q_ASSERT(GLAD_GL_EXT_semaphore);
+#endif
         Texture::ExternalUpdates updates = texture->getUpdates();
         if (!updates.empty()) {
             Texture::ExternalRecycler recycler = texture->getExternalRecycler();
