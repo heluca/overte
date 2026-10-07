@@ -895,8 +895,10 @@ void VKExternalTexture::transferGL(VKBackend &backend) {
             // the backend replaces this object once the sizes agree.
             qCDebug(gpu_vk_logging) << "VKExternalTexture::transferGL: IOSurface is" << surfaceWidth << "x" << surfaceHeight
                                     << "but the texture is" << _imageWidth << "x" << _imageHeight << "; waiting for resize";
+            ::gl::releaseIOSurface(surface);
             return;
         }
+        // bindIOSurface takes over the reference returned by ioSurfaceForTexture.
         bindIOSurface(backend, surface);
         return;
     }
@@ -975,6 +977,8 @@ void VKExternalTexture::bindIOSurface(VKBackend& backend, void* surface) {
     if (existing != _ioSurfaceImages.end()) {
         existing->second.lastUsed = _ioSurfaceBindCounter;
         _vkImageView = existing->second.view;
+        // The cache entry already holds its own reference.
+        ::gl::releaseIOSurface(surface);
         return;
     }
 
@@ -1033,7 +1037,7 @@ void VKExternalTexture::bindIOSurface(VKBackend& backend, void* surface) {
                                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
     device->flushCommandBuffer(cmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
 
-    ::gl::retainIOSurface(surface);
+    // The cache entry keeps the reference handed to us by the caller.
     _ioSurfaceImages[surface] = entry;
     _vkImageView = entry.view;
     if (_ioSurfaceImages.size() == 1) {

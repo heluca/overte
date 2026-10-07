@@ -157,13 +157,8 @@ void* gl::ioSurfaceForTexture(uint32_t texture, uint32_t* width, uint32_t* heigh
     if (height) {
         *height = it->second.height;
     }
+    CFRetain(it->second.surface);
     return it->second.surface;
-}
-
-void gl::retainIOSurface(void* ioSurface) {
-    if (ioSurface) {
-        CFRetain(static_cast<IOSurfaceRef>(ioSurface));
-    }
 }
 
 void gl::releaseIOSurface(void* ioSurface) {
@@ -179,7 +174,6 @@ uint32_t gl::createIOSurfaceTexture(uint32_t, uint32_t) { return 0; }
 void gl::destroyIOSurfaceTexture(uint32_t) {}
 bool gl::isIOSurfaceTexture(uint32_t) { return false; }
 void* gl::ioSurfaceForTexture(uint32_t, uint32_t*, uint32_t*) { return nullptr; }
-void gl::retainIOSurface(void*) {}
 void gl::releaseIOSurface(void*) {}
 
 #endif  // Q_OS_MAC

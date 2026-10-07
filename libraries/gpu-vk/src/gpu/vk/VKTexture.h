@@ -450,6 +450,7 @@ protected:
     };
     std::unordered_map<void*, IOSurfaceImage> _ioSurfaceImages;
     uint64_t _ioSurfaceBindCounter { 0 };
+    // Takes ownership of the reference to `surface` obtained from gl::ioSurfaceForTexture.
     void bindIOSurface(VKBackend& backend, void* surface);
     void releaseIOSurfaceImages();
 

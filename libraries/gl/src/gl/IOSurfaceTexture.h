@@ -39,12 +39,13 @@ void destroyIOSurfaceTexture(uint32_t texture);
 
 bool isIOSurfaceTexture(uint32_t texture);
 
-// Returns the IOSurfaceRef (as an opaque pointer, not retained) behind a texture created with
-// createIOSurfaceTexture, or nullptr. Optionally reports the surface size.
+// Returns the IOSurfaceRef (as an opaque pointer) behind a texture created with createIOSurfaceTexture,
+// or nullptr. The reference is retained on the caller's behalf while the registry lock is held, so the
+// surface cannot be freed by a concurrent destroyIOSurfaceTexture; the caller owns it and must pass it to
+// releaseIOSurface. Optionally reports the surface size.
 void* ioSurfaceForTexture(uint32_t texture, uint32_t* width = nullptr, uint32_t* height = nullptr);
 
-// Reference counting for holders that outlive the OpenGL texture (the Vulkan side caches VkImages per surface).
-void retainIOSurface(void* ioSurface);
+// Releases a reference obtained from ioSurfaceForTexture.
 void releaseIOSurface(void* ioSurface);
 
 }  // namespace gl
