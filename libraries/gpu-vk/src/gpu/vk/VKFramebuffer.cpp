@@ -18,11 +18,13 @@
 
 void gpu::vk::VKFramebuffer::update() {
     auto backend = _backend.lock();
-    VkDevice device = backend->getContext().device->logicalDevice;
     // VKTODO: this is wrong, most of framebuffer code will need to be rewritten
+    auto& recycler = backend->getContext().recycler;
     if (vkFramebuffer != VK_NULL_HANDLE) {
-        // VKTODO: don't destroy immediately, recycle instead for deletion after current frame completes.
-        vkDestroyFramebuffer(device, vkFramebuffer, nullptr);
+        // The frame being recorded may already reference this framebuffer (MoltenVK encodes the Metal
+        // commands at submit time), so it must stay alive until the frame has completed. The recycler
+        // destroys it at the start of the next frame, after the fence wait.
+        recycler.trashVkFramebuffer(vkFramebuffer);
     }
     if (vkRenderPass) {
         backend->_currentFrame->_renderPasses.push_back(vkRenderPass);
@@ -33,7 +35,10 @@ void gpu::vk::VKFramebuffer::update() {
     bool lastTextureWasNull = false;
     if (_gpuObject.getColorStamps() != _colorStamps) {
         if (_gpuObject.hasColor()) {
-            // VKTODO: Do these need to be deleted?
+            // The old views are still referenced by the framebuffer just handed to the recycler.
+            for (auto& attachment : attachments) {
+                recycler.trashVkImageView(attachment.view);
+            }
             attachments.clear();
 
             //int unit = 0;

@@ -31,6 +31,9 @@ public:
 
     bool event(QEvent *event) override;
 
+    // One line describing the window and swapchain sizes, for logging.
+    QString describeSurface() const;
+
 signals:
     void aboutToClose();
 
