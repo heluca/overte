@@ -31,6 +31,14 @@
 #include "Config.h"
 #include "VulkanSwapChain.h"
 #include "Context.h"
+
+// MoltenVK only reports the FIFO and IMMEDIATE present modes, never MAILBOX, so a swapchain created
+// without vsync ends up in IMMEDIATE mode on macOS and tears. FIFO is the only tear-free mode there.
+#ifdef Q_OS_MAC
+static const bool SWAPCHAIN_VSYNC = true;
+#else
+static const bool SWAPCHAIN_VSYNC = false;
+#endif
 #ifdef Q_OS_MAC
 	#include "layerForWindow.h"
 #endif
@@ -89,7 +97,7 @@ void VKWindow::createSwapchain() {
         auto qsize = size();
         _extent = VkExtent2D{(uint32_t)qsize.width(), (uint32_t)qsize.height()};
     }
-    _swapchain.create(&_extent.width, &_extent.height, false, false);
+    _swapchain.create(&_extent.width, &_extent.height, SWAPCHAIN_VSYNC, false);
 
     createCommandBuffers();
     setupRenderPass();
@@ -404,7 +412,7 @@ void VKWindow::resizeFramebuffer() {
     }
     //vkQueueWaitIdle();
     VK_CHECK_RESULT(vkDeviceWaitIdle(_context.device->logicalDevice));
-    _swapchain.create(&_extent.width, &_extent.height, false, false);
+    _swapchain.create(&_extent.width, &_extent.height, SWAPCHAIN_VSYNC, false);
     // TODO: add an assert here to see if width and height changed?
     setupDepthStencil();
     setupFramebuffers();
