@@ -835,7 +835,9 @@ void Application::updateThemeColors() {
 
     qApp->setStyle(style);
     qApp->setPalette(palette);
-    qApp->getPrimaryMenu()->setPalette(palette); // weird Qt bug workaround
+    if (auto menu = getPrimaryMenu()) { // not there yet when called from the constructor
+        menu->setPalette(palette); // weird Qt bug workaround
+    }
 }
 
 void Application::setDarkThemePreference(bool value) {
