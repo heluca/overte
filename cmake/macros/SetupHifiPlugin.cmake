@@ -18,11 +18,7 @@ macro(SETUP_HIFI_PLUGIN)
     target_link_libraries(${TARGET_NAME} ${CMAKE_THREAD_LIBS_INIT})
     set_target_properties(${TARGET_NAME} PROPERTIES FOLDER "Plugins")
 
-    if (APPLE)
-        set(PLUGIN_PATH "${INTERFACE_BUNDLE_NAME}.app/Contents/PlugIns")
-    else()
-        set(PLUGIN_PATH "plugins")
-    endif()
+    set(PLUGIN_PATH "plugins")
 
     if (WIN32)
         # produce PDB files for plugins as well
@@ -30,7 +26,11 @@ macro(SETUP_HIFI_PLUGIN)
         set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DEBUG")
     endif()
 
-    if (CMAKE_SYSTEM_NAME MATCHES "Linux" OR CMAKE_GENERATOR STREQUAL "Unix Makefiles")
+    if (APPLE)
+        # PluginManager looks in Contents/PlugIns of the app bundle. Ask CMake where the bundle is
+        # rather than guessing a path: Ninja, Makefiles and Xcode all place it differently.
+        set(PLUGIN_FULL_PATH "$<TARGET_BUNDLE_CONTENT_DIR:Overte>/PlugIns/")
+    elseif (CMAKE_SYSTEM_NAME MATCHES "Linux" OR CMAKE_GENERATOR STREQUAL "Unix Makefiles")
         set(PLUGIN_FULL_PATH "${CMAKE_BINARY_DIR}/interface/${PLUGIN_PATH}/")
     else()
         set(PLUGIN_FULL_PATH "${CMAKE_BINARY_DIR}/interface/$<CONFIGURATION>/${PLUGIN_PATH}/")
@@ -43,7 +43,7 @@ macro(SETUP_HIFI_PLUGIN)
         ${PLUGIN_FULL_PATH}
     )
 
-    add_custom_command(TARGET ${DIR} POST_BUILD
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy
         "$<TARGET_FILE:${TARGET_NAME}>"
         ${PLUGIN_FULL_PATH}
