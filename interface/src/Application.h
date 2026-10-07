@@ -49,6 +49,7 @@
 #endif
 
 class ArchiveDownloadInterface;
+class QWindow;
 class AudioInjector;
 class CompositorHelper;
 class ControllerScriptingInterface;
@@ -163,6 +164,8 @@ public:
     virtual VKWidget* getPrimaryWidget() override;
 #endif
     virtual MainWindow* getPrimaryWindow() override;
+    // The window the offscreen QML surfaces (desktop UI, web entities) treat as their render window.
+    QWindow* getUiProxyWindow() const;
     virtual QOpenGLContext* getPrimaryContext() override;
     virtual bool isForeground() const override;
 

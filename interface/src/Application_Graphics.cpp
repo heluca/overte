@@ -311,7 +311,7 @@ void Application::initializeUi() {
         this, &Application::onDesktopRootItemCreated);
 
 #if !defined(DISABLE_QML)
-    offscreenUi->setProxyWindow(_window->windowHandle());
+    offscreenUi->setProxyWindow(getUiProxyWindow());
     // OffscreenUi is a subclass of OffscreenQmlSurface specifically designed to
     // support the window management and scripting proxies for VR use
     DeadlockWatchdogThread::withPause([&] {

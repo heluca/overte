@@ -781,6 +781,28 @@ void Application::initialize(const QCommandLineParser &parser) {
 #endif
     _vkWindow->_primaryWidget = _primaryWidget;
     _window->setCentralWidget(_vkWindowWrapper);
+#if defined(Q_OS_MAC)
+    // Cocoa makes the main window the focus window whenever the application is (re)activated, and the Vulkan
+    // window inside it when that is clicked. The offscreen QML surfaces only accept keyboard focus while their
+    // render window is the focus window (see getUiProxyWindow), so follow it; and key events only reach the
+    // Vulkan window (where the QML surfaces filter them) while its view is the first responder, so hand the
+    // focus over to it whenever the main window has it.
+    connect(this, &QGuiApplication::focusWindowChanged, this, [this](QWindow* focusWindow) {
+        if (_aboutToQuit || !focusWindow || (focusWindow != _window->windowHandle() && focusWindow != _vkWindow)) {
+            return;
+        }
+        if (auto offscreenUi = getOffscreenUI()) {
+            offscreenUi->setProxyWindow(focusWindow);
+        }
+        if (focusWindow == _window->windowHandle() && _vkWindow->isVisible()) {
+            QMetaObject::invokeMethod(_vkWindow, [this] {
+                if (QGuiApplication::focusWindow() == _window->windowHandle()) { // unless it moved on meanwhile
+                    _vkWindow->requestActivate();
+                }
+            }, Qt::QueuedConnection);
+        }
+    });
+#endif
 #endif
 
     _window->restoreGeometry();

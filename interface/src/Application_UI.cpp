@@ -16,6 +16,9 @@
 #include "Application.h"
 
 #include <QtQml/QQmlContext>
+#ifndef USE_GL
+#include "vk/VKWindow.h"
+#endif
 #include <QStyle>
 #include <QStyleFactory>
 #if defined(Q_OS_WIN)
@@ -138,6 +141,22 @@ QOpenGLContext* Application::getPrimaryContext() {
 
 bool Application::isForeground() const {
     return _isForeground && !_window->isMinimized();
+}
+
+QWindow* Application::getUiProxyWindow() const {
+#if defined(Q_OS_MAC) && !defined(USE_GL)
+    // Qt Quick only grants active focus in an offscreen scene while the window registered as the scene's
+    // render window is the application's focus window. On macOS that is the Vulkan QWindow once it has been
+    // clicked, but the main window that contains it whenever the application is (re)activated, so use
+    // whichever of the two currently has the focus; Application::initialize keeps the desktop UI in sync.
+    QWindow* focusWindow = QGuiApplication::focusWindow();
+    if (focusWindow == _window->windowHandle() || focusWindow == _vkWindow) {
+        return focusWindow;
+    }
+    return _vkWindow;
+#else
+    return _window->windowHandle();
+#endif
 }
 
 bool Application::hasFocus() const {

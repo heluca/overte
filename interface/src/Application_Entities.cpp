@@ -277,7 +277,7 @@ void Application::setKeyboardFocusEntity(const QUuid& id) {
                 if (!entityItemRenderable) {
                     _keyboardFocusWaitingOnRenderable = true;
                 } else if (entityItemRenderable->wantsKeyboardFocus()) {
-                    entities->setProxyWindow(entityId, _window->windowHandle());
+                    entities->setProxyWindow(entityId, getUiProxyWindow());
                     if (_keyboardMouseDevice->isActive()) {
                         _keyboardMouseDevice->pluginFocusOutEvent();
                     }
