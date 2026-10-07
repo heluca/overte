@@ -7,3 +7,14 @@
 //
 
 CAMetalLayer *layerForWindow(QWindow *window);
+
+// Sizes MoltenVK compares when deciding whether a swapchain still fits its CAMetalLayer:
+// the layer's drawableSize must equal both the swapchain extent and bounds * contentsScale.
+struct MetalLayerMetrics {
+    float contentsScale { 0.0f };
+    float boundsWidth { 0.0f };
+    float boundsHeight { 0.0f };
+    float drawableWidth { 0.0f };
+    float drawableHeight { 0.0f };
+};
+MetalLayerMetrics metalLayerMetrics(QWindow *window);

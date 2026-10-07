@@ -782,9 +782,21 @@ void VulkanDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
             VK_CHECK_RESULT(vkCreateSemaphore(_vkWindow->_context.device->logicalDevice, &semaphoreCreateInfo, nullptr, &_vkWindow->_acquireCompleteSemaphore));
         }
 
-        if(_vkWindow->_swapchain.acquireNextImage(_vkWindow->_acquireCompleteSemaphore, &currentImageIndex) != VK_SUCCESS) {
-            qDebug() << "_vkWindow->_swapchain.acquireNextImage fail";
+        VkResult acquireResult = _vkWindow->_swapchain.acquireNextImage(_vkWindow->_acquireCompleteSemaphore, &currentImageIndex);
+        if (acquireResult != VK_SUCCESS) {
+            // Log the first few failures and then one in every few hundred, so a persistent failure
+            // (which shows as a black window) is diagnosable without flooding the log.
+            static uint64_t acquireFailures = 0;
+            const uint64_t ACQUIRE_FAILURE_LOG_INTERVAL = 300;
+            if (acquireFailures < 10 || acquireFailures % ACQUIRE_FAILURE_LOG_INTERVAL == 0) {
+                qCWarning(displayPlugins) << "Swapchain acquireNextImage failed:" << vks::tools::errorString(acquireResult).c_str()
+                                          << "(" << acquireFailures << "failures so far ) before recreate:" << _vkWindow->describeSurface();
+            }
+            acquireFailures++;
             _vkWindow->resizeFramebuffer(); //VKTODO: workaround
+            if (acquireFailures <= 10) {
+                qCWarning(displayPlugins) << "After recreate:" << _vkWindow->describeSurface();
+            }
         }
         if (currentImageIndex == UINT32_MAX) {
             refreshRateController->clockEndTime();
@@ -954,18 +966,21 @@ void VulkanDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
             VkFence frameFence;
             vkCreateFence(vkDevice, &fenceCI, nullptr, &frameFence);
             vkQueueSubmit(vkBackend->getContext().graphicsQueue, 1, &submitInfo, frameFence);
-            if (_vkWindow->_previousFrameFence != VK_NULL_HANDLE) {
-                VK_CHECK_RESULT(vkWaitForFences(vkDevice, 1, &frameFence, VK_TRUE, DEFAULT_FENCE_TIMEOUT));
-                vkDestroyFence(vkDevice, frameFence, nullptr);
-            }
+            // Rendering is synchronous: the next frame's perFrameCleanup destroys everything this frame
+            // trashed, so this frame must have finished on the GPU before we return. That includes the
+            // very first frame; skipping its wait let a startup resize free attachments the first frame
+            // was still sampling, which faulted the GPU and lost the device (a black window).
+            VK_CHECK_RESULT(vkWaitForFences(vkDevice, 1, &frameFence, VK_TRUE, DEFAULT_FENCE_TIMEOUT));
+            vkDestroyFence(vkDevice, frameFence, nullptr);
             if (_vkWindow->_previousCommandBuffer != VK_NULL_HANDLE) {
                 VK_CHECK_RESULT(vkResetCommandBuffer(commandBuffer, 0));
             }
 
-            // Recycles frame to which _previousFrameFence and _previousCommandBuffer belongs.
+            // Recycles frame to which _previousCommandBuffer belongs.
             vkBackend->recyclePreviousFrame();
 
-            _vkWindow->_previousFrameFence = frameFence;
+            // The fence was waited on and destroyed above; never leave a dangling handle for the window to trash.
+            _vkWindow->_previousFrameFence = VK_NULL_HANDLE;
             _vkWindow->_previousCommandBuffer = commandBuffer;
             if (_vkWindow->_previousAcquireCompleteSemaphore) {
                 _vkWindow->_context.recycler.trashVkSemaphore(_vkWindow->_previousAcquireCompleteSemaphore);

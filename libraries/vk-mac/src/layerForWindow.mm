@@ -11,6 +11,8 @@
 #include <AppKit/AppKit.h>
 #include <QuartzCore/QuartzCore.h>
 
+#include "layerForWindow.h"
+
 // Get the CAMetalLayer to create a MoltenVk surface on, inside a given QWindow.
 CAMetalLayer* layerForWindow(QWindow *window)
 {
@@ -28,4 +30,20 @@ CAMetalLayer* layerForWindow(QWindow *window)
     }
     Q_ASSERT([view.layer isKindOfClass:[CAMetalLayer class]]);
     return static_cast<CAMetalLayer *>(view.layer);
+}
+
+MetalLayerMetrics metalLayerMetrics(QWindow *window)
+{
+    MetalLayerMetrics metrics;
+    NSView *view = reinterpret_cast<NSView *>(window->winId());
+    if (!view || ![view.layer isKindOfClass:[CAMetalLayer class]]) {
+        return metrics;
+    }
+    CAMetalLayer *layer = static_cast<CAMetalLayer *>(view.layer);
+    metrics.contentsScale = layer.contentsScale;
+    metrics.boundsWidth = layer.bounds.size.width;
+    metrics.boundsHeight = layer.bounds.size.height;
+    metrics.drawableWidth = layer.drawableSize.width;
+    metrics.drawableHeight = layer.drawableSize.height;
+    return metrics;
 }

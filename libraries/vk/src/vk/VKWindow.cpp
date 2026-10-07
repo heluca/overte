@@ -381,6 +381,18 @@ bool VKWindow::event(QEvent* event) {
     return QWindow::event(event);
 }
 
+QString VKWindow::describeSurface() const {
+    QString description = QString("window %1x%2 dpr %3 swapchain %4x%5")
+        .arg(width()).arg(height()).arg(devicePixelRatio()).arg(_extent.width).arg(_extent.height);
+#ifdef Q_OS_MAC
+    auto metrics = metalLayerMetrics(const_cast<VKWindow*>(this));
+    description += QString(" layer scale %1 bounds %2x%3 drawable %4x%5")
+        .arg(metrics.contentsScale).arg(metrics.boundsWidth).arg(metrics.boundsHeight)
+        .arg(metrics.drawableWidth).arg(metrics.drawableHeight);
+#endif
+    return description;
+}
+
 void VKWindow::resizeFramebuffer() {
     auto qsize = size();
     _extent = VkExtent2D{
