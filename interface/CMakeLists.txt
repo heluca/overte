@@ -192,9 +192,6 @@ endif ()
 if (APPLE)
   add_executable(${TARGET_NAME} MACOSX_BUNDLE ${INTERFACE_SRCS} ${QM})
 
-  # make sure the output name for the .app bundle is correct
-  # Fix up the rpath so macdeployqt works
-  set_target_properties(${TARGET_NAME} PROPERTIES INSTALL_RPATH "@executable_path/../Frameworks")
 elseif (WIN32)
   # configure an rc file for the chosen icon
   set(CONFIGURE_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/icon/${INTERFACE_ICON_FILENAME}")
@@ -359,6 +356,25 @@ if (APPLE)
   find_library(AppKit AppKit)
 
   target_link_libraries(${TARGET_NAME} ${OpenGL} ${AppKit})
+
+  # CMake rewrites the rpath of the installed binary to INSTALL_RPATH, and macdeployqt then resolves the
+  # binary's @rpath libraries through that list. Keep the build tree locations of Overte's own shared
+  # libraries (and of the Conan ones, via the link path) in it so macdeployqt can find and copy them;
+  # @executable_path/../Frameworks is what the deployed bundle uses afterwards.
+  set(INTERFACE_INSTALL_RPATH "@executable_path/../Frameworks")
+  get_target_property(INTERFACE_LINK_LIBRARIES ${TARGET_NAME} LINK_LIBRARIES)
+  foreach(INTERFACE_LINK_LIBRARY ${INTERFACE_LINK_LIBRARIES})
+    if (TARGET ${INTERFACE_LINK_LIBRARY})
+      get_target_property(INTERFACE_LINK_LIBRARY_TYPE ${INTERFACE_LINK_LIBRARY} TYPE)
+      if (INTERFACE_LINK_LIBRARY_TYPE STREQUAL "SHARED_LIBRARY")
+        list(APPEND INTERFACE_INSTALL_RPATH "$<TARGET_FILE_DIR:${INTERFACE_LINK_LIBRARY}>")
+      endif()
+    endif()
+  endforeach()
+  set_target_properties(${TARGET_NAME} PROPERTIES
+    INSTALL_RPATH "${INTERFACE_INSTALL_RPATH}"
+    INSTALL_RPATH_USE_LINK_PATH TRUE
+  )
 
   # setup install of OS X interface bundle
   install(TARGETS ${TARGET_NAME}
