@@ -778,6 +778,17 @@ void Application::initialize(const QCommandLineParser &parser) {
     getApplicationCompositor().setRenderingWidget(_primaryWidget);
 #ifndef Q_OS_MAC
     _primaryWidget->setParent(_vkWindowWrapper);
+#else
+    // The canvas widget is not parented into the window container on macOS, so it is a hidden top level widget
+    // and its own position is what its mapFromGlobal() subtracts. CompositorHelper derives the reticle position,
+    // which the mouse ray picks (and so clicks on web entities) are based on, that way, so keep the widget placed
+    // over the Vulkan window; VKWindow::resizeFramebuffer keeps its size in sync.
+    connect(_window, &MainWindow::windowGeometryChanged, this, [this](QRect) {
+        QTimer::singleShot(0, this, [this] {
+            _primaryWidget->winId(); // mapFromGlobal() goes through the window handle once there is one
+            _primaryWidget->windowHandle()->setPosition(_vkWindow->mapToGlobal(QPoint(0, 0)));
+        });
+    });
 #endif
     _vkWindow->_primaryWidget = _primaryWidget;
     _window->setCentralWidget(_vkWindowWrapper);
