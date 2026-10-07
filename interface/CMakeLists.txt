@@ -145,6 +145,43 @@ if (APPLE)
 
   # append the discovered resources to our list of interface sources
   list(APPEND INTERFACE_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/icon/${INTERFACE_ICON_FILENAME})
+
+  # Liquid Glass app icon (macOS 26). The Icon Composer package next to the .icns is compiled into an
+  # asset catalog by actool from Xcode 26 or newer, and CFBundleIconName points the system at it.
+  # The .icns above stays in the bundle as the fallback for older systems and older Xcodes.
+  set(INTERFACE_ICON_COMPOSER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/icon/${INTERFACE_ICON_PREFIX}.icon")
+  execute_process(COMMAND xcodebuild -version OUTPUT_VARIABLE XCODEBUILD_VERSION_OUTPUT ERROR_QUIET)
+  string(REGEX MATCH "Xcode ([0-9]+)" _xcode_version_match "${XCODEBUILD_VERSION_OUTPUT}")
+  set(XCODE_MAJOR_VERSION "${CMAKE_MATCH_1}")
+  if (XCODE_MAJOR_VERSION AND XCODE_MAJOR_VERSION GREATER_EQUAL 26 AND EXISTS "${INTERFACE_ICON_COMPOSER_DIR}/icon.json")
+    file(GLOB_RECURSE INTERFACE_ICON_COMPOSER_FILES "${INTERFACE_ICON_COMPOSER_DIR}/*")
+    set(INTERFACE_ASSET_CATALOG_DIR "${CMAKE_CURRENT_BINARY_DIR}/icon")
+    set(INTERFACE_ASSET_CATALOG "${INTERFACE_ASSET_CATALOG_DIR}/Assets.car")
+    if (CMAKE_OSX_DEPLOYMENT_TARGET)
+      set(INTERFACE_ICON_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    else ()
+      set(INTERFACE_ICON_DEPLOYMENT_TARGET "14.0")
+    endif ()
+    add_custom_command(
+      OUTPUT "${INTERFACE_ASSET_CATALOG}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${INTERFACE_ASSET_CATALOG_DIR}"
+      COMMAND xcrun actool "${INTERFACE_ICON_COMPOSER_DIR}" --compile "${INTERFACE_ASSET_CATALOG_DIR}"
+              --output-format human-readable-text --warnings --errors
+              --output-partial-info-plist "${INTERFACE_ASSET_CATALOG_DIR}/Info.plist"
+              --app-icon "${INTERFACE_ICON_PREFIX}" --include-all-app-icons
+              --enable-on-demand-resources NO --development-region en
+              --target-device mac --minimum-deployment-target "${INTERFACE_ICON_DEPLOYMENT_TARGET}" --platform macosx
+      DEPENDS ${INTERFACE_ICON_COMPOSER_FILES}
+      COMMENT "Compiling the Liquid Glass app icon"
+      VERBATIM
+    )
+    set_source_files_properties("${INTERFACE_ASSET_CATALOG}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources GENERATED TRUE)
+    list(APPEND INTERFACE_SRCS "${INTERFACE_ASSET_CATALOG}")
+    set(MACOSX_BUNDLE_ICON_NAME_ENTRY "\t<key>CFBundleIconName</key>\n\t<string>${INTERFACE_ICON_PREFIX}</string>")
+    message(STATUS "Liquid Glass app icon: compiling ${INTERFACE_ICON_COMPOSER_DIR}")
+  else ()
+    message(STATUS "Liquid Glass app icon: skipped, needs Xcode 26 or newer")
+  endif ()
 endif()
 
 if (UNIX)
