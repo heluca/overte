@@ -1752,6 +1752,10 @@ VKTexture* VKBackend::syncGPUObject(const std::shared_ptr<Texture> &texture) {
             _textures.insert(object);
         }
     } else {
+        if (auto strictTexture = dynamic_cast<VKStrictResourceTexture*>(object)) {
+            // Streamed KTX textures get their larger mip levels after the object was created.
+            strictTexture->transferNewMips(*this);
+        }
 
         if (texture->getUsageType() == TextureUsageType::RESOURCE) {
             auto varTex = dynamic_cast<VKVariableAllocationTexture*> (object);
