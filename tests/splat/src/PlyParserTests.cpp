@@ -90,7 +90,7 @@ QByteArray makePly(const std::vector<PlyProperty>& properties, const std::vector
 
 // f_dc value that decodes to the given colour channel.
 double dc(double color) {
-    return (color - 0.5) / splat::SH_C0;
+    return (color - 0.5) / static_cast<double>(splat::SH_C0);
 }
 
 Row splatRow(glm::vec3 position, glm::vec3 color, double alpha, glm::vec3 scale, glm::vec4 wxyz) {
