@@ -1800,6 +1800,28 @@ const GROUPS = [
         ]
     },
     {
+        id: "splat",
+        label: "GAUSSIAN SPLAT",
+        properties: [
+            {
+                label: "Splat",
+                type: "string",
+                placeholder: "URL",
+                propertyID: "splatURL",
+            },
+            {
+                label: "Alpha",
+                type: "number-draggable",
+                min: 0,
+                max: 1,
+                step: 0.01,
+                decimals: 2,
+                propertyID: "splatAlpha",
+                propertyName: "alpha",
+            },
+        ]
+    },
+    {
         id: "empty",
         label: "EMPTY",
         properties: []
@@ -3087,6 +3109,7 @@ const GROUPS_PER_TYPE = {
   Canvas: [ 'base', 'canvas', 'spatial', 'behavior', 'grabAndEquip', 'scripts', 'collision', 'physics', 'children' ],
   Empty: [ 'base', 'spatial', 'scripts', 'children' ],
   Script: [ 'base', 'script', 'spatial', 'behavior', 'grabAndEquip', 'scripts', 'physics', 'children' ],
+  GaussianSplat: [ 'base', 'splat', 'spatial', 'behavior', 'scripts', 'children' ],
   Multiple: [ 'base', 'spatial', 'behavior', 'grabAndEquip', 'scripts', 'collision', 'physics', 'fading', 'children' ],
 };
 

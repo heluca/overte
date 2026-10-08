@@ -251,6 +251,8 @@ bool OctreeEntitiesFileParser::readEntitiesArray(QVariantList& entitiesArray) {
                 "textures",
                 // image
                 "imageURL",
+                // gaussian splat
+                "splatURL",
                 // web
                 "sourceUrl",
                 "scriptURL",

@@ -217,7 +217,7 @@ endif()
 link_hifi_libraries(
   shared workload task octree ktx gpu gl procedural graphics graphics-scripting render
   pointers recording hfm model-serializers networking material-networking
-  model-networking model-baker entities avatars
+  model-networking model-baker entities avatars splat
   audio audio-client animation physics
   render-utils entities-renderer avatars-renderer ui qml auto-updater midi
   controllers plugins image platform

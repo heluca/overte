@@ -1,0 +1,96 @@
+<!
+//  gaussianSplat.slh
+//
+//  Copyright 2026 Overte e.V.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//  SPDX-License-Identifier: Apache-2.0
+!>
+
+<@if not GAUSSIAN_SPLAT_SLH@>
+<@def GAUSSIAN_SPLAT_SLH@>
+
+<@include gpu/ShaderConstants.h@>
+
+<@func declareSplatBuffer()@>
+
+// Hack comment to absorb the extra '//' scribe prepends
+
+// Per-splat record, 2 x uvec4 (layout owner: libraries/splat/src/splat/SplatCloud.h, PackedSplat):
+//   texel0 = (floatBits(pos.x), floatBits(pos.y), floatBits(pos.z), unorm8 rgba)
+//   texel1 = (half2(scale.x, scale.y), half2(scale.z, reserved), half2(rot.w, rot.x), half2(rot.y, rot.z))
+#if !defined(GPU_SSBO_TRANSFORM_OBJECT)
+#ifdef GPU_GLES_310
+LAYOUT(binding=GPU_RESOURCE_BUFFER_SLOT0_TEXTURE) uniform samplerBuffer splatBuffer;
+#else
+RESOURCE_BUFFER(GPU_RESOURCE_BUFFER_SLOT0_TEXTURE, splatBuffer);
+#endif
+// The 4.1 and GLES backends bind resource buffers as RGBA32F texture buffers: the integer payload arrives as float bits.
+uvec4 getSplatTexel(int i) {
+    return floatBitsToUint(texelFetch(splatBuffer, i));
+}
+#else
+RESOURCE_BUFFER(GPU_RESOURCE_BUFFER_SLOT0_STORAGE, splatBuffer) {
+    uvec4 _splatTexels[];
+};
+uvec4 getSplatTexel(int i) {
+    return _splatTexels[i];
+}
+#endif
+
+struct Splat {
+    vec3 position;
+    vec4 color;     // sRGB rgb, alpha
+    vec3 scale;     // standard deviation per local axis
+    vec4 rotation;  // unit quaternion (w, x, y, z), up to half precision
+};
+
+// unpackHalf2x16 needs GLSL 4.20 or ARB_shading_language_packing, which the 4.1 target does not promise.
+float splat_halfToFloat(uint h) {
+    uint exponent = (h >> 10u) & 0x1Fu;
+    float mantissa = float(h & 0x3FFu);
+    float magnitude;
+    if (exponent == 0u) {
+        magnitude = mantissa * (1.0 / 16777216.0);
+    } else {
+        magnitude = exp2(float(exponent) - 15.0) * (1.0 + mantissa * (1.0 / 1024.0));
+    }
+    return ((h & 0x8000u) != 0u) ? -magnitude : magnitude;
+}
+
+vec2 splat_unpackHalf2(uint bits) {
+    return vec2(splat_halfToFloat(bits & 0xFFFFu), splat_halfToFloat(bits >> 16u));
+}
+
+vec4 splat_unpackUnorm4x8(uint bits) {
+    return vec4(float(bits & 0xFFu), float((bits >> 8u) & 0xFFu), float((bits >> 16u) & 0xFFu),
+                float(bits >> 24u)) * (1.0 / 255.0);
+}
+
+Splat getSplat(int i) {
+    uvec4 texel0 = getSplatTexel(2 * i);
+    uvec4 texel1 = getSplatTexel(2 * i + 1);
+    Splat splat;
+    splat.position = uintBitsToFloat(texel0.xyz);
+    splat.color = splat_unpackUnorm4x8(texel0.w);
+    splat.scale = vec3(splat_unpackHalf2(texel1.x), splat_unpackHalf2(texel1.y).x);
+    splat.rotation = vec4(splat_unpackHalf2(texel1.z), splat_unpackHalf2(texel1.w));
+    return splat;
+}
+
+// Rotation matrix of the quaternion q = (w, x, y, z), the same expansion as build_rotation() in the INRIA code.
+mat3 splat_rotationMatrix(vec4 q) {
+    float w = q.x;
+    float x = q.y;
+    float y = q.z;
+    float z = q.w;
+    return mat3(
+        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + w * z), 2.0 * (x * z - w * y),
+        2.0 * (x * y - w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + w * x),
+        2.0 * (x * z + w * y), 2.0 * (y * z - w * x), 1.0 - 2.0 * (x * x + y * y));
+}
+
+<@endfunc@>
+
+<@endif@>

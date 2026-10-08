@@ -1,0 +1,53 @@
+//
+//  Copyright 2026 Overte e.V.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//  SPDX-License-Identifier: Apache-2.0
+//
+
+#ifndef hifi_GaussianSplatEntityItem_h
+#define hifi_GaussianSplatEntityItem_h
+
+#include "EntityItem.h"
+
+class GaussianSplatEntityItem : public EntityItem {
+    using Pointer = std::shared_ptr<GaussianSplatEntityItem>;
+public:
+    static EntityItemPointer factory(const EntityItemID& entityID, const EntityItemProperties& properties);
+
+    GaussianSplatEntityItem(const EntityItemID& entityItemID);
+
+    ALLOW_INSTANTIATION // This class can be instantiated
+    ENTITY_PROPERTY_SUBCLASS_METHODS
+
+    // Splats never collide: the type has no shapeType, and the collisionless flag is a base Physics property that
+    // cannot be defaulted per type, so physics is refused here instead.
+    bool shouldBePhysical() const override { return false; }
+
+    // Picking uses the entity box, but only from outside: a pick that starts inside a room-scale splat passes through
+    // to real geometry, or teleport arcs and laser pointers would stop on the splat's bounding faces from inside.
+    bool supportsDetailedIntersection() const override { return true; }
+    bool findDetailedRayIntersection(const glm::vec3& origin, const glm::vec3& direction,
+                                     const glm::vec3& viewFrustumPos, OctreeElementPointer& element,
+                                     float& distance, BoxFace& face, glm::vec3& surfaceNormal,
+                                     QVariantMap& extraInfo, bool precisionPicking) const override;
+    bool findDetailedParabolaIntersection(const glm::vec3& origin, const glm::vec3& velocity,
+                                          const glm::vec3& acceleration, const glm::vec3& viewFrustumPos,
+                                          OctreeElementPointer& element, float& parabolicDistance,
+                                          BoxFace& face, glm::vec3& surfaceNormal,
+                                          QVariantMap& extraInfo, bool precisionPicking) const override;
+
+    void setNaturalDimension(const glm::vec3& naturalDimensions) const;
+
+protected:
+
+@GaussianSplat_ENTITY_PROPS@
+
+    mutable glm::vec3 _naturalDimensions;
+
+private:
+    bool isInsidePickBox(const glm::vec3& point, const glm::vec3& viewFrustumPos) const;
+};
+
+#endif // hifi_GaussianSplatEntityItem_h

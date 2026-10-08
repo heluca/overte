@@ -4,7 +4,7 @@
 
 set(TARGET_NAME entities-renderer)
 setup_hifi_library(Network)
-link_hifi_libraries(shared workload gpu shaders procedural graphics material-networking model-networking script-engine render render-utils image qml ui pointers entities)
+link_hifi_libraries(shared workload gpu shaders procedural graphics material-networking model-networking script-engine render render-utils image qml ui pointers entities splat)
 include_hifi_library_headers(networking)
 include_hifi_library_headers(gl)
 include_hifi_library_headers(ktx)
