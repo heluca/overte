@@ -20,6 +20,7 @@ private slots:
     void testParseThreeSplats();
     void testTrimmedBounds();
     void testSmallScaleSurvivesPacking();
+    void testDropsNonFiniteScaleAndOpacity();
     void testRejectsAsciiBody();
     void testRejectsBigEndianBody();
     void testRejectsMissingProperty();

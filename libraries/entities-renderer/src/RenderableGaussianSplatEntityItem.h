@@ -60,6 +60,8 @@ private:
     // Also read by the post-update lambda that builds _renderTransform, so guarded by the renderer's lock.
     glm::vec3 _naturalDimensions { 1.0f };
     glm::vec3 _splatCenter { 0.0f };
+    // Set by the post-update lambda once _renderTransform reflects the loaded bound; cleared on load and release.
+    bool _transformReady { false };
 };
 
 } }

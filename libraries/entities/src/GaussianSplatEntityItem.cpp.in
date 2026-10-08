@@ -97,13 +97,14 @@ void GaussianSplatEntityItem::setNaturalDimension(const glm::vec3& naturalDimens
     });
 }
 
-bool GaussianSplatEntityItem::isInsidePickBox(const glm::vec3& point, const glm::vec3& viewFrustumPos) const {
+bool GaussianSplatEntityItem::isInsidePickBox(const glm::vec3& point, const glm::vec3& viewFrustumPos,
+                                              glm::quat& rotation) const {
     // The same entity-frame box EntityTreeElement::evalDetailedRayIntersection tests the pick against.
     glm::vec3 position = getWorldPosition();
     BillboardMode billboardMode = getBillboardMode();
     glm::quat orientation = billboardMode == BillboardMode::NONE ? getWorldOrientation() : getLocalOrientation();
-    glm::quat rotation = BillboardModeHelpers::getBillboardRotation(position, orientation, billboardMode, viewFrustumPos,
-                                                                    getRotateForPicking());
+    rotation = BillboardModeHelpers::getBillboardRotation(position, orientation, billboardMode, viewFrustumPos,
+                                                          getRotateForPicking());
     glm::mat4 worldToEntityMatrix = glm::inverse(glm::translate(position) * glm::mat4_cast(rotation));
     glm::vec3 dimensions = getScaledDimensions();
     AABox entityFrameBox(-(dimensions * getRegistrationPoint()) + getPivot(), dimensions);
@@ -114,8 +115,14 @@ bool GaussianSplatEntityItem::findDetailedRayIntersection(const glm::vec3& origi
                                                           const glm::vec3& viewFrustumPos, OctreeElementPointer& element,
                                                           float& distance, BoxFace& face, glm::vec3& surfaceNormal,
                                                           QVariantMap& extraInfo, bool precisionPicking) const {
-    // Keeps the box hit the caller already computed.
-    return !isInsidePickBox(origin, viewFrustumPos);
+    // Keeps the box hit the caller already computed. The caller copies a detailed hit's normal back unrotated, so the
+    // entity-frame box normal is rotated to world here.
+    glm::quat rotation;
+    if (isInsidePickBox(origin, viewFrustumPos, rotation)) {
+        return false;
+    }
+    surfaceNormal = rotation * surfaceNormal;
+    return true;
 }
 
 bool GaussianSplatEntityItem::findDetailedParabolaIntersection(const glm::vec3& origin, const glm::vec3& velocity,
@@ -123,5 +130,10 @@ bool GaussianSplatEntityItem::findDetailedParabolaIntersection(const glm::vec3& 
                                                                OctreeElementPointer& element, float& parabolicDistance,
                                                                BoxFace& face, glm::vec3& surfaceNormal,
                                                                QVariantMap& extraInfo, bool precisionPicking) const {
-    return !isInsidePickBox(origin, viewFrustumPos);
+    glm::quat rotation;
+    if (isInsidePickBox(origin, viewFrustumPos, rotation)) {
+        return false;
+    }
+    surfaceNormal = rotation * surfaceNormal;
+    return true;
 }

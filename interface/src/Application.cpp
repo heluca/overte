@@ -919,6 +919,7 @@ void Application::reloadResourceCaches() {
     DependencyManager::get<SoundCache>()->refreshAll();
     DependencyManager::get<MaterialCache>()->refreshAll();
     DependencyManager::get<ModelCache>()->refreshAll();
+    DependencyManager::get<SplatCache>()->refreshAll();
     ShaderCache::instance().refreshAll();
     DependencyManager::get<TextureCache>()->refreshAll();
     DependencyManager::get<recording::ClipCache>()->refreshAll();

@@ -21,10 +21,6 @@ public:
     ALLOW_INSTANTIATION // This class can be instantiated
     ENTITY_PROPERTY_SUBCLASS_METHODS
 
-    // Splats never collide: the type has no shapeType, and the collisionless flag is a base Physics property that
-    // cannot be defaulted per type, so physics is refused here instead.
-    bool shouldBePhysical() const override { return false; }
-
     // Picking uses the entity box, but only from outside: a pick that starts inside a room-scale splat passes through
     // to real geometry, or teleport arcs and laser pointers would stop on the splat's bounding faces from inside.
     bool supportsDetailedIntersection() const override { return true; }
@@ -44,10 +40,10 @@ protected:
 
 @GaussianSplat_ENTITY_PROPS@
 
-    mutable glm::vec3 _naturalDimensions;
+    mutable glm::vec3 _naturalDimensions { 1.0f };
 
 private:
-    bool isInsidePickBox(const glm::vec3& point, const glm::vec3& viewFrustumPos) const;
+    bool isInsidePickBox(const glm::vec3& point, const glm::vec3& viewFrustumPos, glm::quat& rotation) const;
 };
 
 #endif // hifi_GaussianSplatEntityItem_h

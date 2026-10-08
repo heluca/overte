@@ -179,7 +179,7 @@ void verifyScale(const Decoded& d, float x, float y, float z) {
     QVERIFY_NEAR(d.scale.x, x, SCALE_EPSILON);
     QVERIFY_NEAR(d.scale.y, y, SCALE_EPSILON);
     QVERIFY_NEAR(d.scale.z, z, SCALE_EPSILON);
-    QCOMPARE(d.reserved, 0.0f);
+    QCOMPARE(d.reserved, 1.0f);
 }
 
 void verifyRotation(const Decoded& d, float w, float x, float y, float z) {
@@ -314,6 +314,24 @@ void PlyParserTests::testSmallScaleSurvivesPacking() {
     QVERIFY_NEAR(d.scale.y, 2.0e-4f, 1.0e-6f);
     QVERIFY_NEAR(d.scale.z, 1.0e-3f, 1.0e-6f);
     verifyRotation(d, C22, S22, 0.0f, 0.0f);
+}
+
+void PlyParserTests::testDropsNonFiniteScaleAndOpacity() {
+    std::vector<Row> rows = threeSplats();
+    Row nanScale = splatRow({ 5.0f, 5.0f, 5.0f }, { 0.5f, 0.5f, 0.5f }, 0.5, { 1.0f, 1.0f, 1.0f }, { 1, 0, 0, 0 });
+    nanScale["scale_1"] = NAN;
+    Row nanOpacity = splatRow({ 6.0f, 6.0f, 6.0f }, { 0.5f, 0.5f, 0.5f }, 0.5, { 1.0f, 1.0f, 1.0f }, { 1, 0, 0, 0 });
+    nanOpacity["opacity"] = NAN;
+    rows.insert(rows.begin() + 1, nanScale);
+    rows.push_back(nanOpacity);
+
+    splat::SplatCloud cloud;
+    QString error;
+    QVERIFY2(splat::parsePly(makePly(TEST_PROPERTIES, rows), cloud, error), qPrintable(error));
+    QCOMPARE(cloud.count(), (size_t)3);
+    QCOMPARE(cloud.positions[0], glm::vec3(1.0f, -2.0f, -3.0f));
+    QCOMPARE(cloud.positions[1], glm::vec3(-1.0f, -0.5f, 2.0f));
+    QCOMPARE(cloud.positions[2], glm::vec3(0.0f, 1.0f, -1.0f));
 }
 
 void PlyParserTests::testRejectsAsciiBody() {

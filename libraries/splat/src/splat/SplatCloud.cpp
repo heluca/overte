@@ -55,7 +55,7 @@ PackedSplat packSplat(const glm::vec3& position, const glm::vec3& color, float a
     p.texel0[2] = glm::floatBitsToUint(position.z);
     p.texel0[3] = glm::packUnorm4x8(glm::clamp(glm::vec4(color, alpha), 0.0f, 1.0f));
     p.texel1[0] = packHalf2(scale.x, scale.y);
-    p.texel1[1] = packHalf2(scale.z, 0.0f);
+    p.texel1[1] = packHalf2(scale.z, 1.0f);
     p.texel1[2] = packHalf2(rotation.w, rotation.x);
     p.texel1[3] = packHalf2(rotation.y, rotation.z);
     return p;

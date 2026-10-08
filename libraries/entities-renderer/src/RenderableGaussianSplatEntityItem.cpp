@@ -96,6 +96,7 @@ void GaussianSplatEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePoin
             _renderTransform = getModelTransform(); // contains parent scale, if this entity scales with its parent
             _renderTransform.postScale(entity->getUnscaledDimensions() / _naturalDimensions);
             _renderTransform.postTranslate(-_splatCenter);
+            _transformReady = true;
         });
     });
 }
@@ -121,7 +122,7 @@ void GaussianSplatEntityRenderer::doRenderUpdateAsynchronousTyped(const TypedEnt
     }
 
     if (_resource && !_splatLoaded) {
-        if (_resource->isLoaded()) {
+        if (_resource->isLoaded() && _resource->dataBuffer()) {
             onSplatLoaded(entity);
         } else if (!_resource->isFailed()) {
             emit requestRenderUpdate();
@@ -136,8 +137,10 @@ void GaussianSplatEntityRenderer::onSplatLoaded(const TypedEntityPointer& entity
     const uint32_t count = (uint32_t)_resource->count();
     std::vector<uint32_t> identity(count);
     std::iota(identity.begin(), identity.end(), 0u);
-    _indexBuffer->setData(count * sizeof(uint32_t), reinterpret_cast<const gpu::Byte*>(identity.data()));
-    _visibleCount = count;
+    // Sized once per load; sort results then overwrite a prefix in place, so the GL buffer is never re-created.
+    _indexBuffer->resize(count * sizeof(uint32_t));
+    _indexBuffer->setSubData(0, count * sizeof(uint32_t), reinterpret_cast<const gpu::Byte*>(identity.data()));
+    // _visibleCount stays 0 until renderSimulate sees the transform rebuilt for the new bound.
     _sorter = std::make_unique<splat::SplatSorter>(_resource->positions());
     _hasSortView = false;
 
@@ -147,6 +150,7 @@ void GaussianSplatEntityRenderer::onSplatLoaded(const TypedEntityPointer& entity
     withWriteLock([&] {
         _naturalDimensions = naturalDimensions;
         _splatCenter = center;
+        _transformReady = false;
     });
     // As with Image, only the renderer learns the natural size; the Create app reads it back from the entity.
     entity->setNaturalDimension(naturalDimensions);
@@ -162,6 +166,9 @@ void GaussianSplatEntityRenderer::releaseSplat() {
     _sorter.reset();
     _visibleCount = 0;
     _hasSortView = false;
+    withWriteLock([&] {
+        _transformReady = false;
+    });
 }
 
 void GaussianSplatEntityRenderer::renderSimulate(RenderArgs* args) {
@@ -170,20 +177,31 @@ void GaussianSplatEntityRenderer::renderSimulate(RenderArgs* args) {
         return;
     }
 
+    Transform renderTransform;
+    bool transformReady = false;
+    withReadLock([&] {
+        renderTransform = _renderTransform;
+        transformReady = _transformReady;
+    });
+    // Until then the transform is file-scale and un-centred: drawing or sorting against it would be wrong.
+    if (!transformReady) {
+        return;
+    }
+    if (!_hasSortView) {
+        // Identity order, drawn until the first sort lands.
+        _visibleCount = (uint32_t)_resource->count();
+    }
+
     if (const std::vector<uint32_t>* sorted = _sorter->takeResult()) {
         _visibleCount = (uint32_t)sorted->size();
         if (_visibleCount > 0) {
-            _indexBuffer->setData(_visibleCount * sizeof(uint32_t), reinterpret_cast<const gpu::Byte*>(sorted->data()));
+            _indexBuffer->setSubData(0, _visibleCount * sizeof(uint32_t), reinterpret_cast<const gpu::Byte*>(sorted->data()));
         }
     }
     if (_sorter->isBusy()) {
         return;
     }
 
-    Transform renderTransform;
-    withReadLock([&] {
-        renderTransform = _renderTransform;
-    });
     const glm::mat4 localToWorld = renderTransform.getMatrix();
     const glm::mat4 worldToLocal = glm::inverse(localToWorld);
     const ViewFrustum& frustum = args->getViewFrustum();
@@ -215,6 +233,7 @@ void GaussianSplatEntityRenderer::doRender(RenderArgs* args) {
         return;
     }
 
+    // billboardMode is not applied to rendering in this version, only to picking (GaussianSplatEntityItem::isInsidePickBox).
     Transform transform;
     withReadLock([&] {
         transform = _renderTransform;

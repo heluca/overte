@@ -273,7 +273,10 @@ bool parsePly(const QByteArray& data, SplatCloud& out, QString& error) {
             v[f] = readScalar(record + fields[f]->offset, fields[f]->type);
         }
 
-        if (!std::isfinite(v[X]) || !std::isfinite(v[Y]) || !std::isfinite(v[Z])) {
+        // A NaN scale decodes as a huge half in the shader, and a NaN opacity packs to an undefined alpha.
+        if (!std::isfinite(v[X]) || !std::isfinite(v[Y]) || !std::isfinite(v[Z]) ||
+            !std::isfinite(v[SCALE0]) || !std::isfinite(v[SCALE1]) || !std::isfinite(v[SCALE2]) ||
+            !std::isfinite(v[OPACITY])) {
             dropped++;
             continue;
         }
@@ -291,11 +294,12 @@ bool parsePly(const QByteArray& data, SplatCloud& out, QString& error) {
     }
 
     if (out.count() == 0) {
-        error = "every splat in the PLY has a non-finite position";
+        error = "every splat in the PLY has a non-finite position, scale or opacity";
         return false;
     }
     if (dropped > 0) {
-        qCWarning(splat_logging) << "Dropped" << dropped << "of" << count << "splats with a non-finite position";
+        qCWarning(splat_logging) << "Dropped" << dropped << "of" << count
+                                 << "splats with a non-finite position, scale or opacity";
     }
 
     out.computeBounds();
