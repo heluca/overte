@@ -47,6 +47,7 @@
 #include <EntityScriptServerLogClient.h>
 #include <FingerprintUtils.h>
 #include <FramebufferCache.h>
+#include <splat/SplatCache.h>
 #include <gl/GLHelpers.h>
 #include <GPUIdent.h>
 #include <graphics-scripting/GraphicsScriptingInterface.h>
@@ -334,6 +335,7 @@ bool setupEssentials(const QCommandLineParser& parser, bool runningMarkerExisted
     DependencyManager::set<GeometryCache>();
     DependencyManager::set<ModelFormatRegistry>(); // ModelFormatRegistry must be defined before ModelCache. See the ModelCache constructor.
     DependencyManager::set<ModelCache>();
+    DependencyManager::set<SplatCache>();
     DependencyManager::set<ModelCacheScriptingInterface>();
     DependencyManager::set<ScriptCache>();
     DependencyManager::set<SoundCache>();

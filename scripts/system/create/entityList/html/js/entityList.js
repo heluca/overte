@@ -184,6 +184,7 @@ const FILTER_TYPES = [
     "Canvas",
     "Empty",
     "Script",
+    "GaussianSplat",
 ];
 
 const DOUBLE_CLICK_TIMEOUT = 300; // ms
