@@ -1400,6 +1400,7 @@ void VKBackend::renderPassDraw(const Batch& batch) {
                 break;
             }
             _cache.pipelineState.primitiveTopology = getPrimitiveTopologyFromCommand(*command, batch, *offset);
+            _cache.pipelineState.drawCallInfoPerInstance = !batch._currentNamedCall.empty();
             updateInput();
             updateTransform(batch);
             updatePipeline();

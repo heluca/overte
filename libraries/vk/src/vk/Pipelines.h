@@ -73,16 +73,27 @@ namespace vks {
         struct PipelineVertexInputStateCreateInfo : public VkPipelineVertexInputStateCreateInfo {
             std::vector<VkVertexInputBindingDescription> bindingDescriptions;
             std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
+            // VK_EXT_vertex_attribute_divisor: per-instance bindings whose divisor is not 1.
+            std::vector<VkVertexInputBindingDivisorDescriptionEXT> divisorDescriptions;
+            VkPipelineVertexInputDivisorStateCreateInfoEXT divisorStateCI{};
 
             PipelineVertexInputStateCreateInfo() :
                 VkPipelineVertexInputStateCreateInfo{} {
                 sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+                divisorStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT;
             }
             void update() {
                 vertexAttributeDescriptionCount = (uint32_t)attributeDescriptions.size();
                 vertexBindingDescriptionCount = (uint32_t)bindingDescriptions.size();
                 pVertexBindingDescriptions = bindingDescriptions.data();
                 pVertexAttributeDescriptions = attributeDescriptions.data();
+                if (divisorDescriptions.empty()) {
+                    pNext = nullptr;
+                } else {
+                    divisorStateCI.vertexBindingDivisorCount = (uint32_t)divisorDescriptions.size();
+                    divisorStateCI.pVertexBindingDivisors = divisorDescriptions.data();
+                    pNext = &divisorStateCI;
+                }
             }
         };
 

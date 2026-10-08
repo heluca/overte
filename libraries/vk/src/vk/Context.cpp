@@ -278,6 +278,27 @@ void Context::buildDevice() {
 
     void *pNextChain = &depthClipControl;
 
+    // Vulkan has no constant vertex attribute (glVertexAttribI2i), so the draw call info reaches the vertex shader
+    // as a per-instance stream. An instanced draw outside a named call must read the same draw call info in every
+    // instance, which takes a zero instance divisor on that binding.
+    VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT vertexAttributeDivisor{};
+    vertexAttributeDivisor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT;
+    if (device->extensionSupported(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME)) {
+        VkPhysicalDeviceFeatures2 features2{};
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features2.pNext = &vertexAttributeDivisor;
+        vkGetPhysicalDeviceFeatures2(physicalDevice, &features2);
+    }
+    if (vertexAttributeDivisor.vertexAttributeInstanceRateZeroDivisor) {
+        enabledExtensions.push_back(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
+        vertexAttributeDivisor.pNext = pNextChain;
+        pNextChain = &vertexAttributeDivisor;
+        vertexAttributeZeroDivisorEnabled = true;
+    } else {
+        qWarning() << "VK_EXT_vertex_attribute_divisor with a zero divisor is not supported by this device; "
+                      "instanced draws outside named calls will read the wrong draw call info";
+    }
+
     enabledFeatures.depthClamp = true;
     enabledFeatures.fillModeNonSolid = true;
 

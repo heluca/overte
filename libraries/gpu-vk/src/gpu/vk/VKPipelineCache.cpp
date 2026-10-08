@@ -368,6 +368,7 @@ std::string Cache::Pipeline::getKey(const vks::Context& context) const {
           + "_" + state.getKey()
           + "_" + format->getKey()
           + "_" + bytesToAscii(primitiveTopology)
+          + "_" + (drawCallInfoPerInstance ? "i" : "c")
           + "_" + getStridesKey();
     return key;
 }
@@ -616,6 +617,10 @@ const Cache::PipelineLayout& Cache::getPipeline(const vks::Context& context) {
             attributeDescriptions.push_back(
                 { gpu::slot::attr::DrawCallInfo, gpu::slot::attr::DrawCallInfo, VK_FORMAT_R16G16_SINT, (uint32_t)0 });
             bindingDescriptions.push_back({ gpu::slot::attr::DrawCallInfo, (uint32_t)sizeof(uint16_t) * 2, VK_VERTEX_INPUT_RATE_INSTANCE });
+            if (!pipelineState.drawCallInfoPerInstance && context.vertexAttributeZeroDivisorEnabled) {
+                // Every instance of this draw reads the element the backend bound the buffer at.
+                builder.vertexInputState.divisorDescriptions.push_back({ gpu::slot::attr::DrawCallInfo, 0 });
+            }
         }
     }
 
