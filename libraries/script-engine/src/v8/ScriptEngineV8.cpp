@@ -234,6 +234,7 @@ ScriptEngineV8::ScriptEngineV8(ScriptManager *manager) : ScriptEngine(manager), 
         _v8Isolate->SetData(ENGINE_ISOLATE_DATA_SLOT, this);
         _v8Isolate->SetPromiseRejectCallback(promiseRejectCallback);
         _v8Isolate->SetHostInitializeImportMetaObjectCallback(ScriptModuleLoaderV8::initializeImportMeta);
+        _v8Isolate->SetHostImportModuleDynamicallyCallback(ScriptModuleLoaderV8::importModuleDynamically);
         _modules = std::make_unique<ScriptModuleMapV8>();
         v8::HandleScope handleScope(_v8Isolate);
         v8::Local<v8::Context> context = v8::Context::New(_v8Isolate);
@@ -285,6 +286,7 @@ ScriptEngineV8::~ScriptEngineV8() {
     deleteUnusedValueWrappers();
 
     _pendingPromiseRejections.clear();
+    _deferredUntilScriptReturns.clear();
     qDeleteAll(findChildren<ScriptModuleLoaderV8*>(QString(), Qt::FindDirectChildrenOnly));
     _modules.reset();
     _contexts.clear();
@@ -1444,6 +1446,7 @@ void ScriptEngineV8::performMicrotaskCheckpoint() {
     _v8Isolate->PerformMicrotaskCheckpoint();
     reportPendingPromiseRejections();
     _scriptEntryDepth--;
+    postDeferredUntilScriptReturns();
 }
 
 void ScriptEngineV8::queueMicrotask(const ScriptValue& callback) {

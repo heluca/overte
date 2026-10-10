@@ -11,84 +11,17 @@
 
 #include "ScriptModuleTests.h"
 
-#include <QDir>
 #include <QFile>
-#include <QTimer>
 
-#include "DependencyManager.h"
-#include "ResourceManager.h"
-#include "ResourceRequestObserver.h"
-#include "ScriptCache.h"
-#include "ScriptEngine.h"
-#include "ScriptEngines.h"
-#include "ScriptManager.h"
 #include "ScriptModuleResolver.h"
-#include "StatTracker.h"
+#include "ScriptModuleTestRunner.h"
 
 QTEST_MAIN(ScriptModuleTests)
 
-// Generous: a test only reaches this when a script never stops, and then fails on timedOut
-static const int MODULE_TEST_TIMEOUT_MS = 10000;
+using Options = ModuleTestOptions;
 
 void ScriptModuleTests::initTestCase() {
-    DependencyManager::set<ScriptEngines>(ScriptManager::NETWORKLESS_TEST_SCRIPT, QUrl(""));
-    DependencyManager::set<ScriptCache>();
-    // ScriptCache fetches file: URLs through ResourceManager, on its own thread, so the loader's async path is real
-    DependencyManager::set<ResourceManager>(false);
-    DependencyManager::set<ResourceRequestObserver>();
-    DependencyManager::set<StatTracker>();
-    DependencyManager::set<ScriptInitializers>();
-}
-
-QString ScriptModuleTests::urlOf(const QTemporaryDir& dir, const QString& path) {
-    return QUrl::fromLocalFile(dir.filePath(path)).toString();
-}
-
-ScriptModuleTests::Run ScriptModuleTests::runScript(const QTemporaryDir& dir, const QList<QPair<QString, QString>>& files,
-                                                   const Options& options) {
-    for (const auto& file : files) {
-        QString path = dir.filePath(file.first);
-        QDir().mkpath(QFileInfo(path).absolutePath());
-        QFile out(path);
-        if (!out.open(QIODevice::WriteOnly)) {
-            qFatal("cannot write %s", qUtf8Printable(path));
-        }
-        out.write(file.second.toUtf8());
-    }
-
-    Run run;
-    QString entryURL = options.entryURL.isEmpty() ? urlOf(dir, files.first().first) : options.entryURL;
-    ScriptManagerPointer sm = newScriptManager(ScriptManager::NETWORKLESS_TEST_SCRIPT, files.first().second, entryURL);
-    sm->setAbortOnUncaughtException(options.abortOnUncaughtException);
-    auto scopeGuard = sm->engine()->getScopeGuard();
-    connect(sm.get(), &ScriptManager::printedMessage, [&run](const QString& message, const QString&) {
-        run.printed.append(message);
-    });
-    connect(sm.get(), &ScriptManager::errorMessage, [&run](const QString& message, const QString&) {
-        qWarning() << "Error from engine:" << message;
-        run.errors.append(message);
-    });
-
-    QTimer timeout;
-    timeout.setSingleShot(true);
-    connect(&timeout, &QTimer::timeout, sm.get(), [manager = sm.get(), &run] {
-        run.timedOut = true;
-        manager->stop();
-    });
-    timeout.start(MODULE_TEST_TIMEOUT_MS);
-    QTimer stopper;
-    stopper.setSingleShot(true);
-    connect(&stopper, &QTimer::timeout, sm.get(), [manager = sm.get()] { manager->stop(); });
-    if (options.stopAfterMs >= 0) {
-        stopper.start(options.stopAfterMs);
-    }
-
-    sm->run();
-    if (options.waitAfterRunMs > 0) {
-        QTest::qWait(options.waitAfterRunMs);
-    }
-    run.uncaughtException = sm->getUncaughtException();
-    return run;
+    initModuleTestDependencies();
 }
 
 void ScriptModuleTests::testResolveModuleSpecifier() {

@@ -62,6 +62,8 @@ public:
     ScriptModuleRecordV8Pointer insert(int epoch, const QUrl& url);
     /// Stores the compiled module in the record and makes it findable by module
     void setCompiled(v8::Isolate* isolate, const ScriptModuleRecordV8Pointer& record, v8::Local<v8::Module> module);
+    /// Every record, in key order
+    std::vector<ScriptModuleRecordV8Pointer> records() const;
 
 private:
     using Key = std::pair<int, QString>;

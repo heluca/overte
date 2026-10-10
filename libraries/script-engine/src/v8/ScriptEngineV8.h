@@ -19,6 +19,7 @@
 #ifndef hifi_ScriptEngineV8_h
 #define hifi_ScriptEngineV8_h
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -152,6 +153,7 @@ public:  // ScriptEngine implementation
     virtual void performMicrotaskCheckpoint() override;
     virtual void queueMicrotask(const ScriptValue& callback) override;
     virtual void loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) override;
+    virtual void reportStalledTopLevelAwaits() override;
     virtual void compileTest() override;
     virtual QString scriptValueDebugDetails(const ScriptValue &value) override;
     QString scriptValueDebugDetailsV8(const V8ScriptValue &value);
@@ -185,6 +187,13 @@ public: // public non-interface methods for other QtScript-specific classes to u
 
     /// registers a global object by name
     Q_INVOKABLE void registerValue(ScriptEngineScopeGuardV8* scopeGuard, const QString& valueName, V8ScriptValue value);
+
+    /// Whether a call from C++ into script is in progress. A nested event loop (Script.require, a synchronous
+    /// Script.include or XMLHttpRequest) may be running inside it, delivering events with script frames below them.
+    bool isScriptOnStack() const { return _scriptEntryDepth > 0; }
+    /// For work that must not run inside script code: queues the task to the engine's thread as the outermost call into
+    /// script returns. Engine thread only.
+    void deferUntilScriptReturns(std::function<void()> task);
 
 public: // not for public use, but I don't like how Qt strings this along with private friend functions
     virtual ScriptValue create(int type, const void* ptr) override;
@@ -308,6 +317,9 @@ private:
     std::unique_ptr<ScriptModuleMapV8> _modules;
     // Resolvers made by newPromise() reach the engine only through this, see ScriptPromiseV8.h
     std::shared_ptr<ScriptPromiseBridgeV8> _promiseBridge;
+    // See deferUntilScriptReturns; posted by performMicrotaskCheckpoint once the entry depth is back to zero
+    std::vector<std::function<void()>> _deferredUntilScriptReturns;
+    void postDeferredUntilScriptReturns();
 #ifdef OVERTE_V8_MEMORY_DEBUG
     std::atomic<size_t> scriptValueCount{0};
     std::atomic<size_t> scriptValueProxyCount{0};
