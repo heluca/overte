@@ -140,6 +140,7 @@ private slots:
     void testUnhandledRejection();
     void testQueueMicrotask();
     void testGlobalTimers();
+    void testNativeTypedArrays();
     void testPromiseResolve();
     void testPromiseResolveFromWorker();
     void testPromiseReject();
