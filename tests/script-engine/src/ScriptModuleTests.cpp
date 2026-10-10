@@ -44,7 +44,8 @@ QString ScriptModuleTests::urlOf(const QTemporaryDir& dir, const QString& path) 
     return QUrl::fromLocalFile(dir.filePath(path)).toString();
 }
 
-ScriptModuleTests::Run ScriptModuleTests::runScript(const QTemporaryDir& dir, const QList<QPair<QString, QString>>& files) {
+ScriptModuleTests::Run ScriptModuleTests::runScript(const QTemporaryDir& dir, const QList<QPair<QString, QString>>& files,
+                                                   const Options& options) {
     for (const auto& file : files) {
         QString path = dir.filePath(file.first);
         QDir().mkpath(QFileInfo(path).absolutePath());
@@ -56,9 +57,9 @@ ScriptModuleTests::Run ScriptModuleTests::runScript(const QTemporaryDir& dir, co
     }
 
     Run run;
-    ScriptManagerPointer sm = newScriptManager(ScriptManager::NETWORKLESS_TEST_SCRIPT, files.first().second,
-                                               urlOf(dir, files.first().first));
-    sm->setAbortOnUncaughtException(true);
+    QString entryURL = options.entryURL.isEmpty() ? urlOf(dir, files.first().first) : options.entryURL;
+    ScriptManagerPointer sm = newScriptManager(ScriptManager::NETWORKLESS_TEST_SCRIPT, files.first().second, entryURL);
+    sm->setAbortOnUncaughtException(options.abortOnUncaughtException);
     auto scopeGuard = sm->engine()->getScopeGuard();
     connect(sm.get(), &ScriptManager::printedMessage, [&run](const QString& message, const QString&) {
         run.printed.append(message);
@@ -75,8 +76,17 @@ ScriptModuleTests::Run ScriptModuleTests::runScript(const QTemporaryDir& dir, co
         manager->stop();
     });
     timeout.start(MODULE_TEST_TIMEOUT_MS);
+    QTimer stopper;
+    stopper.setSingleShot(true);
+    connect(&stopper, &QTimer::timeout, sm.get(), [manager = sm.get()] { manager->stop(); });
+    if (options.stopAfterMs >= 0) {
+        stopper.start(options.stopAfterMs);
+    }
 
     sm->run();
+    if (options.waitAfterRunMs > 0) {
+        QTest::qWait(options.waitAfterRunMs);
+    }
     run.uncaughtException = sm->getUncaughtException();
     return run;
 }
@@ -119,6 +129,12 @@ void ScriptModuleTests::testResolveModuleSpecifier() {
     error.clear();
     QVERIFY(resolveModuleSpecifier("./gone.mjs", QUrl(urlOf(dir, "main.mjs")), QUrl(urlOf(dir, "main.mjs")), &error).isEmpty());
     QVERIFY2(error.contains("path does not exist"), qUtf8Printable(error));
+
+    // "/" from a local Windows referrer stays on its drive
+    error.clear();
+    QUrl windowsReferrer("file:///C:/a/m.mjs");
+    QVERIFY(resolveModuleSpecifier("/lib/x.mjs", windowsReferrer, windowsReferrer, &error).isEmpty());
+    QVERIFY2(error.contains("C:/lib/x.mjs"), qUtf8Printable(error));
 
     QVERIFY(isModuleURL(QUrl("http://example.invalid/a.mjs?v=2#top")));
     QVERIFY(!isModuleURL(QUrl("http://example.invalid/a.js")));
@@ -260,7 +276,8 @@ void ScriptModuleTests::testJsImport() {
     QCOMPARE(run.errors.length(), 1);
     QVERIFY2(run.errors[0].startsWith("Cannot import './lib.js' from " + urlOf(dir, "main.mjs") + ":2: "),
              qUtf8Printable(run.errors[0]));
-    QVERIFY2(run.errors[0].contains("ES modules slice 4"), qUtf8Printable(run.errors[0]));
+    QVERIFY2(run.errors[0].endsWith("importing a classic .js script from a module is not supported yet; use a .mjs module"),
+             qUtf8Printable(run.errors[0]));
 }
 
 void ScriptModuleTests::testDependencySyntaxError() {
@@ -304,6 +321,64 @@ void ScriptModuleTests::testEvaluationError() {
     QCOMPARE(run.errors, QStringList({ "Error while evaluating module " + urlOf(dir, "lib.mjs") + ":2: Error: boom" }));
     QVERIFY(run.uncaughtException);
     QCOMPARE(run.uncaughtException->errorLine, 2);
+}
+
+void ScriptModuleTests::testLoadFailureStopsWithoutAbort() {
+    QTemporaryDir dir;
+    Options options;
+    options.abortOnUncaughtException = false;
+    auto run = runScript(dir, { { "main.mjs", "import { x } from './nope.mjs';\n" } }, options);
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors.length(), 1);
+    QVERIFY2(run.errors[0].startsWith("Cannot find module './nope.mjs'"), qUtf8Printable(run.errors[0]));
+}
+
+void ScriptModuleTests::testEvaluationErrorKeepsRunningWithoutAbort() {
+    // Like a classic script: what the module set up before it threw keeps working
+    QTemporaryDir dir;
+    Options options;
+    options.abortOnUncaughtException = false;
+    auto run = runScript(dir, {
+        { "main.mjs",
+          "Script.setTimeout(function() { print('still running'); Script.stop(true); }, 50);\n"
+          "throw new Error('boom');\n" },
+    }, options);
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList({ "Error while evaluating module " + urlOf(dir, "main.mjs") + ":2: Error: boom" }));
+    QCOMPARE(run.printed, QStringList({ "still running" }));
+}
+
+void ScriptModuleTests::testStopDuringFetch() {
+    // The fetch fails after ScriptCache's retry, well after the stop and after run() has returned. The stopped script
+    // must neither report it nor hear about it (the callback would set an uncaught exception and log).
+    QTemporaryDir dir;
+    Options options;
+    options.stopAfterMs = 50;
+    options.waitAfterRunMs = 2000;
+    auto run = runScript(dir, {
+        { "main.mjs", "import { x } from 'http://127.0.0.1:1/slow.mjs';\nprint('must not run');\n" },
+    }, options);
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.printed, QStringList());
+    QCOMPARE(run.errors, QStringList());
+    QVERIFY(!run.uncaughtException);
+}
+
+void ScriptModuleTests::testRemoteEntryRefusesLocalImport() {
+    QTemporaryDir dir;
+    Options options;
+    options.entryURL = "http://127.0.0.1:1/remote/main.mjs";
+    auto run = runScript(dir, {
+        { "main.mjs", "import { secret } from '" + urlOf(dir, "local.mjs") + "';\nprint(secret);\n" },
+        { "local.mjs", "export const secret = 'local';\n" },
+    }, options);
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.printed, QStringList());
+    QCOMPARE(run.errors.length(), 1);
+    QVERIFY2(run.errors[0].startsWith("Cannot find module '" + urlOf(dir, "local.mjs") +
+                                      "' imported from http://127.0.0.1:1/remote/main.mjs:1 (path "),
+             qUtf8Printable(run.errors[0]));
+    QVERIFY2(run.errors[0].contains("outside of origin script"), qUtf8Printable(run.errors[0]));
 }
 
 void ScriptModuleTests::testClassicScriptUnchanged() {

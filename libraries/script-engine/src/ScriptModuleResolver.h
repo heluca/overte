@@ -34,10 +34,10 @@ bool isAnchoredModuleSpecifier(const QString& specifier);
 /// Whether the URL names an ES module, by its .mjs extension. A query string or fragment does not count.
 bool isModuleURL(const QUrl& url);
 
-/// Resolves an import specifier against the importing module's URL. Accepted: absolute URLs, "/~/" paths into the
-/// default scripts, local paths starting with "/" or a drive letter when the referrer is local (otherwise "/" is
-/// relative to the referrer's origin), and "./" or "../" relative paths. Bare specifiers ("lodash") are refused.
-/// Returns an empty URL and sets error on failure.
+/// Resolves an import specifier against the importing module's URL. Accepted: absolute URLs, Windows paths with a
+/// drive letter, "/~/" paths into the default scripts, and "/", "./" or "../" paths resolved against the referrer as
+/// URLs ("/" is the root of the referrer's origin, or of its drive for a local Windows referrer). Bare specifiers
+/// ("lodash") are refused. Returns an empty URL and sets error on failure.
 QUrl resolveModuleSpecifier(const QString& specifier, const QUrl& referrer, const QUrl& sandboxURL, QString* error);
 
 #endif  // overte_ScriptModuleResolver_h

@@ -71,6 +71,8 @@ private:
     void fail(const QString& message, const QString& fileName, int line,
               std::shared_ptr<ScriptException> exception = std::shared_ptr<ScriptException>());
     void finish(const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error);
+    /// True, and the loader is done without calling back, if the script is stopping
+    bool abandonIfStopping();
 
     ScriptEngineV8* _engine;
     ScriptModuleRequest _request;

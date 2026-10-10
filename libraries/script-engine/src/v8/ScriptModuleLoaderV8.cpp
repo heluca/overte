@@ -15,6 +15,7 @@
 #include <QtCore/QThread>
 
 #include <DependencyManager.h>
+#include <Profile.h>
 
 #include "../BatchLoader.h"
 #include "../ScriptCache.h"
@@ -60,6 +61,9 @@ ScriptModuleLoaderV8::ScriptModuleLoaderV8(ScriptEngineV8* engine, const ScriptM
 }
 
 void ScriptModuleLoaderV8::start() {
+    if (abandonIfStopping()) {
+        return;
+    }
     auto scopeGuard = _engine->getScopeGuard();
     _entry = _engine->_modules->find(_request.epoch, _request.url);
     if (!_entry) {
@@ -131,6 +135,9 @@ void ScriptModuleLoaderV8::compile(ScriptEngineV8* engine, const ScriptModuleRec
 }
 
 void ScriptModuleLoaderV8::need(const ScriptModuleRecordV8Pointer& record, const ImportSite& site) {
+    if (_finished || abandonIfStopping()) {
+        return;
+    }
     if (_seen.contains(record.get())) {
         return;
     }
@@ -151,7 +158,7 @@ void ScriptModuleLoaderV8::need(const ScriptModuleRecordV8Pointer& record, const
 }
 
 void ScriptModuleLoaderV8::walk(const ScriptModuleRecordV8Pointer& record, const ImportSite& site) {
-    if (_finished) {
+    if (_finished || abandonIfStopping()) {
         return;
     }
     if (record->state == State::Failed) {
@@ -184,8 +191,9 @@ void ScriptModuleLoaderV8::walk(const ScriptModuleRecordV8Pointer& record, const
 
         // Hosts must reject attributes they do not support rather than ignore them
         if (request->GetImportAttributes()->Length() > 0) {
-            fail(QString("Cannot import '%1' from %2: import attributes are not supported yet"
-                         " (JSON modules come with ES modules slice 4)").arg(importSite.specifier, where),
+            // Slice 4 of #10 accepts { type: 'json' } here
+            fail(QString("Cannot import '%1' from %2: import attributes are not supported yet")
+                     .arg(importSite.specifier, where),
                  importer, importSite.line);
             return;
         }
@@ -198,9 +206,9 @@ void ScriptModuleLoaderV8::walk(const ScriptModuleRecordV8Pointer& record, const
             return;
         }
         if (!isModuleURL(url)) {
+            // Slice 4 of #10 replaces the .js refusal with a CommonJS synthetic module
             QString why = url.path().endsWith(".js", Qt::CaseInsensitive)
-                ? "a .js file is not an ES module, and importing CommonJS from a module comes with ES modules slice 4;"
-                  " rename it to .mjs if it uses import/export"
+                ? "importing a classic .js script from a module is not supported yet; use a .mjs module"
                 : "only .mjs files are ES modules";
             fail(QString("Cannot import '%1' from %2: %3").arg(importSite.specifier, where, why), importer,
                  importSite.line);
@@ -250,6 +258,7 @@ void ScriptModuleLoaderV8::initializeImportMeta(v8::Local<v8::Context> context, 
     auto engine = static_cast<ScriptEngineV8*>(isolate->GetData(ENGINE_ISOLATE_DATA_SLOT));
     auto record = engine->_modules->find(isolate, module);
     if (!record) {
+        qCWarning(scriptengine_v8) << "import.meta of a module that is not in the module map; import.meta.url is unset";
         return;
     }
     auto created = meta->CreateDataProperty(context, v8::String::NewFromUtf8Literal(isolate, "url"),
@@ -258,13 +267,11 @@ void ScriptModuleLoaderV8::initializeImportMeta(v8::Local<v8::Context> context, 
 }
 
 void ScriptModuleLoaderV8::instantiateAndEvaluate() {
-    auto manager = _engine->manager();
-    if (manager && manager->isStopping()) {
-        _finished = true;
-        deleteLater();
+    if (abandonIfStopping()) {
         return;
     }
 
+    PROFILE_RANGE(script, _entry->url.toString());
     v8::Isolate* isolate = _engine->getIsolate();
     MicrotaskCheckpointScopeV8 microtaskCheckpointScope(_engine);
     v8::HandleScope handleScope(isolate);
@@ -359,6 +366,9 @@ void ScriptModuleLoaderV8::reportEvaluationError(v8::Local<v8::Context> context,
 
 void ScriptModuleLoaderV8::fail(const QString& message, const QString& fileName, int line,
                                 std::shared_ptr<ScriptException> exception) {
+    if (abandonIfStopping()) {
+        return;
+    }
     if (!exception) {
         exception = std::make_shared<ScriptEngineException>(message, "module loading", line);
     }
@@ -369,6 +379,18 @@ void ScriptModuleLoaderV8::fail(const QString& message, const QString& fileName,
     }
     _engine->setUncaughtException(exception);
     finish(_engine->undefinedValue(), exception);
+}
+
+bool ScriptModuleLoaderV8::abandonIfStopping() {
+    auto manager = _engine->manager();
+    if (!manager || !manager->isStopping()) {
+        return false;
+    }
+    // A stopped script neither reports nor hears about a load that completes late, e.g. in run()'s final event pass
+    _finished = true;
+    _onEvaluated = ScriptModuleCallback();
+    deleteLater();
+    return true;
 }
 
 void ScriptModuleLoaderV8::finish(const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error) {

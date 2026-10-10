@@ -88,6 +88,12 @@ QUrl resolveModuleSpecifier(const QString& specifier, const QUrl& referrer, cons
             return fail("a module loaded by asset hash can only import absolute URLs");
         }
         url = referrer.resolved(url);
+        // QUrl takes "/x" against file:///C:/a/m.mjs to file:///x
+        static const QRegularExpression DRIVE("^/[A-Za-z]:/");
+        auto drive = DRIVE.match(referrer.path());
+        if (referrer.isLocalFile() && specifier.startsWith("/") && !specifier.startsWith("//") && drive.hasMatch()) {
+            url.setPath(drive.captured(0).chopped(1) + url.path());
+        }
     }
 
     url = expandScriptUrl(url);

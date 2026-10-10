@@ -36,6 +36,10 @@ private slots:
     void testDependencySyntaxError();
     void testUnresolvableCycle();
     void testEvaluationError();
+    void testLoadFailureStopsWithoutAbort();
+    void testEvaluationErrorKeepsRunningWithoutAbort();
+    void testStopDuringFetch();
+    void testRemoteEntryRefusesLocalImport();
     void testClassicScriptUnchanged();
     void testMicrotaskOrdering();
 
@@ -47,9 +51,22 @@ private:
         std::shared_ptr<ScriptException> uncaughtException;
     };
 
+    struct Options {
+        bool abortOnUncaughtException { true };
+        // Calls ScriptManager::stop() this long after the script starts, if not negative
+        int stopAfterMs { -1 };
+        // Keeps the manager and its engine alive and processes events this long after run() returns
+        int waitAfterRunMs { 0 };
+        // The first file's URL, by default its file: URL; the first file's contents are its source either way
+        QString entryURL;
+    };
+
     // Writes the files (path relative to the directory -> contents) and runs the first one as a top-level script
     // until it stops. Module scripts are served from the directory through ScriptCache as file: URLs.
-    Run runScript(const QTemporaryDir& dir, const QList<QPair<QString, QString>>& files);
+    Run runScript(const QTemporaryDir& dir, const QList<QPair<QString, QString>>& files, const Options& options);
+    Run runScript(const QTemporaryDir& dir, const QList<QPair<QString, QString>>& files) {
+        return runScript(dir, files, Options());
+    }
     static QString urlOf(const QTemporaryDir& dir, const QString& path);
 };
 

@@ -67,9 +67,10 @@ struct ScriptModuleRequest {
     bool forceDownload { false };
 };
 
-/// Called once per ScriptEngine::loadModule, on the engine's thread, unless the script stops first. On failure the error has already been reported
-/// to the script manager: a ScriptEngineException means the graph did not load or link and no module body ran, a
-/// ScriptRuntimeException means a module body threw.
+/// Called once per ScriptEngine::loadModule, on the engine's thread, unless the script stops first; then it is not
+/// called and nothing more is reported. On failure the error has already been reported to the script manager: a
+/// ScriptEngineException means the graph did not load or link and no module body ran, a ScriptRuntimeException
+/// means a module body threw.
 using ScriptModuleCallback = std::function<void(const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error)>;
 
 class ScriptEngineMemoryStatistics {
