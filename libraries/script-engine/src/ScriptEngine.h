@@ -58,12 +58,57 @@ public:
     size_t totalAvailableSize;
     size_t totalGlobalHandlesSize;
     size_t usedGlobalHandlesSize;
+    // Promises made by newPromise() whose resolver has neither settled nor been released yet
+    size_t pendingPromiseResolvers;
 #ifdef OVERTE_V8_MEMORY_DEBUG
     size_t scriptValueCount;
     size_t scriptValueProxyCount;
     size_t qObjectCount;
     //size_t qVariantProxyCount;
 #endif
+};
+
+/**
+ * @brief Settles a promise made by ScriptEngine::newPromise()
+ *
+ * Every method may be called from any thread. On the script thread the promise is settled at once; from any other
+ * thread the settlement is queued to the script thread. Either way, promise reactions run in the microtask checkpoint
+ * that follows the settlement.
+ *
+ * Only the first settlement counts, later ones do nothing. A settlement arriving once the script has stopped, or after
+ * the engine was destroyed, does nothing. Dropping the last reference to an unsettled resolver leaves the promise
+ * pending forever.
+ *
+ * The ScriptValue overloads follow the usual ScriptValue rules: a ScriptValue may only be copied or destroyed on a thread
+ * that holds the engine. Off the script thread, use the QVariant and QString overloads, with a QVariant that does not
+ * itself wrap a ScriptValue: resolving with one copies that ScriptValue on the calling thread.
+ */
+class ScriptPromiseResolver {
+public:
+    virtual ~ScriptPromiseResolver() = default;
+
+    virtual void resolve(const ScriptValue& value) = 0;
+
+    /**
+     * @brief Resolves with a value converted from a variant on the script thread
+     */
+    virtual void resolve(const QVariant& value) = 0;
+
+    virtual void reject(const ScriptValue& reason) = 0;
+
+    /**
+     * @brief Rejects with a new <code>Error</code> carrying the message, made on the script thread
+     */
+    virtual void reject(const QString& message) = 0;
+};
+using ScriptPromiseResolverPointer = std::shared_ptr<ScriptPromiseResolver>;
+
+/**
+ * @brief A native JavaScript Promise and the resolver that settles it, see ScriptEngine::newPromise()
+ */
+struct ScriptPromise {
+    ScriptValue promise;
+    ScriptPromiseResolverPointer resolver;
 };
 
 /**
@@ -333,6 +378,13 @@ public:
         return ScriptValue();
     }
     virtual ScriptValue newObject() = 0;
+
+    /**
+     * @brief Makes a native JavaScript Promise that C++ settles later through the returned resolver
+     *
+     * Must be called on the script thread. The resolver can be kept and used from any thread, see ScriptPromiseResolver.
+     */
+    virtual ScriptPromise newPromise() = 0;
     virtual ScriptProgramPointer newProgram(const QString& sourceCode, const QString& fileName) = 0;
     virtual ScriptValue newQObject(QObject *object, ValueOwnership ownership = QtOwnership, const QObjectWrapOptions &options = QObjectWrapOptions()) = 0;
     virtual ScriptValue newValue(bool value) = 0;

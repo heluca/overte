@@ -53,6 +53,7 @@
 #include "ScriptContextV8Wrapper.h"
 #include "ScriptObjectV8Proxy.h"
 #include "ScriptProgramV8Wrapper.h"
+#include "ScriptPromiseV8.h"
 #include "ScriptValueV8Wrapper.h"
 #include "ScriptEngineLoggingV8.h"
 #include "ScriptValueIteratorV8Wrapper.h"
@@ -245,6 +246,7 @@ ScriptEngineV8::ScriptEngineV8(ScriptManager *manager) : ScriptEngine(manager), 
         _undefinedValue = ScriptValue(new ScriptValueV8Wrapper(this, undefined));
 
         registerSystemTypes();
+        _promiseBridge = std::make_shared<ScriptPromiseBridgeV8>(this);
 
         // V8TODO: dispose of isolate on ScriptEngineV8 destruction
         // V8TODO:
@@ -269,6 +271,8 @@ ScriptEngineV8::ScriptEngineV8(ScriptManager *manager) : ScriptEngine(manager), 
 
 ScriptEngineV8::~ScriptEngineV8() {
     auto scopeGuard = getScopeGuard();
+    // First, so that settlements delivered by the event processing below are dropped
+    _promiseBridge->close();
     // Process remaining events to avoid problems with `deleteLater` calling destructor of script proxies after script engine has been deleted:
     {
         QEventLoop loop;
@@ -1663,6 +1667,7 @@ ScriptEngineMemoryStatistics ScriptEngineV8::getMemoryUsageStatistics() {
     statistics.totalAvailableSize = heapStatistics.total_available_size();
     statistics.totalGlobalHandlesSize = heapStatistics.total_global_handles_size();
     statistics.usedGlobalHandlesSize = heapStatistics.used_global_handles_size();
+    statistics.pendingPromiseResolvers = _promiseBridge->resolverCount();
 #ifdef OVERTE_V8_MEMORY_DEBUG
     statistics.scriptValueCount = scriptValueCount;
     statistics.scriptValueProxyCount = scriptValueProxyCount;

@@ -49,6 +49,7 @@ class ScriptEngineV8;
 class ScriptManager;
 class ScriptObjectV8Proxy;
 class ScriptMethodV8Proxy;
+class ScriptPromiseBridgeV8;
 class ScriptValueV8Wrapper;
 class ScriptSignalV8Proxy;
 
@@ -101,6 +102,7 @@ public:  // ScriptEngine implementation
     virtual ScriptValue newArrayBuffer(const QByteArray& message) override;
     virtual ScriptValue newFunction(ScriptEngine::FunctionSignature fun, int length = 0) override;
     virtual ScriptValue newObject() override;
+    virtual ScriptPromise newPromise() override;
     virtual ScriptValue newMethod(QObject* object, V8ScriptValue lifetime,
                                const QList<QMetaMethod>& metas, int numMaxParams);
     virtual ScriptProgramPointer newProgram(const QString& sourceCode, const QString& fileName) override;
@@ -304,6 +306,8 @@ private:
         int lineNumber;
     };
     std::vector<PendingPromiseRejection> _pendingPromiseRejections;
+    // Resolvers made by newPromise() reach the engine only through this, see ScriptPromiseV8.h
+    std::shared_ptr<ScriptPromiseBridgeV8> _promiseBridge;
 #ifdef OVERTE_V8_MEMORY_DEBUG
     std::atomic<size_t> scriptValueCount{0};
     std::atomic<size_t> scriptValueProxyCount{0};
