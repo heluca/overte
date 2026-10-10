@@ -11,6 +11,8 @@
 
 #include "ScriptModuleLoaderV8.h"
 
+#include <atomic>
+
 #include <QtCore/QPointer>
 #include <QtCore/QThread>
 
@@ -20,7 +22,6 @@
 #include "../BatchLoader.h"
 #include "../ScriptCache.h"
 #include "../ScriptManager.h"
-#include "../ScriptModuleResolver.h"
 #include "ScriptContextV8Wrapper.h"
 #include "ScriptEngineLoggingV8.h"
 #include "ScriptEngineV8.h"
@@ -34,20 +35,22 @@ static const int MODULE_FETCH_MAX_RETRIES { 1 };
 
 using State = ScriptModuleRecordV8::State;
 
-static QString toQString(v8::Isolate* isolate, v8::Local<v8::Value> value) {
+QString ScriptModuleLoaderV8::toQString(v8::Isolate* isolate, v8::Local<v8::Value> value) {
     // Converting a thrown object runs its toString(), which may throw in turn
     v8::TryCatch tryCatch(isolate);
     return QString(*v8::String::Utf8Value(isolate, value));
 }
 
-static QString siteText(const QString& url, int line) {
+QString ScriptModuleLoaderV8::siteText(const QString& url, int line) {
     return line > 0 ? QString("%1:%2").arg(url).arg(line) : url;
 }
 
-static v8::Local<v8::String> toV8String(v8::Isolate* isolate, const QString& text) {
+v8::Local<v8::String> ScriptModuleLoaderV8::toV8String(v8::Isolate* isolate, const QString& text) {
     QByteArray utf8 = text.toUtf8();
     return v8::String::NewFromUtf8(isolate, utf8.constData(), v8::NewStringType::kNormal, utf8.size()).ToLocalChecked();
 }
+
+static std::atomic<quint64> nextLoaderId { 1 };
 
 void ScriptEngineV8::loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -57,7 +60,13 @@ void ScriptEngineV8::loadModule(const ScriptModuleRequest& request, ScriptModule
 
 ScriptModuleLoaderV8::ScriptModuleLoaderV8(ScriptEngineV8* engine, const ScriptModuleRequest& request,
                                            ScriptModuleCallback onEvaluated) :
-    QObject(engine), _engine(engine), _request(request), _onEvaluated(std::move(onEvaluated)) {
+    QObject(engine), _engine(engine), _request(request), _onEvaluated(std::move(onEvaluated)), _id(nextLoaderId++) {
+}
+
+ScriptModuleLoaderV8::ScriptModuleLoaderV8(ScriptEngineV8* engine, const ScriptModuleRequest& request,
+                                           ScriptPromiseResolverPointer importResolver, const ImportSite& site) :
+    QObject(engine), _engine(engine), _request(request), _importResolver(std::move(importResolver)), _entrySite(site),
+    _id(nextLoaderId++) {
 }
 
 void ScriptModuleLoaderV8::start() {
@@ -74,7 +83,7 @@ void ScriptModuleLoaderV8::start() {
             compile(_engine, _entry, _request.source);
         }
     }
-    need(_entry, ImportSite());
+    need(_entry, _entrySite);
 }
 
 void ScriptModuleLoaderV8::fetch(ScriptEngineV8* engine, const ScriptModuleRecordV8Pointer& record, bool forceDownload) {
@@ -163,7 +172,7 @@ void ScriptModuleLoaderV8::walk(const ScriptModuleRecordV8Pointer& record, const
     }
     if (record->state == State::Failed) {
         if (!record->fetchFailed) {
-            fail(record->error, record->errorFileName, record->errorLine);
+            fail(record->error, record->errorFileName, record->errorLine, true);
         } else if (site.importer.isEmpty()) {
             fail(QString("Cannot load module %1 (%2)").arg(record->url.toString(), record->error),
                  record->url.toString(), -1);
@@ -187,31 +196,10 @@ void ScriptModuleLoaderV8::walk(const ScriptModuleRecordV8Pointer& record, const
         v8::Local<v8::ModuleRequest> request = requests->Get(context, i).As<v8::ModuleRequest>();
         ImportSite importSite { toQString(isolate, request->GetSpecifier()), record->url,
                                 module->SourceOffsetToLocation(request->GetSourceOffset()).GetLineNumber() + 1 };
-        QString where = siteText(importer, importSite.line);
-
-        // Hosts must reject attributes they do not support rather than ignore them
-        if (request->GetImportAttributes()->Length() > 0) {
-            // Slice 4 of #10 accepts { type: 'json' } here
-            fail(QString("Cannot import '%1' from %2: import attributes are not supported yet")
-                     .arg(importSite.specifier, where),
-                 importer, importSite.line);
-            return;
-        }
-
         QString error;
-        QUrl url = resolveModuleSpecifier(importSite.specifier, record->url, _request.sandboxURL, &error);
+        QUrl url = resolveImport(importSite, request->GetImportAttributes()->Length() > 0, _request.sandboxURL, &error);
         if (url.isEmpty()) {
-            fail(QString("Cannot find module '%1' imported from %2 (%3)").arg(importSite.specifier, where, error),
-                 importer, importSite.line);
-            return;
-        }
-        if (!isModuleURL(url)) {
-            // Slice 4 of #10 replaces the .js refusal with a CommonJS synthetic module
-            QString why = url.path().endsWith(".js", Qt::CaseInsensitive)
-                ? "importing a classic .js script from a module is not supported yet; use a .mjs module"
-                : "only .mjs files are ES modules";
-            fail(QString("Cannot import '%1' from %2: %3").arg(importSite.specifier, where, why), importer,
-                 importSite.line);
+            fail(error, importer, importSite.line);
             return;
         }
 
@@ -270,6 +258,17 @@ void ScriptModuleLoaderV8::instantiateAndEvaluate() {
     if (abandonIfStopping()) {
         return;
     }
+    if (_engine->isScriptOnStack()) {
+        // Delivered by a nested event loop inside script code: evaluating now would run module code in the middle of
+        // that script, between its call and the return of Script.require, Script.include or a synchronous XHR
+        QPointer<ScriptModuleLoaderV8> self(this);
+        _engine->deferUntilScriptReturns([self] {
+            if (self && !self->_finished) {
+                self->instantiateAndEvaluate();
+            }
+        });
+        return;
+    }
 
     PROFILE_RANGE(script, _entry->url.toString());
     v8::Isolate* isolate = _engine->getIsolate();
@@ -294,11 +293,13 @@ void ScriptModuleLoaderV8::instantiateAndEvaluate() {
             }
             fail(QString("Error while linking module %1: %2")
                      .arg(siteText(fileName, line), toQString(isolate, tryCatch.Exception())),
-                 fileName, line);
+                 fileName, line, true);
             return;
         }
     }
 
+    // A module that was evaluated before (a second import(), or one shared with another graph) is not evaluated again:
+    // Evaluate() returns the settled promise of its first evaluation, or the pending one of a top-level await.
     v8::TryCatch tryCatch(isolate);
     _engine->_evaluatingCounter++;
     v8::Local<v8::Value> result;
@@ -315,24 +316,79 @@ void ScriptModuleLoaderV8::instantiateAndEvaluate() {
 
     // With top-level await enabled, Evaluate() reports a throw by rejecting the promise it returns
     v8::Local<v8::Promise> promise = result.As<v8::Promise>();
-    if (promise->State() == v8::Promise::kRejected) {
-        // A handler stops the rejection from being reported a second time, as an unhandled one
-        v8::Local<v8::Function> ignore;
-        if (v8::Function::New(context, [](const v8::FunctionCallbackInfo<v8::Value>&) {}).ToLocal(&ignore)) {
-            auto handled = promise->Catch(context, ignore);
-            Q_UNUSED(handled);
+    switch (promise->State()) {
+        case v8::Promise::kFulfilled:
+            succeed(module);
+            return;
+        case v8::Promise::kRejected: {
+            // A handler stops the rejection from being reported a second time, as an unhandled one
+            v8::Local<v8::Function> ignore;
+            if (v8::Function::New(context, [](const v8::FunctionCallbackInfo<v8::Value>&) {}).ToLocal(&ignore)) {
+                auto handled = promise->Catch(context, ignore);
+                Q_UNUSED(handled);
+            }
+            reportEvaluationError(context, promise->Result());
+            return;
         }
-        reportEvaluationError(context, promise->Result());
-        return;
+        case v8::Promise::kPending:
+            break;
     }
 
-    // Still pending means top-level await. Tracking its completion is slice 2; until then a rejection after the
-    // first await is reported as an unhandled promise rejection.
-    finish(ScriptValue(new ScriptValueV8Wrapper(_engine, V8ScriptValue(_engine, module->GetModuleNamespace()))),
-           std::shared_ptr<ScriptException>());
+    // Suspended in a top-level await. The reactions find the loader by id rather than by pointer, as it is deleted if
+    // the script stops first. Attaching them also keeps a later rejection out of the unhandled rejection report.
+    v8::Local<v8::Value> id = v8::Number::New(isolate, static_cast<double>(_id));
+    v8::Local<v8::Function> onFulfilled;
+    v8::Local<v8::Function> onRejected;
+    if (v8::Function::New(context, evaluationFulfilled, id).ToLocal(&onFulfilled)
+        && v8::Function::New(context, evaluationRejected, id).ToLocal(&onRejected)) {
+        auto reactions = promise->Then(context, onFulfilled, onRejected);
+        Q_UNUSED(reactions);
+    }
+}
+
+ScriptModuleLoaderV8* ScriptModuleLoaderV8::findPendingEvaluation(const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto engine = static_cast<ScriptEngineV8*>(info.GetIsolate()->GetData(ENGINE_ISOLATE_DATA_SLOT));
+    auto id = static_cast<quint64>(info.Data().As<v8::Number>()->Value());
+    for (auto loader : engine->findChildren<ScriptModuleLoaderV8*>(QString(), Qt::FindDirectChildrenOnly)) {
+        if (loader->_id == id) {
+            return loader->_finished || loader->abandonIfStopping() ? nullptr : loader;
+        }
+    }
+    return nullptr;
+}
+
+void ScriptModuleLoaderV8::evaluationFulfilled(const v8::FunctionCallbackInfo<v8::Value>& info) {
+    if (auto loader = findPendingEvaluation(info)) {
+        v8::HandleScope handleScope(info.GetIsolate());
+        loader->succeed(loader->_entry->module.Get(info.GetIsolate()));
+    }
+}
+
+void ScriptModuleLoaderV8::evaluationRejected(const v8::FunctionCallbackInfo<v8::Value>& info) {
+    if (auto loader = findPendingEvaluation(info)) {
+        v8::HandleScope handleScope(info.GetIsolate());
+        loader->reportEvaluationError(info.GetIsolate()->GetCurrentContext(), info[0]);
+    }
+}
+
+void ScriptModuleLoaderV8::succeed(v8::Local<v8::Module> module) {
+    ScriptValue moduleNamespace(new ScriptValueV8Wrapper(_engine, V8ScriptValue(_engine, module->GetModuleNamespace())));
+    if (_importResolver) {
+        _importResolver->resolve(moduleNamespace);
+    }
+    finish(moduleNamespace, std::shared_ptr<ScriptException>());
 }
 
 void ScriptModuleLoaderV8::reportEvaluationError(v8::Local<v8::Context> context, v8::Local<v8::Value> exception) {
+    if (abandonIfStopping()) {
+        return;
+    }
+    if (_importResolver) {
+        // As in the spec: the module stays errored, and every later import() of it rejects with this same value
+        rejectImport(exception);
+        return;
+    }
+
     v8::Isolate* isolate = _engine->getIsolate();
     QString fileName = _entry->url.toString();
     int line = -1;
@@ -360,18 +416,28 @@ void ScriptModuleLoaderV8::reportEvaluationError(v8::Local<v8::Context> context,
 
     auto runtimeException = std::make_shared<ScriptRuntimeException>(text, "module evaluation", line, column, backtrace);
     runtimeException->thrownValue = ScriptValue(new ScriptValueV8Wrapper(_engine, V8ScriptValue(_engine, exception)));
-    fail(QString("Error while evaluating module %1: %2").arg(siteText(fileName, line), text), fileName, line,
-         runtimeException);
+    report(QString("Error while evaluating module %1: %2").arg(siteText(fileName, line), text), fileName, line,
+           runtimeException);
 }
 
-void ScriptModuleLoaderV8::fail(const QString& message, const QString& fileName, int line,
-                                std::shared_ptr<ScriptException> exception) {
+void ScriptModuleLoaderV8::fail(const QString& message, const QString& fileName, int line, bool syntaxError) {
     if (abandonIfStopping()) {
         return;
     }
-    if (!exception) {
-        exception = std::make_shared<ScriptEngineException>(message, "module loading", line);
+    if (_importResolver) {
+        // Only the import() promise rejects. The script handles that, or it is reported as an unhandled rejection.
+        v8::Isolate* isolate = _engine->getIsolate();
+        v8::HandleScope handleScope(isolate);
+        v8::Context::Scope contextScope(_engine->_contexts.first()->toV8Value());
+        v8::Local<v8::String> text = toV8String(isolate, message);
+        rejectImport(syntaxError ? v8::Exception::SyntaxError(text) : v8::Exception::TypeError(text));
+        return;
     }
+    report(message, fileName, line, std::make_shared<ScriptEngineException>(message, "module loading", line));
+}
+
+void ScriptModuleLoaderV8::report(const QString& message, const QString& fileName, int line,
+                                  std::shared_ptr<ScriptException> exception) {
     if (auto manager = _engine->manager()) {
         manager->scriptErrorMessage(message, fileName, line);
     } else {
@@ -379,6 +445,11 @@ void ScriptModuleLoaderV8::fail(const QString& message, const QString& fileName,
     }
     _engine->setUncaughtException(exception);
     finish(_engine->undefinedValue(), exception);
+}
+
+void ScriptModuleLoaderV8::rejectImport(v8::Local<v8::Value> reason) {
+    _importResolver->reject(ScriptValue(new ScriptValueV8Wrapper(_engine, V8ScriptValue(_engine, reason))));
+    finish(_engine->undefinedValue(), std::shared_ptr<ScriptException>());
 }
 
 bool ScriptModuleLoaderV8::abandonIfStopping() {
@@ -389,6 +460,7 @@ bool ScriptModuleLoaderV8::abandonIfStopping() {
     // A stopped script neither reports nor hears about a load that completes late, e.g. in run()'s final event pass
     _finished = true;
     _onEvaluated = ScriptModuleCallback();
+    _importResolver.reset();
     deleteLater();
     return true;
 }
@@ -396,6 +468,7 @@ bool ScriptModuleLoaderV8::abandonIfStopping() {
 void ScriptModuleLoaderV8::finish(const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error) {
     _finished = true;
     deleteLater();
+    _importResolver.reset();
     auto onEvaluated = std::move(_onEvaluated);
     if (onEvaluated) {
         onEvaluated(moduleNamespace, error);

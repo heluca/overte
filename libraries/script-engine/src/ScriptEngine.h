@@ -67,10 +67,10 @@ struct ScriptModuleRequest {
     bool forceDownload { false };
 };
 
-/// Called once per ScriptEngine::loadModule, on the engine's thread, unless the script stops first; then it is not
-/// called and nothing more is reported. On failure the error has already been reported to the script manager: a
-/// ScriptEngineException means the graph did not load or link and no module body ran, a ScriptRuntimeException
-/// means a module body threw.
+/// Called once per ScriptEngine::loadModule, on the engine's thread, when the graph's evaluation has settled: after
+/// any top-level await. If the script stops first it is not called and nothing more is reported. On failure the
+/// error has already been reported to the script manager: a ScriptEngineException means the graph did not load or
+/// link and no module body ran, a ScriptRuntimeException means a module body threw or its top-level await rejected.
 using ScriptModuleCallback = std::function<void(const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error)>;
 
 class ScriptEngineMemoryStatistics {
@@ -498,6 +498,12 @@ public:
      * from the engine thread's event loop once the whole static graph is compiled, never inside this call.
      */
     virtual void loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) = 0;
+
+    /**
+     * @brief Reports, as one error, the ES modules still suspended in a top-level await; for a script that is stopping.
+     * Reports nothing if every module evaluation has settled.
+     */
+    virtual void reportStalledTopLevelAwaits() = 0;
 
     /**
      * @brief Queues a function on the engine's microtask queue, as the JavaScript <code>queueMicrotask</code> does.

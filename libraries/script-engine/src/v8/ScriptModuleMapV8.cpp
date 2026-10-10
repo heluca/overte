@@ -42,3 +42,12 @@ void ScriptModuleMapV8::setCompiled(v8::Isolate* isolate, const ScriptModuleReco
     record->state = ScriptModuleRecordV8::State::Compiled;
     _byIdentityHash.emplace(module->GetIdentityHash(), record);
 }
+
+std::vector<ScriptModuleRecordV8Pointer> ScriptModuleMapV8::records() const {
+    std::vector<ScriptModuleRecordV8Pointer> records;
+    records.reserve(_records.size());
+    for (const auto& entry : _records) {
+        records.push_back(entry.second);
+    }
+    return records;
+}

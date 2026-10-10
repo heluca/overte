@@ -29,7 +29,7 @@
 
 class ScriptEngineV8;
 
-/// [V8] Loads one ES module graph for ScriptEngine::loadModule.
+/// [V8] Loads one ES module graph, for ScriptEngine::loadModule or for a dynamic import().
 ///
 /// Fetch phase: each module is fetched through ScriptCache and compiled on the engine thread as its source arrives;
 /// its static imports are then resolved and fetched in turn. Nothing waits in a nested event loop, the engine thread
@@ -37,7 +37,11 @@ class ScriptEngineV8;
 /// fetching, so a module shared by several importers or by a cycle is fetched and compiled once.
 ///
 /// When every module of the graph is compiled, the entry is linked and evaluated in the engine's main context, from
-/// the event loop with no script code on the stack. The loader deletes itself after calling back.
+/// the event loop with no script code on the stack. If evaluation suspends in a top-level await, the loader waits for
+/// the evaluation promise to settle. It deletes itself after calling back.
+///
+/// A loader for import() settles the import() promise instead: it reports nothing to the script manager and never
+/// sets the engine's uncaught exception, so a failed import() does not stop the script.
 class ScriptModuleLoaderV8 : public QObject {
     Q_OBJECT
 
@@ -49,27 +53,53 @@ public:
     /// For Isolate::SetHostInitializeImportMetaObjectCallback
     static void initializeImportMeta(v8::Local<v8::Context> context, v8::Local<v8::Module> module,
                                      v8::Local<v8::Object> meta);
+    /// For Isolate::SetHostImportModuleDynamicallyCallback; classic scripts call it too
+    static v8::MaybeLocal<v8::Promise> importModuleDynamically(v8::Local<v8::Context> context,
+                                                               v8::Local<v8::Data> hostDefinedOptions,
+                                                               v8::Local<v8::Value> resourceName,
+                                                               v8::Local<v8::String> specifier,
+                                                               v8::Local<v8::FixedArray> importAttributes);
+
+    static QString toQString(v8::Isolate* isolate, v8::Local<v8::Value> value);
+    static v8::Local<v8::String> toV8String(v8::Isolate* isolate, const QString& text);
+    /// "url:line", or the URL alone without a line
+    static QString siteText(const QString& url, int line);
 
 private:
-    /// Where a module is imported, for error messages: an empty importer is the entry
+    /// Where a module is imported, for error messages: an empty importer is the entry of a ScriptEngine::loadModule
     struct ImportSite {
         QString specifier;
         QUrl importer;
         int line { -1 };
     };
 
+    ScriptModuleLoaderV8(ScriptEngineV8* engine, const ScriptModuleRequest& request,
+                         ScriptPromiseResolverPointer importResolver, const ImportSite& site);
+
     static void fetch(ScriptEngineV8* engine, const ScriptModuleRecordV8Pointer& record, bool forceDownload);
     static void compile(ScriptEngineV8* engine, const ScriptModuleRecordV8Pointer& record, const QString& source);
     static v8::MaybeLocal<v8::Module> resolveModuleCallback(v8::Local<v8::Context> context, v8::Local<v8::String> specifier,
                                                             v8::Local<v8::FixedArray> importAttributes,
                                                             v8::Local<v8::Module> referrer);
+    /// Resolves an import of the site's specifier and checks that it may be imported. Returns an empty URL and sets
+    /// error to a message naming the site if not.
+    static QUrl resolveImport(const ImportSite& site, bool hasImportAttributes, const QUrl& sandboxURL, QString* error);
+    /// Called by the reactions to an evaluation promise that was pending, i.e. suspended in a top-level await
+    static void evaluationFulfilled(const v8::FunctionCallbackInfo<v8::Value>& info);
+    static void evaluationRejected(const v8::FunctionCallbackInfo<v8::Value>& info);
+    static ScriptModuleLoaderV8* findPendingEvaluation(const v8::FunctionCallbackInfo<v8::Value>& info);
 
     void need(const ScriptModuleRecordV8Pointer& record, const ImportSite& site);
     void walk(const ScriptModuleRecordV8Pointer& record, const ImportSite& site);
     void instantiateAndEvaluate();
+    void succeed(v8::Local<v8::Module> module);
     void reportEvaluationError(v8::Local<v8::Context> context, v8::Local<v8::Value> exception);
-    void fail(const QString& message, const QString& fileName, int line,
-              std::shared_ptr<ScriptException> exception = std::shared_ptr<ScriptException>());
+    /// A failure before any module body ran: reported to the script manager, or, for import(), a rejection with a
+    /// TypeError (a SyntaxError if syntaxError) carrying the message
+    void fail(const QString& message, const QString& fileName, int line, bool syntaxError = false);
+    /// Reports a failure of a ScriptEngine::loadModule to the script manager and calls back with it
+    void report(const QString& message, const QString& fileName, int line, std::shared_ptr<ScriptException> exception);
+    void rejectImport(v8::Local<v8::Value> reason);
     void finish(const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error);
     /// True, and the loader is done without calling back, if the script is stopping
     bool abandonIfStopping();
@@ -77,11 +107,16 @@ private:
     ScriptEngineV8* _engine;
     ScriptModuleRequest _request;
     ScriptModuleCallback _onEvaluated;
+    // Set for import(): the promise it returned
+    ScriptPromiseResolverPointer _importResolver;
+    ImportSite _entrySite;
     ScriptModuleRecordV8Pointer _entry;
     QSet<ScriptModuleRecordV8*> _seen;
     // Records seen but not yet walked; the graph is complete when this drops to zero
     int _pending { 0 };
     bool _finished { false };
+    // Identifies the loader to the reactions on a pending evaluation promise, which may outlive it
+    const quint64 _id;
 };
 
 #endif  // overte_ScriptModuleLoaderV8_h

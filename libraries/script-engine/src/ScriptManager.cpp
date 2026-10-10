@@ -1253,6 +1253,7 @@ void ScriptManager::run() {
             _engine->clearExceptions();
         }
     }
+    _engine->reportStalledTopLevelAwaits();
     scriptInfoMessage("Script Engine stopping:" + getFilename(), getFilename(), -1);
 
     stopAllTimers(); // make sure all our timers are stopped if the script is ending
