@@ -322,7 +322,7 @@ public:
     /*@jsdoc
      * Stops an interval timer set by {@link Script.setInterval|setInterval}.
      * @function Script.clearInterval
-     * @param {object} timer - The interval timer to stop.
+     * @param {number} timer - The interval timer to stop.
      * @example <caption>Stop an interval timer.</caption>
      * // Print a message every second.
      * var timer = Script.setInterval(function () {
@@ -340,7 +340,7 @@ public:
     /*@jsdoc
      * Stops a timeout timer set by {@link Script.setTimeout|setTimeout}.
      * @function Script.clearTimeout
-     * @param {object} timer - The timeout timer to stop.
+     * @param {number} timer - The timeout timer to stop.
      * @example <caption>Stop a timeout timer.</caption>
      * // Print a message after two seconds.
      * var timer = Script.setTimeout(function () {

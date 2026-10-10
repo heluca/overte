@@ -36,6 +36,10 @@ class ScriptEngine;
  * @hifi-server-entity
  * @hifi-assignment-client
  *
+ * @param {object} [options] - The server's options.
+ * @param {number} [options.port=0] - The port to listen on. <code>0</code> picks a free port.
+ * @param {string} [options.serverName="HighFidelity - Scripted WebSocket Listener"] - The server name used in handshakes.
+ *
  * @property {string} url - The URL that the server is listening on. <em>Read-only.</em>
  * @property {number} port - The port that the server is listening on. <em>Read-only.</em>
  * @property {boolean} listening - <code>true</code> if the server is listening for incoming connections, <code>false</code> if 

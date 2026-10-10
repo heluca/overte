@@ -33,3 +33,8 @@ The template twig html files for hifi-grav are located out/grav/templates.
 if you would like to copy these to a local version of the docs on your system you can run with the follows args:
 
 * node grav true "path/to/grav/" "path/to/grav/content"
+
+## TypeScript declarations
+
+`tools/typings` turns the same JSDoc into per-context TypeScript declarations
+(`overte-interface.d.ts`, `overte-server-entity.d.ts`, ...). See `tools/typings/README.md`.

@@ -1,0 +1,11 @@
+{
+    "compilerOptions": {
+        "strict": true,
+        "noEmit": true,
+        "target": "ES2023",
+        "lib": ["ES2023"],
+        "types": [],
+        "erasableSyntaxOnly": true
+    },
+    "files": ["shortbowGameManager.ts", "negative.ts"]
+}
