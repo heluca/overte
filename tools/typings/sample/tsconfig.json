@@ -7,5 +7,5 @@
         "types": [],
         "erasableSyntaxOnly": true
     },
-    "files": ["shortbowGameManager.ts", "negative.ts"]
+    "files": ["shortbowGameManager.ts", "positive.ts", "negative.ts"]
 }

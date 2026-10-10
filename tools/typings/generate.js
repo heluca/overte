@@ -58,6 +58,13 @@ function main() {
         console.log("Namespaces with no @hifi-* context tag (types only, no globals): " +
             untagged.map(container => container.longname).join(", "));
     }
+    model.variantBases.forEach(base => {
+        const unlinked = base.variants.filter(variant => variant.values.length === 0);
+        if (unlinked.length > 0) {
+            console.log("Variants of " + base.longname + " with no " + base.discriminant.name +
+                " value (left out of the union): " + unlinked.map(variant => variant.longname).join(", "));
+        }
+    });
     if (model.orphans.size > 0) {
         console.log("Members of undocumented @memberof targets (skipped): " +
             [...model.orphans.entries()].map(([name, count]) => name + " (" + count + ")").join(", "));

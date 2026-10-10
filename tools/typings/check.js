@@ -7,7 +7,7 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 //  Type-checks each generated context file on its own (the contexts redeclare the same
-//  globals, so they cannot share one program), then the sample script.
+//  globals, so they cannot share one program), then the samples.
 //
 
 "use strict";
@@ -30,4 +30,5 @@ CONTEXTS.forEach(context => {
     ok = run("dist/overte-" + context.id + ".d.ts", strict.concat(["dist/overte-" + context.id + ".d.ts"])) && ok;
 });
 ok = run("-p sample/tsconfig.json", ["-p", "sample/tsconfig.json"]) && ok;
+ok = run("-p sample/interface/tsconfig.json", ["-p", "sample/interface/tsconfig.json"]) && ok;
 process.exit(ok ? 0 : 1);

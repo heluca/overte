@@ -35,8 +35,9 @@ or in `tsconfig.json`, with the DOM library left out (Overte has no DOM):
 
 The context files declare the same globals, so two of them in one program conflict. Compile the
 scripts for each context as a separate project. `sample/` holds a port of the Shortbow game
-manager that is type-checked against the server entity context, and `sample/negative.ts` lists
-misuse that must fail to compile (each line is a `@ts-expect-error`).
+manager that is type-checked against the server entity context, `sample/positive.ts` lists idioms
+that must compile, and `sample/negative.ts` lists misuse that must fail to compile (each line is a
+`@ts-expect-error`). `sample/interface/` does the same against the Interface context.
 
 ## Regenerating
 
@@ -72,14 +73,48 @@ never `any`; most are typos in the source JSDoc (`QUuid`, `GrphicsMeshPart`) and
     `Entities.Haze`);
   - some properties document a default and a function or constructor takes the typedef as an
     argument (`TabletButtonProxy.ButtonProperties`, taken by `Tablet.addButton`); or
-  - it is the base of variant typedefs. `Entities.EntityProperties-Model` and the other variants
-    are emitted as `Entities.EntityProperties_Model`, and their properties are folded into the
-    base type, as the engine takes one flat property set.
+  - it is the base or a variant of a variant union (below).
 
   A result type with one or two defaults (`AvatarBookmarks.BookmarkData`,
   `Assets.LoadFromCacheResult`) keeps its other properties required.
 - A string `@typedef` whose description table lists every value as `<code>"value"</code>`
   becomes a union of string literals (`Entities.EntityType`, `ShapeType`).
+- An object `@typedef` with variants named `<Base>-<Variant>` becomes a union discriminated on
+  the base property typed by a string enumeration whose description table links each value to a
+  variant: the `Entities.EntityType` row for `"Model"` links `Entities.EntityProperties-Model`, so
+  `Entities.EntityProperties` is a union over `type`. The value comes from that table, not the
+  variant's name (`Entities.ActionArguments-FarGrab` is `"far-grab"`). Each variant is emitted as
+  `Entities.EntityProperties_Model`, which extends `Entities.EntityProperties_Common` (the base's
+  properties other than the discriminant) and adds the required literal `type: "Model"` and its
+  own properties. A variant with no properties whose `@see` links a sibling takes the sibling's
+  properties (`Box` and `Sphere` extend `Omit<EntityProperties_Shape, "type">`); an enumeration
+  value with no variant gets the common properties only (`Overlays.OverlayType` `"cube"`). The
+  same rule makes `Entities.ActionArguments` and `Overlays.OverlayProperties` unions. A
+  `<Base>-<Variant>` typedef whose base has no property typed by such an enumeration stops the
+  generator with an error.
+
+  Every reference to the base is the union, so `Entities.addEntity` requires `type` and accepts
+  only that type's properties. So do typedefs that hold it: `AvatarEntityMap`, which
+  `MyAvatar.setAvatarEntityData` takes, needs `type` on every entity (a map read back with
+  `getAvatarEntityData` round-trips; an update-only map without `type` is rejected), and so do
+  the `start`/`path`/`end` entities of a pointer render state passed to `Pointers.createPointer`.
+
+  Return types take `Partial<Base>` (the partial of each member, `type` included), because the
+  engine returns only the requested properties: `Entities.getEntityProperties(id, desired)`
+  returns a union to narrow on `type`, or to cast when the type is known. A function that returns
+  the base and is called without its optional parameters gets a first overload returning the full
+  union, since all properties come back: `Entities.addEntity(Entities.getEntityProperties(id))`
+  clones (`getMultipleEntityProperties` likewise).
+
+  Parameters take `Partial<Base>` when the function edits (its name starts with `edit` or
+  `update`: `Entities.editEntity`, `Entities.updateAction`, `Overlays.editOverlay`,
+  `Overlays.editOverlays`) or takes the discriminant as a parameter of its own
+  (`Entities.addAction(actionType, ...)`, `Overlays.addOverlay(type, ...)`). An edit whose
+  parameter is a typedef holding the base at any depth takes it through `PartialVariants<T>`,
+  which makes only the unions inside partial: `Pointers.editRenderState` accepts
+  `{ end: { dimensions } }` while `Pointers.createPointer` still requires `type`. A partial union
+  is not discriminated: without `type`, an edit that mixes properties of different members
+  (`{ text, modelURL }`) still compiles.
 - An object keyed by such a union (`Object.<Graphics.BufferTypeName, ...>`) becomes
   `Partial<Record<K, V>>`, since it rarely carries every key.
 - Optional parameters that precede a required one become separate overloads.
@@ -88,9 +123,6 @@ never `any`; most are typos in the source JSDoc (`QUuid`, `GrphicsMeshPart`) and
 
 ## Known gaps
 
-- `Entities.addEntity` takes the flat `Entities.EntityProperties`, so `type` is optional and the
-  type-specific properties are not narrowed by it. A discriminated union on `type`, with each
-  variant interface extending the common base, is a planned follow-up.
 - The `this` of entity scripts (`preload`, `enterEntity`, ...) is not typed.
 
 ## Follow-up: drift check

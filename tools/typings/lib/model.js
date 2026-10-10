@@ -83,6 +83,75 @@ function mergeProperties(target, extra, report) {
     });
 }
 
+// "Entities.EntityProperties-Model" documents the Model-specific part of
+// Entities.EntityProperties. A base with such variants becomes a union discriminated on the base
+// property whose type is a string enumeration that links each value to its variant: the
+// Entities.EntityType table row for <code>"Model"</code> links Entities.EntityProperties-Model.
+// A variant with no properties of its own whose @see links a sibling (Box and Sphere see Shape)
+// takes the sibling's properties. Enumeration values with no variant (Overlays.OverlayType "cube")
+// take the common properties only. Bases and variants are bags: only the discriminant is required.
+function indexVariants(typedefs) {
+    const bases = [];
+    typedefs.forEach((typedef, longname) => {
+        const dash = longname.lastIndexOf("-");
+        const base = dash < 0 ? null : typedefs.get(longname.slice(0, dash));
+        if (!base || !base.properties) {
+            return;
+        }
+        if (!base.variants) {
+            base.variants = [];
+            bases.push(base);
+        }
+        base.variants.push(typedef);
+        typedef.variantOf = base;
+        base.bag = true;
+        typedef.bag = true;
+    });
+    bases.forEach(base => {
+        const prefix = base.longname + "-";
+        base.properties.forEach(property => {
+            const names = (property.type && property.type.names) || [];
+            const values = names.length === 1 && typedefs.has(names[0]) ? variantValues(typedefs.get(names[0]), prefix) : null;
+            if (values && !base.discriminant) {
+                base.discriminant = property;
+                base.variants.forEach(variant => { variant.values = values.get(variant.longname) || []; });
+                const linked = [].concat(...values.values());
+                base.otherValues = typedefs.get(names[0]).literals.split(" | ").filter(value => !linked.includes(value));
+            }
+        });
+        if (!base.discriminant) {
+            throw new Error(base.longname + " has variants but no property typed by an enumeration that links them");
+        }
+        base.variants.forEach(variant => {
+            const seen = (variant.see || []).map(text => (/\{@link\s+([^}|\s]+)/.exec(text) || [])[1]);
+            const sibling = base.variants.find(other => other !== variant && seen.includes(other.longname));
+            if (!variant.properties && sibling) {
+                variant.inherits = sibling;
+            }
+        });
+    });
+    return bases;
+}
+
+// For a string enumeration whose description table links rows to "<prefix><Variant>" typedefs,
+// the values of each linked variant, as a Map of variant longname to TypeScript literals.
+function variantValues(enumeration, prefix) {
+    const body = /<tbody>([\s\S]*?)<\/tbody>/.exec(enumeration.description || "");
+    if (!enumeration.literals || !body) {
+        return null;
+    }
+    const values = new Map();
+    body[1].split(/<tr[^>]*>/).slice(1).forEach(row => {
+        const value = /^\s*<td[^>]*>\s*<code>\s*"([^"]*)"\s*<\/code>/.exec(row);
+        const link = new RegExp("\\{@link\\s+" + prefix.replace(/[.\\-]/g, "\\$&") + "([\\w$]+)").exec(row);
+        if (value && link) {
+            const longname = prefix + link[1];
+            values.set(longname, (values.get(longname) || []).concat([JSON.stringify(value[1])]));
+        }
+    });
+    return values.size > 0 ? values : null;
+}
+
 function buildModel(rawDoclets) {
     const doclets = rawDoclets.filter(doclet => !doclet.undocumented && doclet.kind !== "package");
 
@@ -113,22 +182,7 @@ function buildModel(rawDoclets) {
         }
     });
 
-    // "Entities.EntityProperties-Model" documents the Model-specific part of
-    // Entities.EntityProperties. The engine takes one flat bag, so a base with variants is a bag
-    // and carries the variant properties too.
-    typedefs.forEach((typedef, longname) => {
-        const dash = longname.lastIndexOf("-");
-        if (dash < 0) {
-            return;
-        }
-        const base = typedefs.get(longname.slice(0, dash));
-        if (base && base.properties && typedef.properties) {
-            base.bag = true;
-            typedef.bag = true;
-            base.variantNames = (base.variantNames || []).concat([longname]);
-            mergeProperties(base.properties, typedef.properties.map(property => Object.assign({}, property)));
-        }
-    });
+    const variantBases = indexVariants(typedefs);
 
     const globals = [];
     const orphans = new Map();
@@ -156,6 +210,7 @@ function buildModel(rawDoclets) {
         globals: globals.sort((a, b) => a.name.localeCompare(b.name)),
         orphans: orphans,
         knownTypes: knownTypes,
+        variantBases: variantBases,
         literalTypes: new Set([...typedefs.values()].filter(typedef => typedef.literals).map(typedef => typedef.longname))
     };
 }

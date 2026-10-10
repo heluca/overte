@@ -6,8 +6,9 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
-//  Misuse the declarations must reject. Each @ts-expect-error fails the check if its line
-//  type-checks, so a declaration that regresses to `any` or `unknown` is caught.
+//  Misuse the declarations must reject. Each line below is marked as an expected error, which
+//  fails the check if the line type-checks, so a declaration that regresses to `any` or
+//  `unknown` is caught.
 //
 
 /// <reference path="../dist/overte-server-entity.d.ts" />
@@ -17,6 +18,15 @@ Entities.addEntity({ type: "Modle" });
 
 // @ts-expect-error "positon" is not an Entities.EntityProperties key.
 Entities.addEntity({ type: "Box", positon: Vec3.ZERO });
+
+// @ts-expect-error addEntity needs a type to pick the entity's properties.
+Entities.addEntity({});
+
+// @ts-expect-error modelURL is a Model property; a Box takes Shape's properties.
+Entities.addEntity({ type: "Box", modelURL: "x" });
+
+// @ts-expect-error "Nope" is not an Entities.EntityType.
+Entities.addEntity({ type: "Nope" });
 
 // @ts-expect-error MyAvatar is not available to server entity scripts.
 print(MyAvatar.position);

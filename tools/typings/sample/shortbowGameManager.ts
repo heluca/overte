@@ -34,7 +34,7 @@ const POINTS_PER_KILL = 100;
 const ENEMY_SPEED = 3.0;
 const MAX_DISTANCE_FROM_GAME = 200;
 
-function getPropertiesForEntities(entityIDs: Uuid[], desiredProperties: string[]): Entities.EntityProperties[] {
+function getPropertiesForEntities(entityIDs: Uuid[], desiredProperties: string[]): Partial<Entities.EntityProperties>[] {
     return entityIDs.map(id => Entities.getEntityProperties(id, desiredProperties));
 }
 
