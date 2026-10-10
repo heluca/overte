@@ -48,6 +48,7 @@
 #include "ScriptContext.h"
 #include "XMLHttpRequestClass.h"
 #include "WebSocketClass.h"
+#include "WebSocketServerClass.h"
 #include "ScriptEngine.h"
 #include "ScriptEngineCast.h"
 #include "ScriptEngineLogging.h"
@@ -857,6 +858,13 @@ void ScriptManager::init() {
 
         ScriptValue webSocketConstructorValue = scriptEngine->newFunction(WebSocketClass::constructor);
         scriptEngine->globalObject().setProperty("WebSocket", webSocketConstructorValue);
+    }
+
+    if (_context == ENTITY_SERVER_SCRIPT || _context == AGENT_SCRIPT) {
+        // Server-side scripts are the domain operator's own code; capabilities that must never reach a visitor's
+        // client scripts are registered here and nowhere else.
+        ScriptValue webSocketServerConstructorValue = scriptEngine->newFunction(WebSocketServerClass::constructor);
+        scriptEngine->globalObject().setProperty("WebSocketServer", webSocketServerConstructorValue);
     }
 
     /*@jsdoc
