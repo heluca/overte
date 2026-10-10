@@ -94,6 +94,12 @@ public:
      *
      */
     QUrl definingSandboxURL;
+
+    /**
+     * @brief ES module environment the function was registered in; null for classic script code
+     *
+     */
+    ScriptEnvironmentPointer definingEnvironment;
 };
 
 
@@ -1501,6 +1507,24 @@ signals:
      */
     void releaseEntityPacketSenderMessages(bool wait);
 
+public:
+    /**
+     * @brief The entity whose script is running, if any
+     *
+     * In ES module code, the current ScriptEnvironment's, which promise continuations, timers and handlers keep; in
+     * classic script code, the one set by the innermost doWithEnvironment(). Script thread only for module code.
+     *
+     * @return EntityItemID Entity ID, null outside entity scripts
+     */
+    EntityItemID currentEntityIdentifier() const;
+
+    /**
+     * @brief The top-level URL of the script that loaded the code that is running, chosen as for currentEntityIdentifier()
+     *
+     * @return QUrl Sandbox URL, empty for classic Interface and Agent scripts
+     */
+    QUrl currentSandboxURL() const;
+
 protected:
     // Is called by the constructor, bceause all types need to be registered before method discovery with ScriptObjectV8Proxy::investigate()
     void initMetaTypes();
@@ -1612,8 +1636,19 @@ protected:
      */
     Q_INVOKABLE void entityScriptContentAvailable(const EntityItemID& entityID, const QString& scriptOrURL, const QString& contents, bool isURL, bool success, const QString& status);
 
-    EntityItemID currentEntityIdentifier; // Contains the defining entity script entity id during execution, if any. Empty for interface script execution.
-    QUrl currentSandboxURL; // The toplevel url string for the entity script that loaded the code being executed, else empty.
+    // Classic script code's environment, see currentEntityIdentifier() and currentSandboxURL()
+    EntityItemID _currentEntityIdentifier; // Contains the defining entity script entity id during execution, if any. Empty for interface script execution.
+    QUrl _currentSandboxURL; // The toplevel url string for the entity script that loaded the code being executed, else empty.
+
+    /**
+     * @brief Records a file loaded by Script.include or Script.require in the environment that loaded it
+     *
+     * The hook for design question Q3 of #10; does nothing while CLASSIC_LOADS_TAINT_ENVIRONMENT is off.
+     *
+     * @param url URL of the file
+     * @param environment Environment of the code that loaded it; null for classic script code
+     */
+    void noteClassicLoad(const QUrl& url, const ScriptEnvironmentPointer& environment);
 
     /**
      * @brief Execute operation in the appropriate context for (the possibly empty) entityID.
@@ -1621,11 +1656,16 @@ protected:
      * of the code being executed (e.g., if we ever sandbox different entity scripts, or provide different
      * global values for different entity scripts).
      *
+     * The operation runs in the ES module environment given, and continuations it creates carry it; with none it runs as
+     * classic script code, without one even if called from module code.
+     *
      * @param entityID Entity ID, may be null
      * @param sandboxURL Sandbox URL
      * @param operation Operation to call
+     * @param environment ES module environment, whose entity and sandbox are entityID and sandboxURL; null for classic code
      */
-    void doWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, std::function<void()> operation);
+    void doWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, std::function<void()> operation,
+                           const ScriptEnvironmentPointer& environment = ScriptEnvironmentPointer());
 
     /**
      * @brief Execute operation in the appropriate context for (the possibly empty) entityID.
@@ -1646,8 +1686,10 @@ protected:
      * @param function  Function to call
      * @param thisObject "this" object to use for the call
      * @param args Arguments
+     * @param environment ES module environment, null for classic code
      */
-    void callWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, const ScriptValue& function, const ScriptValue& thisObject, const ScriptValueList& args);
+    void callWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, const ScriptValue& function, const ScriptValue& thisObject, const ScriptValueList& args,
+                             const ScriptEnvironmentPointer& environment = ScriptEnvironmentPointer());
 
     Context _context;
     Type _type;

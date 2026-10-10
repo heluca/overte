@@ -249,8 +249,10 @@ private:  // storage
     public:
         V8ScriptValue thisValue;
         V8ScriptValue callback;
-        Connection(const V8ScriptValue &v8ThisValue, const V8ScriptValue &v8Callback) : 
-            thisValue(v8ThisValue), callback(v8Callback) {};
+        // ES module environment the connection was made in, null for classic script code
+        ScriptEnvironmentPointer environment;
+        Connection(const V8ScriptValue &v8ThisValue, const V8ScriptValue &v8Callback, const ScriptEnvironmentPointer& environment) :
+            thisValue(v8ThisValue), callback(v8Callback), environment(environment) {};
     };
     using ConnectionList = QList<Connection>;
 
