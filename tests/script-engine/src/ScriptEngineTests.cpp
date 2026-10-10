@@ -471,3 +471,26 @@ void ScriptEngineTests::testGlobalTimers() {
     QVERIFY(!sm->getUncaughtException());
     QCOMPARE(printed, QString("number args:xy,interval:3"));
 }
+
+void ScriptEngineTests::testNativeTypedArrays() {
+    // V8 provides ArrayBuffer/TypedArray/DataView natively; this just confirms the engine still
+    // exposes them after removing the long-dead QtScript-era shim classes of the same names.
+    QString script =
+        "var results = [];\n"
+        "results.push(new Uint8Array(4).length === 4);\n"
+        "results.push(new DataView(new ArrayBuffer(8)).byteLength === 8);\n"
+        "print(results.join(','));\n"
+        "Script.stop(true);\n";
+
+    QString printed;
+    auto sm = makeManager(script, "testNativeTypedArrays.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+
+    connect(sm.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString& engineName){
+        printed.append(message);
+    });
+
+    sm->run();
+    QVERIFY(!sm->getUncaughtException());
+    QCOMPARE(printed, QString("true,true"));
+}
