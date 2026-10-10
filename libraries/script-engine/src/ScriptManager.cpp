@@ -1114,6 +1114,9 @@ void ScriptManager::run() {
             _engine->processEvents();
         }
 
+        // Promise jobs queued outside a script call, e.g. by a V8 platform task run in processEvents()
+        _engine->performMicrotaskCheckpoint();
+
         if (_isFinished) {
             break;
         }

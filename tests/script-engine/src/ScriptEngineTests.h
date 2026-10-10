@@ -65,6 +65,8 @@ private slots:
     void testSignal();
     void testSignalWithException();
     void testQuat();
+    void testMicrotaskOrdering();
+    void testUnhandledRejection();
 
 
 private:

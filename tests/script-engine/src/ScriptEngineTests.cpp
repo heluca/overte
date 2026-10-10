@@ -341,3 +341,59 @@ void ScriptEngineTests::testQuat() {
     sm->run();
 }
 
+void ScriptEngineTests::testMicrotaskOrdering() {
+    QString script =
+        "var order = [];\n"
+        "Script.setTimeout(function() {\n"
+        "    order.push('timeout');\n"
+        "    print(order.join(','));\n"
+        "    Script.stop(true);\n"
+        "}, 0);\n"
+        "Promise.resolve().then(function() { order.push('then'); })\n"
+        "    .then(function() { order.push('then2'); });\n"
+        "(async function() { await null; order.push('await'); })();\n"
+        "order.push('sync');\n";
+
+    QString printed;
+    auto sm = makeManager(script, "testMicrotaskOrdering.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+
+    connect(sm.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString& engineName){
+        printed.append(message);
+    });
+
+    sm->run();
+    QVERIFY(!sm->getUncaughtException());
+    QCOMPARE(printed, QString("sync,then,await,then2,timeout"));
+}
+
+void ScriptEngineTests::testUnhandledRejection() {
+    QString script =
+        "async function fails(what) {\n"
+        "    throw new Error(what);\n"
+        "}\n"
+        "fails('async boom');\n"
+        "fails('caught boom').catch(function() {});\n"
+        "var late = Promise.reject(new Error('late boom'));\n"
+        "late.catch(function() {});\n"
+        "Promise.reject(42);\n"
+        "Script.setTimeout(function() { Script.stop(true); }, 0);\n";
+
+    QStringList errors;
+    auto sm = makeManager(script, "testUnhandledRejection.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+
+    connect(sm.get(), &ScriptManager::errorMessage, [&errors](const QString& message, const QString& engineName){
+        if (message.contains("promise rejection")) {
+            errors.append(message);
+        }
+    });
+
+    sm->run();
+    qDebug() << "Reported:" << errors;
+    QCOMPARE(errors.length(), 2);
+    QVERIFY(errors[0].startsWith("Unhandled promise rejection: Error: async boom"));
+    QVERIFY(errors[0].contains("testUnhandledRejection.js:2"));
+    QVERIFY(errors[1].startsWith("Unhandled promise rejection: 42"));
+    QVERIFY(errors[1].contains("testUnhandledRejection.js:8"));
+}
