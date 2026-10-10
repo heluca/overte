@@ -14,7 +14,9 @@
 // The WHATWG classes are plain script, so they get private state, instanceof and iteration for free; the native part in
 // FetchClass.cpp is only the transport, which settles through the promise bridge. The prelude is called with the native
 // functions and returns the globals, so nothing internal is reachable from scripts.
-const char FETCH_PRELUDE[] = R"JS((function (native) {
+// It is kept in parts because MSVC refuses a string literal over about 16 KB (C2026).
+static const char* const FETCH_PRELUDE_PARTS[] = {
+R"JS((function (native) {
     "use strict";
     const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
     const NORMALIZED_METHODS = ["DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"];
@@ -31,13 +33,18 @@ const char FETCH_PRELUDE[] = R"JS((function (native) {
         return name.toLowerCase();
     }
     function headerValue(value) {
-        return String(value).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+        value = String(value).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+        if (/[\r\n\0]/.test(value)) {
+            throw new TypeError("Invalid header value: it contains CR, LF or NUL");
+        }
+        return value;
     }
     function bodyBytes(body) {
         if (body === undefined || body === null) {
             return null;
         }
-        if (body instanceof ArrayBuffer) {
+        // Not instanceof: an entity script's ArrayBuffer comes from the realm of its own context
+        if (Object.prototype.toString.call(body) === "[object ArrayBuffer]") {
             return body;
         }
         if (ArrayBuffer.isView(body)) {
@@ -53,8 +60,17 @@ const char FETCH_PRELUDE[] = R"JS((function (native) {
 
     class Headers {
         #map = new Map();
-        constructor(init) {
+        constructor(init, wire) {
             if (init === undefined || init === null) {
+                return;
+            }
+            // Headers from the network are taken as they came, so a malformed one cannot make a received response throw
+            if (wire === internal) {
+                for (const [name, value] of init) {
+                    const key = name.toLowerCase();
+                    const existing = this.#map.get(key);
+                    this.#map.set(key, existing === undefined ? value : existing + ", " + value);
+                }
                 return;
             }
             if (typeof init !== "object") {
@@ -151,7 +167,8 @@ const char FETCH_PRELUDE[] = R"JS((function (native) {
         abort(reason) { abortSignal(this.#signal, reason); }
     }
 
-    class Request {
+)JS",
+R"JS(    class Request {
         #url;
         #method;
         #headers;
@@ -223,7 +240,7 @@ const char FETCH_PRELUDE[] = R"JS((function (native) {
                 this.#statusText = init.statusText;
                 this.#url = init.url;
                 this.#redirected = init.redirected;
-                this.#headers = new Headers(init.headers);
+                this.#headers = new Headers(init.headers, internal);
                 this.#body = init.body;
                 return;
             }
@@ -263,7 +280,8 @@ const char FETCH_PRELUDE[] = R"JS((function (native) {
         json() { return this.text().then(text => JSON.parse(text)); }
     }
 
-    function fetch(input, init) {
+)JS",
+R"JS(    function fetch(input, init) {
         return new Promise(function (resolve, reject) {
             const request = new Request(input, init);
             const state = requestState.get(request);
@@ -277,7 +295,7 @@ const char FETCH_PRELUDE[] = R"JS((function (native) {
             function onAbort() {
                 if (!settled) {
                     settled = true;
-                    transfer.control.abort();
+                    native.abort(transfer.control);
                     reject(signal.reason);
                 }
             }
@@ -305,4 +323,13 @@ const char FETCH_PRELUDE[] = R"JS((function (native) {
     }
 
     return { fetch, Headers, Request, Response, AbortController, AbortSignal };
-}))JS";
+}))JS"
+};
+
+QString fetchPrelude() {
+    QString prelude;
+    for (const char* part : FETCH_PRELUDE_PARTS) {
+        prelude += QString::fromUtf8(part);
+    }
+    return prelude;
+}

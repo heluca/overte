@@ -32,6 +32,12 @@ class ResourceRequest;
  * Fetches a resource, the same as the WHATWG <code>fetch()</code>. <code>http:</code> and <code>https:</code> URLs take
  * any method; <code>file:</code>, <code>qrc:</code> and <code>atp:</code> URLs take <code>GET</code> and
  * <code>HEAD</code>. A relative URL is resolved the same as {@link Script.resolvePath}.
+ * <p><code>file:</code> and <code>qrc:</code> URLs are only available to Interface and agent scripts. In client and server
+ * entity scripts they reject with a <code>TypeError</code>, since an entity script comes from whatever domain is visited.</p>
+ * <p>Header names and values are sent as Latin-1; a character outside it is sent as <code>?</code>.</p>
+ * <p>In an entity script, errors and parsed JSON values come from the main script context, not the entity script's own,
+ * so <code>instanceof TypeError</code> or <code>instanceof Array</code> is <code>false</code> there: check
+ * <code>error.name</code> and use <code>Array.isArray()</code> instead.</p>
  * <p>The promise is rejected with a <code>TypeError</code> when there is no response at all: the host is not found, the
  * connection is refused, the scheme is not supported, or the file or asset is missing. An HTTP error status such as
  * <code>404</code> still resolves, with <code>response.ok</code> set to <code>false</code>. Aborting through
@@ -94,7 +100,8 @@ class ResourceRequest;
  * @returns {boolean} <code>true</code> if the header is set.
  */
 /*@jsdoc
- * Sets a header, replacing any value it had.
+ * Sets a header, replacing any value it had. A value containing CR, LF or NUL throws a <code>TypeError</code>, as it
+ * does for {@link Headers.append}.
  * @function Headers.set
  * @param {string} name - The header name.
  * @param {string} value - The value.
@@ -266,7 +273,7 @@ public:
     void startResource(ResourceRequest* request);
 
     /// Stops the request and leaves the promise pending; fetch() has already rejected its own promise
-    Q_INVOKABLE void abort();
+    void abort();
 
 private:
     void httpFinished();
@@ -284,11 +291,12 @@ private:
     QPointer<ResourceRequest> _resourceRequest;
 };
 
-/// Adds fetch, Headers, Request, Response, AbortController and AbortSignal to the engine's global object
-void registerFetchGlobals(ScriptEngine* engine);
+/// Adds fetch, Headers, Request, Response, AbortController and AbortSignal to the engine's global object. Without
+/// allowLocalFiles, file: and qrc: URLs are refused, so an entity script cannot read the local disk.
+void registerFetchGlobals(ScriptEngine* engine, bool allowLocalFiles);
 
 /// The script half of fetch(), in FetchPrelude.cpp: a function that takes the native transport and returns the globals
-extern const char FETCH_PRELUDE[];
+QString fetchPrelude();
 
 #endif // overte_FetchClass_h
 

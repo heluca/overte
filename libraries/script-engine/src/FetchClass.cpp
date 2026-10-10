@@ -23,6 +23,7 @@
 
 #include "ResourceRequestObserver.h"
 #include "ScriptContext.h"
+#include "ScriptEngineLogging.h"
 #include "ScriptManager.h"
 #include "ScriptValue.h"
 #include "v8/FastScriptValueUtils.h"
@@ -66,13 +67,21 @@ static QNetworkRequest httpRequest(const QUrl& url, const ScriptValue& headerPai
 
 // native.start(method, url, [[name, value], ...], body) -> { promise, control }. Throws a TypeError for what can never
 // succeed, which the Promise executor in fetch() turns into a rejection.
-static ScriptValue startTransfer(ScriptContext* context, ScriptEngine* engine) {
+static ScriptValue startTransfer(ScriptContext* context, ScriptEngine* engine, bool allowLocalFiles) {
     const QByteArray method = context->argument(0).toString().toLatin1();
     const QUrl url(context->argument(1).toString());
     const bool isHead = method == "HEAD";
     const bool isHttp = url.scheme() == "http" || url.scheme() == "https";
     if (!isHttp && method != "GET" && !isHead) {
         return throwTypeError(context, engine, "fetch: " + method + " is only supported for http and https URLs");
+    }
+    if (!isHttp && !allowLocalFiles) {
+        // After normalisation, since ResourceManager rewrites unknown schemes and URL prefix overrides to local paths
+        const QString scheme = DependencyManager::get<ResourceManager>()->normalizeURL(url).scheme();
+        if (scheme == HIFI_URL_SCHEME_FILE || scheme == URL_SCHEME_QRC) {
+            return throwTypeError(context, engine, "fetch: " + url.toString() +
+                ": file: and qrc: URLs are only available to Interface and agent scripts, not entity scripts");
+        }
     }
 
     ScriptPromise promise = engine->newPromise();
@@ -92,6 +101,22 @@ static ScriptValue startTransfer(ScriptContext* context, ScriptEngine* engine) {
     result.setProperty("promise", promise.promise);
     result.setProperty("control", engine->newQObject(transfer, ScriptEngine::QtOwnership));
     return result;
+}
+
+static ScriptValue startWithLocalFiles(ScriptContext* context, ScriptEngine* engine) {
+    return startTransfer(context, engine, true);
+}
+
+static ScriptValue startWithoutLocalFiles(ScriptContext* context, ScriptEngine* engine) {
+    return startTransfer(context, engine, false);
+}
+
+// native.abort(control): the proxy holds the transfer weakly, so this does nothing once the transfer is gone
+static ScriptValue abortTransfer(ScriptContext* context, ScriptEngine* engine) {
+    if (auto transfer = qobject_cast<FetchTransfer*>(context->argument(0).toQObject())) {
+        transfer->abort();
+    }
+    return engine->undefinedValue();
 }
 
 static ScriptValue resolveUrl(ScriptContext* context, ScriptEngine* engine) {
@@ -119,15 +144,19 @@ static ScriptValue encodeText(ScriptContext* context, ScriptEngine* engine) {
     return engine->newArrayBuffer(context->argument(0).toString().toUtf8());
 }
 
-void registerFetchGlobals(ScriptEngine* engine) {
+void registerFetchGlobals(ScriptEngine* engine, bool allowLocalFiles) {
     ScriptValue natives = engine->newObject();
-    natives.setProperty("start", engine->newFunction(startTransfer, 4));
+    natives.setProperty("start", engine->newFunction(allowLocalFiles ? startWithLocalFiles : startWithoutLocalFiles, 4));
+    natives.setProperty("abort", engine->newFunction(abortTransfer, 1));
     natives.setProperty("resolveUrl", engine->newFunction(resolveUrl, 1));
     natives.setProperty("decodeText", engine->newFunction(decodeText, 1));
     natives.setProperty("encodeText", engine->newFunction(encodeText, 1));
 
-    ScriptValue install = engine->evaluate(FETCH_PRELUDE, "(fetch)");
-    Q_ASSERT(install.isFunction());
+    ScriptValue install = engine->evaluate(fetchPrelude(), "(fetch)");
+    if (!install.isFunction()) {
+        qCCritical(scriptengine) << "fetch prelude did not evaluate to a function, fetch() is unavailable:" << install.toString();
+        return;
+    }
     ScriptValue globals = install.call(engine->undefinedValue(), ScriptValueList({ natives }));
     for (const char* name : { "fetch", "Headers", "Request", "Response", "AbortController", "AbortSignal" }) {
         engine->globalObject().setProperty(name, globals.property(name));
@@ -183,10 +212,11 @@ void FetchTransfer::httpFinished() {
     }
     const QNetworkReply::NetworkError error = _reply->error();
     const QVariant status = _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
-    // Qt reports HTTP 4xx and 5xx as content (2xx) and server (4xx) errors; everything else means no response
-    const bool isHttpStatusError = (error >= QNetworkReply::ContentAccessDenied && error <= QNetworkReply::UnknownContentError) ||
-        (error >= QNetworkReply::InternalServerError && error <= QNetworkReply::UnknownServerError);
-    if (!status.isValid() || (error != QNetworkReply::NoError && !isHttpStatusError)) {
+    // Qt turns HTTP error statuses into errors of several ranges (400 and 418 are ProtocolInvalidOperationError, 407 is
+    // ProxyAuthenticationRequiredError), so any status is a response; only the connection range (1-99, which includes
+    // too many and insecure redirects) means there is none
+    const bool isConnectionError = error >= QNetworkReply::ConnectionRefusedError && error <= QNetworkReply::UnknownNetworkError;
+    if (!status.isValid() || isConnectionError) {
         reject("fetch: " + _url.toString() + ": " + _reply->errorString());
         return;
     }

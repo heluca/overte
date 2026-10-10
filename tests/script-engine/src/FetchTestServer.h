@@ -90,6 +90,12 @@ private:
                     "\r\nX-Echo-Type: " + headers.value("content-type") + "\r\nX-Echo-Agent: " +
                     headers.value("user-agent") + "\r\n";
                 content = body;
+            } else if (path == "/400") {
+                status = "400 Bad Request";
+                extra = "Content-Type: application/json\r\n";
+                content = "{\"error\": \"bad\"}";
+            } else if (path == "/badheader") {
+                extra = "X(bad): 1\r\n";
             } else if (path == "/hang") {
                 return;
             } else {
