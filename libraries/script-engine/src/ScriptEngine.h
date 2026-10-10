@@ -58,6 +58,8 @@ public:
     size_t totalAvailableSize;
     size_t totalGlobalHandlesSize;
     size_t usedGlobalHandlesSize;
+    // Promises made by newPromise() whose resolver has neither settled nor been released yet
+    size_t pendingPromiseResolvers;
 #ifdef OVERTE_V8_MEMORY_DEBUG
     size_t scriptValueCount;
     size_t scriptValueProxyCount;
@@ -78,7 +80,8 @@ public:
  * pending forever.
  *
  * The ScriptValue overloads follow the usual ScriptValue rules: a ScriptValue may only be copied or destroyed on a thread
- * that holds the engine. Off the script thread, use the QVariant and QString overloads.
+ * that holds the engine. Off the script thread, use the QVariant and QString overloads, with a QVariant that does not
+ * itself wrap a ScriptValue: resolving with one copies that ScriptValue on the calling thread.
  */
 class ScriptPromiseResolver {
 public:

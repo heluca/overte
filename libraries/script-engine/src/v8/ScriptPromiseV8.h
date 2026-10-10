@@ -53,6 +53,9 @@ public:
 
     void close();
 
+    // Script thread only
+    size_t resolverCount() const { return _resolvers.size(); }
+
 private:
     void drain();
     void apply(ScriptEngineV8* engine, const Settlement& settlement);
