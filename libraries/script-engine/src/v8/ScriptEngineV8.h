@@ -42,8 +42,6 @@
 #include "../ScriptManager.h"
 #include "../ScriptException.h"
 
-#include "ArrayBufferClass.h"
-
 class ScriptContextV8Wrapper;
 class ScriptEngineV8;
 class ScriptManager;
@@ -181,10 +179,6 @@ public: // public non-interface methods for other QtScript-specific classes to u
     /// registers a global object by name
     Q_INVOKABLE void registerValue(ScriptEngineScopeGuardV8* scopeGuard, const QString& valueName, V8ScriptValue value);
 
-    // NOTE - this is used by the TypedArray implementation. we need to review this for thread safety
-    // V8TODO
-    //inline ArrayBufferClass* getArrayBufferClass() { return _arrayBufferClass; }
-
 public: // not for public use, but I don't like how Qt strings this along with private friend functions
     virtual ScriptValue create(int type, const void* ptr) override;
     virtual QVariant convert(const ScriptValue& value, int typeId) override;
@@ -289,8 +283,6 @@ protected:
 public:
     volatile int _memoryCorruptionIndicator = 12345678;
 private:
-    //V8TODO
-    //ArrayBufferClass* _arrayBufferClass;
     // Counts how many nested evaluate calls are there at a given point
     int _evaluatingCounter;
     // Nesting depth of C++ -> JS entries, see MicrotaskCheckpointScopeV8

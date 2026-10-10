@@ -190,7 +190,6 @@ v8::Platform* ScriptEngineV8::getV8Platform() {
 }
 
 ScriptEngineV8::ScriptEngineV8(ScriptManager *manager) : ScriptEngine(manager), _evaluatingCounter(0)
-    //V8TODO _arrayBufferClass(new ArrayBufferClass(this))
 {
     _v8InitMutex.lock();
     std::call_once ( _v8InitOnceFlag, [ ]{
@@ -1108,14 +1107,7 @@ ScriptValue ScriptEngineV8::newArrayBuffer(const QByteArray& message) {
     std::shared_ptr<v8::BackingStore> backingStore(v8::ArrayBuffer::NewBackingStore(_v8Isolate, message.size()));
     std::memcpy(backingStore.get()->Data(), message.constData(), message.size());
     auto arrayBuffer = v8::ArrayBuffer::New(_v8Isolate, backingStore);
-    //V8TODO: this needs to be finished and tested
-    /*V8ScriptValue data = QScriptEngine::newVariant(QVariant::fromValue(message));
-    V8ScriptValue ctor = QScriptEngine::globalObject().property("ArrayBuffer");
-    auto array = qscriptvalue_cast<ArrayBufferClass*>(ctor.data());
-    if (!array) {
-        return undefinedValue();
-    }*/
-    V8ScriptValue result(this, arrayBuffer);//QScriptEngine::newObject(array, data);
+    V8ScriptValue result(this, arrayBuffer);
     return ScriptValue(new ScriptValueV8Wrapper(this, std::move(result)));
 }
 

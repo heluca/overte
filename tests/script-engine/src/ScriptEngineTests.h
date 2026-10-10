@@ -69,6 +69,7 @@ private slots:
     void testUnhandledRejection();
     void testQueueMicrotask();
     void testGlobalTimers();
+    void testNativeTypedArrays();
 
 
 private:
