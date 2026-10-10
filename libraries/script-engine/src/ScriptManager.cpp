@@ -49,6 +49,7 @@
 #include "XMLHttpRequestClass.h"
 #include "WebSocketClass.h"
 #include "WebSocketServerClass.h"
+#include "FetchClass.h"
 #include "ScriptEngine.h"
 #include "ScriptEngineCast.h"
 #include "ScriptEngineLogging.h"
@@ -858,6 +859,10 @@ void ScriptManager::init() {
 
         ScriptValue webSocketConstructorValue = scriptEngine->newFunction(WebSocketClass::constructor);
         scriptEngine->globalObject().setProperty("WebSocket", webSocketConstructorValue);
+
+        // Same contexts as XMLHttpRequest, whose transport it shares. Local files only for the scripts the user or the
+        // operator installed: an entity script comes from whatever domain is visited, and could send them anywhere
+        registerFetchGlobals(scriptEngine, _context == CLIENT_SCRIPT || _context == AGENT_SCRIPT);
     }
 
     if (_context == ENTITY_SERVER_SCRIPT || _context == AGENT_SCRIPT) {
