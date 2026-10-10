@@ -36,7 +36,7 @@ function main() {
     }
 
     const model = buildModel(JSON.parse(fs.readFileSync(input, "utf8")));
-    const mapper = new TypeMapper(model.knownTypes);
+    const mapper = new TypeMapper(model.knownTypes, model.literalTypes);
     const emitter = new Emitter(model, mapper);
     fs.mkdirSync(outputDir, { recursive: true });
 

@@ -65,22 +65,6 @@ function isObjectLike(item) {
     return !item || !item.type || item.type.names.every(name => /^(object|Object|array|Array)(\.<(object|Object|\*)>)?$/.test(name));
 }
 
-function literalUnionFromTable(description) {
-    const body = /<tbody>([\s\S]*?)<\/tbody>/.exec(description || "");
-    if (!body) {
-        return null;
-    }
-    const rows = body[1].split(/<tr[^>]*>/).slice(1);
-    const values = rows.map(row => {
-        const match = /^\s*<td[^>]*>\s*<code>\s*"([^"]*)"\s*<\/code>\s*<\/td>/.exec(row);
-        return match ? match[1] : null;
-    });
-    if (values.length === 0 || values.includes(null)) {
-        return null;
-    }
-    return [...new Set(values)].map(value => JSON.stringify(value)).join(" | ");
-}
-
 class Emitter {
     constructor(model, mapper) {
         this.model = model;
@@ -227,8 +211,7 @@ class Emitter {
             lines.push(indent + "type " + name + " = (" + this.paramLists(typedef.params, false)[0] + ") => " +
                 (typedef.returns ? this.returnType(typedef) : "void") + ";");
         } else {
-            const literals = (typeNames.length === 1 && typeNames[0] === "string") ? literalUnionFromTable(typedef.description) : null;
-            lines.push(indent + "type " + name + " = " + (literals || this.mapper.map(typedef.type)) + ";");
+            lines.push(indent + "type " + name + " = " + (typedef.literals || this.mapper.map(typedef.type)) + ";");
         }
         return lines;
     }

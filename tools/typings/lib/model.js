@@ -24,10 +24,47 @@ function isOptional(item) {
     return Boolean(item.optional) || item.defaultvalue !== undefined;
 }
 
-// A typedef that documents defaults for its properties describes a bag of settings the engine
-// accepts partially (EntityProperties, PickProperties, ...): every property is optional.
-function isBag(typedef) {
-    return Boolean(typedef.properties) && typedef.properties.some(isOptional);
+// A typedef describes a bag of settings the engine accepts partially, so every property is
+// optional, when most of its properties document a default (PickProperties, Entities.Haze), or
+// when some do and a function takes it as an argument (TabletButtonProxy.ButtonProperties for
+// Tablet.addButton). Otherwise only the defaulted properties are optional, so one default on a
+// result type (BookmarkData, LoadFromCacheResult) does not make the whole result optional.
+function isBag(typedef, argumentTypes) {
+    if (!typedef.properties) {
+        return false;
+    }
+    const defaulted = typedef.properties.filter(isOptional).length;
+    return defaulted * 2 > typedef.properties.length || (defaulted > 0 && argumentTypes.has(typedef.longname));
+}
+
+// Longnames that appear in the parameter types of functions and constructors (not signals or
+// callbacks, whose arguments the engine produces).
+function argumentTypeNames(doclets) {
+    const names = new Set();
+    doclets.filter(doclet => doclet.kind === "function" || doclet.kind === "class").forEach(doclet => {
+        (doclet.params || []).forEach(param => {
+            ((param.type && param.type.names) || []).forEach(text => {
+                (text.match(/[A-Za-z_$][\w$~-]*(?:\.[A-Za-z_$][\w$~-]*)*/g) || []).forEach(name => names.add(name));
+            });
+        });
+    });
+    return names;
+}
+
+function literalUnionFromTable(description) {
+    const body = /<tbody>([\s\S]*?)<\/tbody>/.exec(description || "");
+    if (!body) {
+        return null;
+    }
+    const rows = body[1].split(/<tr[^>]*>/).slice(1);
+    const values = rows.map(row => {
+        const match = /^\s*<td[^>]*>\s*<code>\s*"([^"]*)"\s*<\/code>\s*<\/td>/.exec(row);
+        return match ? match[1] : null;
+    });
+    if (values.length === 0 || values.includes(null)) {
+        return null;
+    }
+    return [...new Set(values)].map(value => JSON.stringify(value)).join(" | ");
 }
 
 function mergeProperties(target, extra, report) {
@@ -67,18 +104,26 @@ function buildModel(rawDoclets) {
         }
     });
 
-    typedefs.forEach(typedef => { typedef.bag = isBag(typedef); });
+    const argumentTypes = argumentTypeNames(doclets);
+    typedefs.forEach(typedef => {
+        typedef.bag = isBag(typedef, argumentTypes);
+        const typeNames = typedef.type ? typedef.type.names : [];
+        if (!typedef.properties && typeNames.length === 1 && typeNames[0] === "string") {
+            typedef.literals = literalUnionFromTable(typedef.description);
+        }
+    });
 
     // "Entities.EntityProperties-Model" documents the Model-specific part of
-    // Entities.EntityProperties. The engine takes one flat bag, so the base type carries the
-    // variant properties too.
+    // Entities.EntityProperties. The engine takes one flat bag, so a base with variants is a bag
+    // and carries the variant properties too.
     typedefs.forEach((typedef, longname) => {
         const dash = longname.lastIndexOf("-");
         if (dash < 0) {
             return;
         }
         const base = typedefs.get(longname.slice(0, dash));
-        if (base && base.bag && typedef.properties) {
+        if (base && base.properties && typedef.properties) {
+            base.bag = true;
             typedef.bag = true;
             base.variantNames = (base.variantNames || []).concat([longname]);
             mergeProperties(base.properties, typedef.properties.map(property => Object.assign({}, property)));
@@ -110,7 +155,8 @@ function buildModel(rawDoclets) {
         typedefs: [...typedefs.values()].sort((a, b) => a.longname.localeCompare(b.longname)),
         globals: globals.sort((a, b) => a.name.localeCompare(b.name)),
         orphans: orphans,
-        knownTypes: knownTypes
+        knownTypes: knownTypes,
+        literalTypes: new Set([...typedefs.values()].filter(typedef => typedef.literals).map(typedef => typedef.longname))
     };
 }
 

@@ -54,9 +54,11 @@ function tokenize(text) {
 }
 
 class TypeMapper {
-    // knownTypes: Set of JSDoc longnames that are emitted as TypeScript types.
-    constructor(knownTypes) {
+    // knownTypes: JSDoc longnames emitted as TypeScript types; literalTypes: the subset emitted
+    // as unions of string literals.
+    constructor(knownTypes, literalTypes) {
         this.knownTypes = knownTypes;
+        this.literalTypes = new Set([...literalTypes].map(tsName));
         this.unknownCounts = new Map();
         this.untypedCount = 0;
     }
@@ -152,6 +154,10 @@ class TypeMapper {
             if (name === "Object" || name === "object") {
                 const key = args.length > 1 ? args[0] : "string";
                 const value = args.length > 1 ? args[1] : args[0];
+                if (this.literalTypes.has(key)) {
+                    // An object keyed by an enumeration rarely carries every key.
+                    return "Partial<Record<" + key + ", " + value + ">>";
+                }
                 return "Record<" + (key === "unknown" ? "string" : key) + ", " + value + ">";
             }
             if (name === "Promise") {

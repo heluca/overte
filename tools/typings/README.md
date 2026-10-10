@@ -35,7 +35,8 @@ or in `tsconfig.json`, with the DOM library left out (Overte has no DOM):
 
 The context files declare the same globals, so two of them in one program conflict. Compile the
 scripts for each context as a separate project. `sample/` holds a port of the Shortbow game
-manager that is type-checked against the server entity context.
+manager that is type-checked against the server entity context, and `sample/negative.ts` lists
+misuse that must fail to compile (each line is a `@ts-expect-error`).
 
 ## Regenerating
 
@@ -64,16 +65,33 @@ never `any`; most are typos in the source JSDoc (`QUuid`, `GrphicsMeshPart`) and
 - A constructible `@class` becomes an interface in the shared file and a `declare var` with a
   `new` signature in the contexts it is tagged for; a class with `@hideconstructor` is only an
   interface, because scripts never see a global of that name.
-- An object `@typedef` becomes an interface. When a typedef documents defaults for its
-  properties it is a settings bag the engine accepts partially, so all its properties are
-  optional. Variant typedefs such as `Entities.EntityProperties-Model` are emitted as
-  `Entities.EntityProperties_Model`, and their properties are folded into the base type, as the
-  engine takes one flat property set.
+- An object `@typedef` becomes an interface. A property is optional when it is documented as
+  optional (`[name]`) or with a default. All properties are optional when the typedef is a
+  settings bag the engine accepts partially, which is when:
+  - more than half of its properties document a default (`Picks.RayPickProperties`,
+    `Entities.Haze`);
+  - some properties document a default and a function or constructor takes the typedef as an
+    argument (`TabletButtonProxy.ButtonProperties`, taken by `Tablet.addButton`); or
+  - it is the base of variant typedefs. `Entities.EntityProperties-Model` and the other variants
+    are emitted as `Entities.EntityProperties_Model`, and their properties are folded into the
+    base type, as the engine takes one flat property set.
+
+  A result type with one or two defaults (`AvatarBookmarks.BookmarkData`,
+  `Assets.LoadFromCacheResult`) keeps its other properties required.
 - A string `@typedef` whose description table lists every value as `<code>"value"</code>`
   becomes a union of string literals (`Entities.EntityType`, `ShapeType`).
+- An object keyed by such a union (`Object.<Graphics.BufferTypeName, ...>`) becomes
+  `Partial<Record<K, V>>`, since it rarely carries every key.
 - Optional parameters that precede a required one become separate overloads.
 - A property and a function documented under the same name (a `Q_PROPERTY` and its getter) keep
   the property.
+
+## Known gaps
+
+- `Entities.addEntity` takes the flat `Entities.EntityProperties`, so `type` is optional and the
+  type-specific properties are not narrowed by it. A discriminated union on `type`, with each
+  variant interface extending the common base, is a planned follow-up.
+- The `this` of entity scripts (`preload`, `enterEntity`, ...) is not typed.
 
 ## Follow-up: drift check
 

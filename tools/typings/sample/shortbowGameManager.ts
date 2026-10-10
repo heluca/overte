@@ -191,5 +191,8 @@ class ShortbowGameManager {
     }
 }
 
+const scoreServer = new WebSocketServer({ port: 0 });
+scoreServer.newConnection.connect(socket => socket.send(String(scoreServer.port)));
+
 const manager = new ShortbowGameManager(Uuid.NONE, Uuid.NONE);
 Script.scriptEnding.connect(() => manager.cleanup());
