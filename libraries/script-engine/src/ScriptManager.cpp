@@ -1089,7 +1089,18 @@ void ScriptManager::run() {
     _isRunning = true;
     emit runningStateChanged();
 
-    {
+    if (isModuleURL(QUrl(_fileNameString))) {
+        // Evaluated from the loop below once the import graph has loaded. A graph that fails to load or link stops the
+        // script, as nothing of it ran; a module body that throws is treated like a classic script that throws.
+        QUrl url(_fileNameString);
+        _engine->loadModule({ url, _scriptContents, url, 0, _isReloading },
+            [this](const ScriptValue&, std::shared_ptr<ScriptException> error) {
+                if (error && (_abortOnUncaughtException || std::dynamic_pointer_cast<ScriptEngineException>(error))) {
+                    qCWarning(scriptengine) << "Module failed, stopping";
+                    stop();
+                }
+            });
+    } else {
         PROFILE_RANGE(script, _fileNameString);
         _returnValue = _engine->evaluate(_scriptContents, _fileNameString);
 
