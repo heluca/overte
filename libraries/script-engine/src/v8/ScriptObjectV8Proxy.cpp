@@ -1300,6 +1300,7 @@ int ScriptSignalV8Proxy::qt_metacall(QMetaObject::Call call, int id, void** argu
                     v8This = functionContext->Global();
                 }
 
+                MicrotaskCheckpointScopeV8 microtaskCheckpointScope(_engine);
                 v8::TryCatch tryCatch(isolate);
                 auto maybeResult = callback->Call(functionContext, v8This, numArgs, args);
                 Q_UNUSED(maybeResult); // Signals don't have return values

@@ -59,6 +59,7 @@
 #include "shared/FileUtils.h"
 
 static const int MAX_DEBUG_VALUE_LENGTH { 80 };
+static const uint32_t ENGINE_ISOLATE_DATA_SLOT { 0 };
 
 std::once_flag ScriptEngineV8::_v8InitOnceFlag;
 QMutex ScriptEngineV8::_v8InitMutex;
@@ -225,6 +226,12 @@ ScriptEngineV8::ScriptEngineV8(ScriptManager *manager) : ScriptEngine(manager), 
         _v8Isolate = v8::Isolate::New(isolateParams);
         v8::Locker locker(_v8Isolate);
         v8::Isolate::Scope isolateScope(_v8Isolate);
+        // Under the default kAuto policy promise jobs ran only when the outermost V8 call returned, so anything queued
+        // from C++ (WebAssembly compilation, native resolvers) waited for the next unrelated script call. Checkpoints
+        // are explicit instead: after each entry from C++ (MicrotaskCheckpointScopeV8) and once per ScriptManager loop.
+        _v8Isolate->SetMicrotasksPolicy(v8::MicrotasksPolicy::kExplicit);
+        _v8Isolate->SetData(ENGINE_ISOLATE_DATA_SLOT, this);
+        _v8Isolate->SetPromiseRejectCallback(promiseRejectCallback);
         v8::HandleScope handleScope(_v8Isolate);
         v8::Local<v8::Context> context = v8::Context::New(_v8Isolate);
         Q_ASSERT(!context.IsEmpty());
@@ -271,6 +278,7 @@ ScriptEngineV8::~ScriptEngineV8() {
     disconnectSignalProxies();
     deleteUnusedValueWrappers();
 
+    _pendingPromiseRejections.clear();
     _contexts.clear();
     _nullValue = ScriptValue();
     _undefinedValue = ScriptValue();
@@ -525,6 +533,7 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
     if (!IS_THREADSAFE_INVOCATION(thread(), __FUNCTION__)) {
         return nullValue();
     }
+    MicrotaskCheckpointScopeV8 microtaskCheckpointScope(this);
     _evaluatingCounter++;
     Q_ASSERT(_v8Isolate->IsCurrent());
     v8::HandleScope handleScope(_v8Isolate);
@@ -769,6 +778,7 @@ ScriptValue ScriptEngineV8::evaluate(const QString& sourceCode, const QString& f
     }*/
     // Compile and check syntax
     Q_ASSERT(!_v8Isolate->IsDead());
+    MicrotaskCheckpointScopeV8 microtaskCheckpointScope(this);
     _evaluatingCounter++;
     Q_ASSERT(_v8Isolate->IsCurrent());
     v8::HandleScope handleScope(_v8Isolate);
@@ -1007,6 +1017,7 @@ Q_INVOKABLE ScriptValue ScriptEngineV8::evaluate(const ScriptProgramPointer& pro
                                   Q_ARG(const ScriptProgramPointer&, program));
         return result;
     }
+    MicrotaskCheckpointScopeV8 microtaskCheckpointScope(this);
     _evaluatingCounter++;
     ScriptValue errorValue;
     ScriptValue resultValue;
@@ -1418,6 +1429,140 @@ void ScriptEngineV8::processEvents() {
     Q_ASSERT(_v8Isolate->IsCurrent());
 
     v8::platform::PumpMessageLoop(getV8Platform(), _v8Isolate);
+}
+
+void ScriptEngineV8::performMicrotaskCheckpoint() {
+    // The isolate belongs to the script thread; a checkpoint from anywhere else is a caller bug, not something to marshal.
+    Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(_v8Isolate->IsCurrent());
+    if (_scriptEntryDepth > 0) {
+        return;
+    }
+    // Held across the checkpoint so that entries made by the microtasks themselves don't start a nested one.
+    _scriptEntryDepth++;
+    _v8Isolate->PerformMicrotaskCheckpoint();
+    reportPendingPromiseRejections();
+    _scriptEntryDepth--;
+}
+
+void ScriptEngineV8::queueMicrotask(const ScriptValue& callback) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(_v8Isolate->IsCurrent());
+    v8::HandleScope handleScope(_v8Isolate);
+    auto context = getContext();
+    v8::Context::Scope contextScope(context);
+    V8ScriptValue v8Callback = ScriptValueV8Wrapper::fullUnwrap(this, callback);
+    Q_ASSERT(v8Callback.get()->IsFunction());
+
+    // V8 swallows an exception that escapes a microtask, so the task catches it and reports it like a timer callback.
+    auto runTask = [](const v8::FunctionCallbackInfo<v8::Value>& info) {
+        v8::Isolate* isolate = info.GetIsolate();
+        auto engine = static_cast<ScriptEngineV8*>(isolate->GetData(ENGINE_ISOLATE_DATA_SLOT));
+        v8::HandleScope handleScope(isolate);
+        v8::Local<v8::Context> context = isolate->GetCurrentContext();
+        v8::TryCatch tryCatch(isolate);
+        auto result = v8::Local<v8::Function>::Cast(info.Data())->Call(context, v8::Undefined(isolate), 0, nullptr);
+        Q_UNUSED(result);
+        if (tryCatch.HasCaught()) {
+            QString errorMessage = "queueMicrotask callback failed: " + engine->formatErrorMessageFromTryCatch(tryCatch);
+            v8::Local<v8::Message> exceptionMessage = tryCatch.Message();
+            int errorLineNumber = -1;
+            if (!exceptionMessage.IsEmpty()) {
+                errorLineNumber = exceptionMessage->GetLineNumber(context).FromMaybe(-1);
+            }
+            if (engine->_manager) {
+                engine->_manager->scriptErrorMessage(errorMessage, getFileNameFromTryCatch(tryCatch, isolate, context),
+                                                     errorLineNumber);
+            } else {
+                qCWarning(scriptengine_v8) << errorMessage;
+            }
+        }
+    };
+    v8::Local<v8::Function> task;
+    if (v8::Function::New(context, runTask, v8Callback.get()).ToLocal(&task)) {
+        _v8Isolate->EnqueueMicrotask(task);
+    }
+}
+
+void ScriptEngineV8::promiseRejectCallback(v8::PromiseRejectMessage message) {
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    auto engine = static_cast<ScriptEngineV8*>(isolate->GetData(ENGINE_ISOLATE_DATA_SLOT));
+    Q_ASSERT(engine && QThread::currentThread() == engine->thread());
+    v8::HandleScope handleScope(isolate);
+    v8::Local<v8::Promise> promise = message.GetPromise();
+
+    switch (message.GetEvent()) {
+        case v8::kPromiseRejectWithNoHandler: {
+            // Only record here: this runs in the middle of script execution. The location is taken now because for
+            // a non-Error reason it is the place of rejection, which is gone by the time the report is made.
+            v8::Local<v8::Value> reason = message.GetValue();
+            QString fileName;
+            int lineNumber = -1;
+            v8::Local<v8::Message> location = v8::Exception::CreateMessage(isolate, reason);
+            if (!location.IsEmpty()) {
+                v8::Local<v8::Value> resourceName = location->GetScriptResourceName();
+                if (resourceName->IsString()) {
+                    fileName = QString(*v8::String::Utf8Value(isolate, resourceName));
+                }
+                v8::Local<v8::Context> context = isolate->GetCurrentContext();
+                if (!context.IsEmpty()) {
+                    lineNumber = location->GetLineNumber(context).FromMaybe(-1);
+                }
+            }
+            engine->_pendingPromiseRejections.push_back(
+                { v8::Global<v8::Promise>(isolate, promise), v8::Global<v8::Value>(isolate, reason), fileName, lineNumber });
+            break;
+        }
+        case v8::kPromiseHandlerAddedAfterReject:
+            std::erase_if(engine->_pendingPromiseRejections,
+                          [&promise](const PendingPromiseRejection& pending) { return pending.promise == promise; });
+            break;
+        case v8::kPromiseRejectAfterResolved:
+        case v8::kPromiseResolveAfterResolved:
+            // Settling an already settled promise has no effect in JS, there is nothing to report.
+            break;
+    }
+}
+
+void ScriptEngineV8::reportPendingPromiseRejections() {
+    if (_pendingPromiseRejections.empty()) {
+        return;
+    }
+    // Formatting can run script (a user-defined Error.prepareStackTrace), which may reject more promises.
+    // Those wait for the next checkpoint.
+    std::vector<PendingPromiseRejection> rejections;
+    std::swap(rejections, _pendingPromiseRejections);
+
+    v8::HandleScope handleScope(_v8Isolate);
+    for (auto& rejection : rejections) {
+        v8::Local<v8::Context> context = rejection.promise.Get(_v8Isolate)->GetCreationContextChecked();
+        v8::Context::Scope contextScope(context);
+        v8::TryCatch tryCatch(_v8Isolate);
+        v8::Local<v8::Value> reason = rejection.reason.Get(_v8Isolate);
+
+        QString description;
+        v8::Local<v8::Value> stack;
+        if (reason->IsNativeError()
+            && v8::Local<v8::Object>::Cast(reason)->Get(context, v8::String::NewFromUtf8Literal(_v8Isolate, "stack")).ToLocal(&stack)
+            && stack->IsString()) {
+            description = QString(*v8::String::Utf8Value(_v8Isolate, stack));
+        } else {
+            v8::Local<v8::String> detail;
+            if (reason->ToDetailString(context).ToLocal(&detail)) {
+                description = QString(*v8::String::Utf8Value(_v8Isolate, detail));
+            }
+            if (!rejection.fileName.isEmpty()) {
+                description += QString(" (%1:%2)").arg(rejection.fileName).arg(rejection.lineNumber);
+            }
+        }
+
+        QString message = "Unhandled promise rejection: " + description;
+        if (_manager) {
+            _manager->scriptErrorMessage(message, rejection.fileName, rejection.lineNumber);
+        } else {
+            qCWarning(scriptengine_v8) << message;
+        }
+    }
 }
 
 void ScriptEngineV8::compileTest() {

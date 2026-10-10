@@ -33,7 +33,6 @@
 #include <ScriptEngines.h>
 #include <SoundCacheScriptingInterface.h>
 #include <UUID.h>
-#include <WebSocketServerClass.h>
 
 #include <EntityScriptClient.h> // for EntityScriptServerServices
 
@@ -478,11 +477,6 @@ void EntityScriptServer::resetEntitiesScriptEngine() {
 
     {
         auto guard = newEngine->getScopeGuard();
-        {
-            auto webSocketServerConstructorValue = newEngine->newFunction(WebSocketServerClass::constructor);
-            newEngine->globalObject().setProperty("WebSocketServer", webSocketServerConstructorValue);
-        }
-
         newEngine->registerGlobalObject(guard.get(), "SoundCache", DependencyManager::get<SoundCacheScriptingInterface>().data());
         newEngine->registerGlobalObject(guard.get(), "AvatarList", DependencyManager::get<AvatarHashMap>().data());
 

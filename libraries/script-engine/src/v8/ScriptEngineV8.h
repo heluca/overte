@@ -20,6 +20,7 @@
 #define hifi_ScriptEngineV8_h
 
 #include <memory>
+#include <vector>
 
 #include <QtCore/QByteArray>
 #include <QtCore/QHash>
@@ -144,6 +145,8 @@ public:  // ScriptEngine implementation
     virtual void updateMemoryCost(const qint64& deltaSize) override;
     virtual void requestCollectGarbage() override { _v8Isolate->MemoryPressureNotification(v8::MemoryPressureLevel::kCritical); }
     virtual void processEvents() override;
+    virtual void performMicrotaskCheckpoint() override;
+    virtual void queueMicrotask(const ScriptValue& callback) override;
     virtual void compileTest() override;
     virtual QString scriptValueDebugDetails(const ScriptValue &value) override;
     QString scriptValueDebugDetailsV8(const V8ScriptValue &value);
@@ -246,6 +249,10 @@ protected:
     void setUncaughtException(std::shared_ptr<ScriptException> exception);
 
     friend class ScriptSignalV8Proxy;
+    friend class MicrotaskCheckpointScopeV8;
+
+    static void promiseRejectCallback(v8::PromiseRejectMessage message);
+    void reportPendingPromiseRejections();
 
     std::shared_ptr<ScriptException> _uncaughtException;
 
@@ -286,6 +293,17 @@ private:
     //ArrayBufferClass* _arrayBufferClass;
     // Counts how many nested evaluate calls are there at a given point
     int _evaluatingCounter;
+    // Nesting depth of C++ -> JS entries, see MicrotaskCheckpointScopeV8
+    int _scriptEntryDepth { 0 };
+
+    // Rejected promises without a handler, reported after the microtask queue drains unless a handler is attached first
+    struct PendingPromiseRejection {
+        v8::Global<v8::Promise> promise;
+        v8::Global<v8::Value> reason;
+        QString fileName;
+        int lineNumber;
+    };
+    std::vector<PendingPromiseRejection> _pendingPromiseRejections;
 #ifdef OVERTE_V8_MEMORY_DEBUG
     std::atomic<size_t> scriptValueCount{0};
     std::atomic<size_t> scriptValueProxyCount{0};
@@ -317,6 +335,22 @@ public:
     ~ContextScopeV8();
 private:
     bool _isContextChangeNeeded;
+    ScriptEngineV8* _engine;
+};
+
+// Wraps every call from C++ into JS. The isolate runs with MicrotasksPolicy::kExplicit, so when the outermost of these
+// returns it performs the microtask checkpoint that V8's default kAuto policy used to perform implicitly.
+class MicrotaskCheckpointScopeV8 {
+public:
+    explicit MicrotaskCheckpointScopeV8(ScriptEngineV8* engine) : _engine(engine) { _engine->_scriptEntryDepth++; }
+    ~MicrotaskCheckpointScopeV8() {
+        if (--_engine->_scriptEntryDepth == 0) {
+            _engine->performMicrotaskCheckpoint();
+        }
+    }
+    MicrotaskCheckpointScopeV8(const MicrotaskCheckpointScopeV8&) = delete;
+    MicrotaskCheckpointScopeV8& operator=(const MicrotaskCheckpointScopeV8&) = delete;
+private:
     ScriptEngineV8* _engine;
 };
 

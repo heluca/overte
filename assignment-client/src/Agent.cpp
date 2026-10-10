@@ -54,7 +54,6 @@
 #include <plugins/CodecPlugin.h>
 #include <plugins/PluginManager.h>
 
-#include <WebSocketServerClass.h>
 #include <EntityScriptingInterface.h> // TODO: consider moving to scriptengine.h
 
 #include <hfm/ModelFormatRegistry.h>
@@ -509,11 +508,6 @@ void Agent::executeScript() {
 
         scriptEngine->registerGlobalObject(sgp, "AnimationCache", DependencyManager::get<AnimationCacheScriptingInterface>().data());
         scriptEngine->registerGlobalObject(sgp, "SoundCache", DependencyManager::get<SoundCacheScriptingInterface>().data());
-
-        {
-            ScriptValue webSocketServerConstructorValue = scriptEngine->newFunction(WebSocketServerClass::constructor);
-            scriptEngine->globalObject().setProperty("WebSocketServer", webSocketServerConstructorValue);
-        }
 
         auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
 
