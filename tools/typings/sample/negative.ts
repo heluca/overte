@@ -18,6 +18,15 @@ Entities.addEntity({ type: "Modle" });
 // @ts-expect-error "positon" is not an Entities.EntityProperties key.
 Entities.addEntity({ type: "Box", positon: Vec3.ZERO });
 
+// @ts-expect-error addEntity needs a type to pick the entity's properties.
+Entities.addEntity({});
+
+// @ts-expect-error modelURL is a Model property; a Box takes Shape's properties.
+Entities.addEntity({ type: "Box", modelURL: "x" });
+
+// @ts-expect-error "Nope" is not an Entities.EntityType.
+Entities.addEntity({ type: "Nope" });
+
 // @ts-expect-error MyAvatar is not available to server entity scripts.
 print(MyAvatar.position);
 

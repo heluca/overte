@@ -72,14 +72,31 @@ never `any`; most are typos in the source JSDoc (`QUuid`, `GrphicsMeshPart`) and
     `Entities.Haze`);
   - some properties document a default and a function or constructor takes the typedef as an
     argument (`TabletButtonProxy.ButtonProperties`, taken by `Tablet.addButton`); or
-  - it is the base of variant typedefs. `Entities.EntityProperties-Model` and the other variants
-    are emitted as `Entities.EntityProperties_Model`, and their properties are folded into the
-    base type, as the engine takes one flat property set.
+  - it is the base or a variant of a variant union (below).
 
   A result type with one or two defaults (`AvatarBookmarks.BookmarkData`,
   `Assets.LoadFromCacheResult`) keeps its other properties required.
 - A string `@typedef` whose description table lists every value as `<code>"value"</code>`
   becomes a union of string literals (`Entities.EntityType`, `ShapeType`).
+- An object `@typedef` with variants named `<Base>-<Variant>` becomes a union discriminated on
+  the base property typed by a string enumeration whose description table links each value to a
+  variant: the `Entities.EntityType` row for `"Model"` links `Entities.EntityProperties-Model`, so
+  `Entities.EntityProperties` is a union over `type`. The value comes from that table, not the
+  variant's name (`Entities.ActionArguments-FarGrab` is `"far-grab"`). Each variant is emitted as
+  `Entities.EntityProperties_Model`, which extends `Entities.EntityProperties_Common` (the base's
+  properties other than the discriminant) and adds the required literal `type: "Model"` and its
+  own properties. A variant with no properties whose `@see` links a sibling takes the sibling's
+  properties (`Box` and `Sphere` extend `Omit<EntityProperties_Shape, "type">`); an enumeration
+  value with no variant gets the common properties only (`Overlays.OverlayType` `"cube"`). The
+  same rule makes `Entities.ActionArguments` and `Overlays.OverlayProperties` unions.
+
+  Every reference to the base is the union, so `Entities.addEntity` requires `type` and accepts
+  only that type's properties. Return types take `Partial<Base>` (the partial of each member,
+  `type` included), because the engine returns only the requested properties:
+  `Entities.getEntityProperties` returns a union to narrow on `type`, or to cast when the type is
+  known. Parameters take `Partial<Base>` too when the function edits (its name starts with `edit`
+  or `update`: `Entities.editEntity`, `Entities.updateAction`) or takes the discriminant as a
+  parameter of its own (`Entities.addAction(actionType, ...)`, `Overlays.addOverlay(type, ...)`).
 - An object keyed by such a union (`Object.<Graphics.BufferTypeName, ...>`) becomes
   `Partial<Record<K, V>>`, since it rarely carries every key.
 - Optional parameters that precede a required one become separate overloads.
@@ -88,9 +105,6 @@ never `any`; most are typos in the source JSDoc (`QUuid`, `GrphicsMeshPart`) and
 
 ## Known gaps
 
-- `Entities.addEntity` takes the flat `Entities.EntityProperties`, so `type` is optional and the
-  type-specific properties are not narrowed by it. A discriminated union on `type`, with each
-  variant interface extending the common base, is a planned follow-up.
 - The `this` of entity scripts (`preload`, `enterEntity`, ...) is not typed.
 
 ## Follow-up: drift check
