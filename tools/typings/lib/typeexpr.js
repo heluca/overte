@@ -29,7 +29,7 @@ const PRIMITIVES = {
 
 // Types provided by TypeScript's ES2023 lib, which the engine's V8 also provides.
 const BUILTINS = new Set([
-    "ArrayBuffer", "DataView", "Date", "Error", "RegExp", "Map", "Set", "WeakMap", "WeakSet",
+    "ArrayBuffer", "ArrayBufferView", "DataView", "Date", "Error", "RegExp", "Map", "Set", "WeakMap", "WeakSet",
     "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array",
     "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array"
 ]);

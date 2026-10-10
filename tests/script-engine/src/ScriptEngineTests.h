@@ -137,10 +137,20 @@ private slots:
     void testPromiseReject();
     void testPromiseSettleAfterStop();
     void testPromiseDoubleSettle();
+    void testFetchHeaders();
+    void testFetchText();
+    void testFetchJson();
+    void testFetchPostEcho();
+    void testFetch404();
+    void testFetchBadJson();
+    void testFetchNetworkError();
+    void testFetchAbort();
+    void testFetchFile();
 
 
 private:
     ScriptManagerPointer makeManager(const QString &source, const QString &filename);
+    void runFetchScript(const QString& source, const QString& filename, QString& printed, QStringList& errors);
 
 };
 

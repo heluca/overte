@@ -49,6 +49,7 @@
 #include "XMLHttpRequestClass.h"
 #include "WebSocketClass.h"
 #include "WebSocketServerClass.h"
+#include "FetchClass.h"
 #include "ScriptEngine.h"
 #include "ScriptEngineCast.h"
 #include "ScriptEngineLogging.h"
@@ -858,6 +859,9 @@ void ScriptManager::init() {
 
         ScriptValue webSocketConstructorValue = scriptEngine->newFunction(WebSocketClass::constructor);
         scriptEngine->globalObject().setProperty("WebSocket", webSocketConstructorValue);
+
+        // Same contexts as XMLHttpRequest, whose transport it shares
+        registerFetchGlobals(scriptEngine);
     }
 
     if (_context == ENTITY_SERVER_SCRIPT || _context == AGENT_SCRIPT) {
