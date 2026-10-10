@@ -1445,6 +1445,45 @@ void ScriptEngineV8::performMicrotaskCheckpoint() {
     _scriptEntryDepth--;
 }
 
+void ScriptEngineV8::queueMicrotask(const ScriptValue& callback) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    Q_ASSERT(_v8Isolate->IsCurrent());
+    v8::HandleScope handleScope(_v8Isolate);
+    auto context = getContext();
+    v8::Context::Scope contextScope(context);
+    V8ScriptValue v8Callback = ScriptValueV8Wrapper::fullUnwrap(this, callback);
+    Q_ASSERT(v8Callback.get()->IsFunction());
+
+    // V8 swallows an exception that escapes a microtask, so the task catches it and reports it like a timer callback.
+    auto runTask = [](const v8::FunctionCallbackInfo<v8::Value>& info) {
+        v8::Isolate* isolate = info.GetIsolate();
+        auto engine = static_cast<ScriptEngineV8*>(isolate->GetData(ENGINE_ISOLATE_DATA_SLOT));
+        v8::HandleScope handleScope(isolate);
+        v8::Local<v8::Context> context = isolate->GetCurrentContext();
+        v8::TryCatch tryCatch(isolate);
+        auto result = v8::Local<v8::Function>::Cast(info.Data())->Call(context, v8::Undefined(isolate), 0, nullptr);
+        Q_UNUSED(result);
+        if (tryCatch.HasCaught()) {
+            QString errorMessage = "queueMicrotask callback failed: " + engine->formatErrorMessageFromTryCatch(tryCatch);
+            v8::Local<v8::Message> exceptionMessage = tryCatch.Message();
+            int errorLineNumber = -1;
+            if (!exceptionMessage.IsEmpty()) {
+                errorLineNumber = exceptionMessage->GetLineNumber(context).FromMaybe(-1);
+            }
+            if (engine->_manager) {
+                engine->_manager->scriptErrorMessage(errorMessage, getFileNameFromTryCatch(tryCatch, isolate, context),
+                                                     errorLineNumber);
+            } else {
+                qCWarning(scriptengine_v8) << errorMessage;
+            }
+        }
+    };
+    v8::Local<v8::Function> task;
+    if (v8::Function::New(context, runTask, v8Callback.get()).ToLocal(&task)) {
+        _v8Isolate->EnqueueMicrotask(task);
+    }
+}
+
 void ScriptEngineV8::promiseRejectCallback(v8::PromiseRejectMessage message) {
     v8::Isolate* isolate = v8::Isolate::GetCurrent();
     auto engine = static_cast<ScriptEngineV8*>(isolate->GetData(ENGINE_ISOLATE_DATA_SLOT));

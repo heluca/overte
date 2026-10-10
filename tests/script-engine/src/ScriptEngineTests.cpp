@@ -397,3 +397,77 @@ void ScriptEngineTests::testUnhandledRejection() {
     QVERIFY(errors[1].startsWith("Unhandled promise rejection: 42"));
     QVERIFY(errors[1].contains("testUnhandledRejection.js:8"));
 }
+
+void ScriptEngineTests::testQueueMicrotask() {
+    QString script =
+        "var order = [];\n"
+        "setTimeout(function() {\n"
+        "    order.push('timeout');\n"
+        "    print(order.join(','));\n"
+        "    Script.stop(true);\n"
+        "});\n"
+        "Promise.resolve().then(function() { order.push('then'); });\n"
+        "queueMicrotask(function() {\n"
+        "    order.push('microtask');\n"
+        "    queueMicrotask(function() { order.push('nested'); });\n"
+        "});\n"
+        "queueMicrotask(function() { throw new Error('microtask boom'); });\n"
+        "try { queueMicrotask(42); } catch (e) { order.push(e.name); }\n"
+        "order.push('sync');\n";
+
+    QString printed;
+    QStringList errors;
+    auto sm = makeManager(script, "testQueueMicrotask.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+
+    connect(sm.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString& engineName){
+        printed.append(message);
+    });
+    connect(sm.get(), &ScriptManager::errorMessage, [&errors](const QString& message, const QString& engineName){
+        if (message.contains("microtask boom")) {
+            errors.append(message);
+        }
+    });
+
+    sm->run();
+    QVERIFY(!sm->getUncaughtException());
+    QCOMPARE(printed, QString("TypeError,sync,then,microtask,nested,timeout"));
+    QCOMPARE(errors.length(), 1);
+    QVERIFY(errors[0].contains("testQueueMicrotask.js"));
+}
+
+void ScriptEngineTests::testGlobalTimers() {
+    QString script =
+        "var fired = [];\n"
+        "var cancelled = setTimeout(function() { fired.push('cancelled'); }, 0);\n"
+        "clearTimeout(cancelled);\n"
+        "clearTimeout(undefined);\n"
+        "clearInterval(null);\n"
+        "var crossCancelled = Script.setTimeout(function() { fired.push('crossCancelled'); }, 0);\n"
+        "clearTimeout(crossCancelled);\n"
+        "setTimeout(function(a, b) { fired.push('args:' + a + b); }, 1, 'x', 'y');\n"
+        "var count = 0;\n"
+        "var interval = setInterval(function() {\n"
+        "    count++;\n"
+        "    if (count === 3) {\n"
+        "        clearInterval(interval);\n"
+        "        Script.setTimeout(function() {\n"
+        "            fired.push('interval:' + count);\n"
+        "            print(typeof interval + ' ' + fired.join(','));\n"
+        "            Script.stop(true);\n"
+        "        }, 50);\n"
+        "    }\n"
+        "}, 5);\n";
+
+    QString printed;
+    auto sm = makeManager(script, "testGlobalTimers.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+
+    connect(sm.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString& engineName){
+        printed.append(message);
+    });
+
+    sm->run();
+    QVERIFY(!sm->getUncaughtException());
+    QCOMPARE(printed, QString("number args:xy,interval:3"));
+}

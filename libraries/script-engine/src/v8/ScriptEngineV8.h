@@ -146,6 +146,7 @@ public:  // ScriptEngine implementation
     virtual void requestCollectGarbage() override { _v8Isolate->MemoryPressureNotification(v8::MemoryPressureLevel::kCritical); }
     virtual void processEvents() override;
     virtual void performMicrotaskCheckpoint() override;
+    virtual void queueMicrotask(const ScriptValue& callback) override;
     virtual void compileTest() override;
     virtual QString scriptValueDebugDetails(const ScriptValue &value) override;
     QString scriptValueDebugDetailsV8(const V8ScriptValue &value);

@@ -67,6 +67,8 @@ private slots:
     void testQuat();
     void testMicrotaskOrdering();
     void testUnhandledRejection();
+    void testQueueMicrotask();
+    void testGlobalTimers();
 
 
 private:

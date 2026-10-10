@@ -419,6 +419,12 @@ public:
     virtual void performMicrotaskCheckpoint() = 0;
 
     /**
+     * @brief Queues a function on the engine's microtask queue, as the JavaScript <code>queueMicrotask</code> does.
+     * An exception thrown by the function is reported to the script manager rather than propagated.
+     */
+    virtual void queueMicrotask(const ScriptValue& callback) = 0;
+
+    /**
      * @brief Test the underlying scripting engine
      *
      * This compiles, executes and verifies the execution of a trivial test program

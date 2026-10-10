@@ -204,6 +204,45 @@ static ScriptValue debugPrint(ScriptContext* context, ScriptEngine* engine) {
     return ScriptValue();
 }
 
+static ScriptValue throwTypeError(ScriptContext* context, ScriptEngine* engine, const QString& message) {
+    return context->throwValue(engine->makeError(engine->newValue(message), "TypeError"));
+}
+
+// setTimeout(callback, delay = 0, ...args) on top of the ScriptManager timers that Script.setTimeout uses
+static ScriptValue startTimerFromGlobal(ScriptContext* context, ScriptEngine* engine, bool isSingleShot) {
+    ScriptValue callback = context->argument(0);
+    if (!callback.isFunction()) {
+        return throwTypeError(context, engine, QString(isSingleShot ? "setTimeout" : "setInterval") + ": callback is not a function");
+    }
+    int delayMS = std::max(0, context->argument(1).toInt32());
+    if (context->argumentCount() > 2) {
+        ScriptValueList bindArguments { engine->undefinedValue() };
+        for (int i = 2; i < context->argumentCount(); i++) {
+            bindArguments.append(context->argument(i));
+        }
+        callback = callback.property("bind").call(callback, bindArguments);
+    }
+    auto manager = engine->manager();
+    return engine->newValue(isSingleShot ? manager->setTimeout(callback, delayMS) : manager->setInterval(callback, delayMS));
+}
+
+// clearTimeout and clearInterval share one handle space, and ignore anything that isn't a handle
+static ScriptValue clearTimerFromGlobal(ScriptContext* context, ScriptEngine* engine) {
+    if (context->argument(0).isNumber()) {
+        engine->manager()->clearTimeout(context->argument(0).toInt32());
+    }
+    return engine->undefinedValue();
+}
+
+static ScriptValue queueMicrotaskFromGlobal(ScriptContext* context, ScriptEngine* engine) {
+    ScriptValue callback = context->argument(0);
+    if (!callback.isFunction()) {
+        return throwTypeError(context, engine, "queueMicrotask: callback is not a function");
+    }
+    engine->queueMicrotask(callback);
+    return engine->undefinedValue();
+}
+
 // FIXME Come up with a way to properly encode entity IDs in filename
 // The purpose of the following two function is to embed entity ids into entity script filenames
 // so that they show up in stacktraces
@@ -828,6 +867,45 @@ void ScriptManager::init() {
      * @param {...*} [message] - The message values to print.
      */
     scriptEngine->globalObject().setProperty("print", scriptEngine->newFunction(debugPrint));
+
+    /*@jsdoc
+     * Calls a function once, after a delay. The same timers as {@link Script.setTimeout}, with the standard signature.
+     * @function setTimeout
+     * @param {function} callback - The function to call.
+     * @param {number} [delay=0] - The delay, in ms.
+     * @param {...*} [args] - Arguments passed to the function.
+     * @returns {number} A handle for {@link clearTimeout}.
+     */
+    scriptEngine->globalObject().setProperty("setTimeout", scriptEngine->newFunction(
+        [](ScriptContext* context, ScriptEngine* engine) { return startTimerFromGlobal(context, engine, true); }, 2));
+    /*@jsdoc
+     * Calls a function repeatedly. The same timers as {@link Script.setInterval}, with the standard signature.
+     * @function setInterval
+     * @param {function} callback - The function to call.
+     * @param {number} [interval=0] - The interval, in ms.
+     * @param {...*} [args] - Arguments passed to the function.
+     * @returns {number} A handle for {@link clearInterval}.
+     */
+    scriptEngine->globalObject().setProperty("setInterval", scriptEngine->newFunction(
+        [](ScriptContext* context, ScriptEngine* engine) { return startTimerFromGlobal(context, engine, false); }, 2));
+    /*@jsdoc
+     * Stops a timer set by {@link setTimeout} or {@link Script.setTimeout}. Anything other than a handle is ignored.
+     * @function clearTimeout
+     * @param {number} handle - The timer to stop.
+     */
+    scriptEngine->globalObject().setProperty("clearTimeout", scriptEngine->newFunction(clearTimerFromGlobal, 1));
+    /*@jsdoc
+     * Stops a timer set by {@link setInterval} or {@link Script.setInterval}. Anything other than a handle is ignored.
+     * @function clearInterval
+     * @param {number} handle - The timer to stop.
+     */
+    scriptEngine->globalObject().setProperty("clearInterval", scriptEngine->newFunction(clearTimerFromGlobal, 1));
+    /*@jsdoc
+     * Queues a function to run once the current script call returns, before any timer or event.
+     * @function queueMicrotask
+     * @param {function} callback - The function to call.
+     */
+    scriptEngine->globalObject().setProperty("queueMicrotask", scriptEngine->newFunction(queueMicrotaskFromGlobal, 1));
 
     // NOTE: You do not want to end up creating new instances of singletons here. They will be on the ScriptManager thread
     // and are likely to be unusable if we "reset" the ScriptManager by creating a new one (on a whole new thread).
