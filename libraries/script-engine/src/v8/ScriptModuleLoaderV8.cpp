@@ -404,6 +404,10 @@ void ScriptModuleLoaderV8::reportEvaluationError(v8::Local<v8::Context> context,
     }
 
     QString text = toQString(isolate, exception);
+    if (line <= 0) {
+        // A value rejected after an await carries no stack, so the entry's URL above is only a fallback
+        text += exception->IsNativeError() ? " (no location)" : " (no location: rejected with a non-Error value)";
+    }
     QStringList backtrace;
     v8::Local<v8::Value> stack;
     if (exception->IsNativeError()) {

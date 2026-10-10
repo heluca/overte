@@ -136,9 +136,10 @@ void ScriptEngineV8::reportStalledTopLevelAwaits() {
         return;
     }
 
+    // A warning: stopping mid-await (a reload, or a user stop during an await on the network) is routine
     QString message = "Script stopped while a top-level await was still pending at " + sites.join(", ");
     if (_manager) {
-        _manager->scriptErrorMessage(message, fileName, line);
+        _manager->scriptWarningMessage(message, fileName, line);
     } else {
         qCWarning(scriptengine_v8) << message;
     }
