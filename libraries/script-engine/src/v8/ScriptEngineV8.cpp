@@ -55,11 +55,12 @@
 #include "ScriptProgramV8Wrapper.h"
 #include "ScriptValueV8Wrapper.h"
 #include "ScriptEngineLoggingV8.h"
+#include "ScriptModuleLoaderV8.h"
+#include "ScriptModuleMapV8.h"
 #include "ScriptValueIteratorV8Wrapper.h"
 #include "shared/FileUtils.h"
 
 static const int MAX_DEBUG_VALUE_LENGTH { 80 };
-static const uint32_t ENGINE_ISOLATE_DATA_SLOT { 0 };
 
 std::once_flag ScriptEngineV8::_v8InitOnceFlag;
 QMutex ScriptEngineV8::_v8InitMutex;
@@ -232,6 +233,8 @@ ScriptEngineV8::ScriptEngineV8(ScriptManager *manager) : ScriptEngine(manager), 
         _v8Isolate->SetMicrotasksPolicy(v8::MicrotasksPolicy::kExplicit);
         _v8Isolate->SetData(ENGINE_ISOLATE_DATA_SLOT, this);
         _v8Isolate->SetPromiseRejectCallback(promiseRejectCallback);
+        _v8Isolate->SetHostInitializeImportMetaObjectCallback(ScriptModuleLoaderV8::initializeImportMeta);
+        _modules = std::make_unique<ScriptModuleMapV8>();
         v8::HandleScope handleScope(_v8Isolate);
         v8::Local<v8::Context> context = v8::Context::New(_v8Isolate);
         Q_ASSERT(!context.IsEmpty());
@@ -279,6 +282,8 @@ ScriptEngineV8::~ScriptEngineV8() {
     deleteUnusedValueWrappers();
 
     _pendingPromiseRejections.clear();
+    qDeleteAll(findChildren<ScriptModuleLoaderV8*>(QString(), Qt::FindDirectChildrenOnly));
+    _modules.reset();
     _contexts.clear();
     _nullValue = ScriptValue();
     _undefinedValue = ScriptValue();
