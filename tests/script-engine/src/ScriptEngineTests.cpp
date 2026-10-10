@@ -471,3 +471,157 @@ void ScriptEngineTests::testGlobalTimers() {
     QVERIFY(!sm->getUncaughtException());
     QCOMPARE(printed, QString("number args:xy,interval:3"));
 }
+
+void ScriptEngineTests::testPromiseResolve() {
+    QString script =
+        "var answer = { value: 42 };\n"
+        "promises.make('fromScript').then(function(v) { promises.note('then:' + (v === answer) + ':' + v.value); });\n"
+        "promises.resolveValue('fromScript', answer);\n"
+        "promises.note('sync');\n"
+        "promises.make('fromCpp').then(function(v) {\n"
+        "    promises.note('then:' + v);\n"
+        "    Script.stop(true);\n"
+        "});\n"
+        "promises.resolveLater('fromCpp', 'two');\n";
+
+    PromiseTestClass promises;
+    auto sm = makeManager(script, "testPromiseResolve.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+    promises.setEngine(sm->engine().get());
+    sm->engine()->registerGlobalObject(scopeGuard.get(), "promises", &promises);
+
+    sm->run();
+    QVERIFY(!sm->getUncaughtException());
+    // Settled inside script: the reaction waits for the script call to return. Settled from C++ outside any script call:
+    // the reaction has already run when resolve() returns.
+    QCOMPARE(promises.log, QStringList({ "sync", "then:true:42", "before", "then:two", "after" }));
+}
+
+void ScriptEngineTests::testPromiseResolveFromWorker() {
+    QString script =
+        "promises.make('worker').then(function(v) {\n"
+        "    promises.note('then:' + v + ':' + promises.isScriptThread());\n"
+        "    Script.stop(true);\n"
+        "});\n"
+        "promises.resolveFromWorker('worker', 'w');\n"
+        "promises.note('sync');\n";
+
+    PromiseTestClass promises;
+    auto sm = makeManager(script, "testPromiseResolveFromWorker.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+    promises.setEngine(sm->engine().get());
+    sm->engine()->registerGlobalObject(scopeGuard.get(), "promises", &promises);
+
+    sm->run();
+    QVERIFY(!sm->getUncaughtException());
+    QCOMPARE(promises.workerCalls, 1);
+    QCOMPARE(promises.log, QStringList({ "joined", "sync", "then:w:true" }));
+}
+
+void ScriptEngineTests::testPromiseReject() {
+    QString script =
+        "var caught = 0;\n"
+        "function done() { if (++caught === 3) { Script.stop(true); } }\n"
+        "promises.make('message').catch(function(e) {\n"
+        "    promises.note((e instanceof Error) + ':' + e.message);\n"
+        "    done();\n"
+        "});\n"
+        "promises.make('value').catch(function(e) {\n"
+        "    promises.note((e instanceof RangeError) + ':' + e.message);\n"
+        "    done();\n"
+        "});\n"
+        "promises.make('worker').catch(function(e) {\n"
+        "    promises.note((e instanceof Error) + ':' + e.message + ':' + promises.isScriptThread());\n"
+        "    done();\n"
+        "});\n"
+        "promises.reject('message', 'native boom');\n"
+        "promises.rejectValue('value', new RangeError('range boom'));\n"
+        "promises.rejectFromWorker('worker', 'worker boom');\n";
+
+    PromiseTestClass promises;
+    QStringList errors;
+    auto sm = makeManager(script, "testPromiseReject.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+    promises.setEngine(sm->engine().get());
+    sm->engine()->registerGlobalObject(scopeGuard.get(), "promises", &promises);
+
+    connect(sm.get(), &ScriptManager::errorMessage, [&errors](const QString& message, const QString& engineName){
+        errors.append(message);
+    });
+
+    sm->run();
+    QVERIFY(!sm->getUncaughtException());
+    QCOMPARE(errors, QStringList());
+    QCOMPARE(promises.log, QStringList({ "joined", "true:native boom", "true:range boom", "true:worker boom:true" }));
+}
+
+void ScriptEngineTests::testPromiseSettleAfterStop() {
+    QString script =
+        "function report(v) { print('settled ' + v); }\n"
+        "promises.make('onScriptThread').then(report, report);\n"
+        "promises.make('onWorker').then(report, report);\n"
+        "Script.stop(true);\n";
+
+    QStringList printed;
+    PromiseTestClass promises;
+    auto sm = makeManager(script, "testPromiseSettleAfterStop.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+    promises.setEngine(sm->engine().get());
+    sm->engine()->registerGlobalObject(scopeGuard.get(), "promises", &promises);
+
+    connect(sm.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString& engineName){
+        printed.append(message);
+    });
+
+    sm->run();
+    QVERIFY(sm->isFinished());
+
+    promises.resolver("onScriptThread")->resolve(QVariant(1));
+    promises.runOnWorker([resolver = promises.resolver("onWorker")] { resolver->reject(QString("late")); });
+    QCoreApplication::processEvents();
+    QCOMPARE(printed, QStringList());
+
+    // An engine without a manager, destroyed while one settlement is still queued to it
+    std::weak_ptr<ScriptEngine> destroyedEngine;
+    ScriptPromiseResolverPointer queued, onScriptThread, onWorker;
+    {
+        auto engine = newScriptEngine();
+        destroyedEngine = engine;
+        auto engineScopeGuard = engine->getScopeGuard();
+        queued = engine->newPromise().resolver;
+        onScriptThread = engine->newPromise().resolver;
+        onWorker = engine->newPromise().resolver;
+        std::thread([queued] { queued->resolve(QVariant(3)); }).join();
+    }
+    QVERIFY(destroyedEngine.expired());
+    onScriptThread->resolve(QVariant(4));
+    std::thread([onWorker] { onWorker->reject(QString("gone")); }).join();
+    QCoreApplication::processEvents();
+    QCOMPARE(printed, QStringList());
+}
+
+void ScriptEngineTests::testPromiseDoubleSettle() {
+    QString script =
+        "function report(v) { promises.note('settled:' + (v instanceof Error ? v.message : v)); }\n"
+        "promises.make('twice').then(report, report);\n"
+        "promises.resolve('twice', 'first');\n"
+        "promises.resolve('twice', 'second');\n"
+        "promises.reject('twice', 'third');\n"
+        "promises.resolveFromWorker('twice', 'fourth');\n"
+        "promises.make('workerFirst').then(report, report);\n"
+        "promises.resolveFromWorker('workerFirst', 'fifth');\n"
+        "promises.reject('workerFirst', 'sixth');\n"
+        "promises.make('dropped');\n"
+        "promises.forget('dropped');\n"
+        "setTimeout(function() { Script.stop(true); }, 20);\n";
+
+    PromiseTestClass promises;
+    auto sm = makeManager(script, "testPromiseDoubleSettle.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+    promises.setEngine(sm->engine().get());
+    sm->engine()->registerGlobalObject(scopeGuard.get(), "promises", &promises);
+
+    sm->run();
+    QVERIFY(!sm->getUncaughtException());
+    QCOMPARE(promises.log, QStringList({ "joined", "joined", "settled:first", "settled:fifth" }));
+}
