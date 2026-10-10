@@ -74,6 +74,7 @@ class Emitter {
         this.rendered = new Map();
         const bases = model.variantBases.map(base => tsName(base.longname).replace(/[.$]/g, "\\$&"));
         this.variantBasePattern = new RegExp("\\b(" + bases.join("|") + ")(?![\\w$])", "g");
+        this.typedefs = new Map(model.typedefs.map(typedef => [typedef.longname, typedef]));
         this.discriminantTypes = new Set(model.variantBases.map(base => base.discriminant.type.names[0]));
     }
 
@@ -82,6 +83,25 @@ class Emitter {
     // the discriminant included. Partial<> distributes over the union.
     partialVariants(type) {
         return this.model.variantBases.length > 0 ? type.replace(this.variantBasePattern, "Partial<$1>") : type;
+    }
+
+    // Whether a parameter's type is a typedef that holds a variant base in one of its properties,
+    // at any depth (Pointers.RayPointerRenderState's start/path/end), so that an edit takes it
+    // through PartialVariants<>.
+    nestsVariants(item, seen) {
+        const visited = seen || new Set();
+        return ((item && item.type && item.type.names) || []).some(text =>
+            (text.match(/[A-Za-z_$][\w$~-]*(?:\.[A-Za-z_$][\w$~-]*)*/g) || []).some(name => {
+                const typedef = this.typedefs.get(name);
+                if (!typedef || typedef.variants || typedef.variantOf || visited.has(name)) {
+                    return false;
+                }
+                visited.add(name);
+                return (typedef.properties || []).some(property =>
+                    ((property.type && property.type.names) || []).some(inner =>
+                        this.model.variantBases.some(base => new RegExp("(^|[^\\w$.-])" + base.longname.replace(/[.$-]/g, "\\$&") +
+                            "(?![\\w$-])").test(inner))) || this.nestsVariants(property, visited));
+            }));
     }
 
     // An edit (editEntity, updateAction) or a function that takes the discriminant as its own
@@ -140,7 +160,13 @@ class Emitter {
     // expanded into overloads with and without them.
     paramLists(params, expand, partial) {
         const named = (params || []).map((param, index) => param.name ? param : Object.assign({}, param, { name: "arg" + index }));
-        const typeOf = node => partial ? this.partialVariants(this.nodeType(node, { bag: false })) : this.nodeType(node, { bag: false });
+        const typeOf = node => {
+            const type = this.nodeType(node, { bag: false });
+            if (!partial) {
+                return type;
+            }
+            return this.nestsVariants(node.item) ? "PartialVariants<" + type + ">" : this.partialVariants(type);
+        };
         const entries = buildTree(named).map(node => ({
             name: paramName(node.key),
             type: typeOf(node),
@@ -186,10 +212,30 @@ class Emitter {
     }
 
     returnType(doclet) {
+        return this.partialVariants(this.mappedReturn(doclet));
+    }
+
+    mappedReturn(doclet) {
         if (!doclet.returns || doclet.returns.length === 0) {
             return "void";
         }
-        return this.partialVariants(unionOf(doclet.returns.map(entry => this.mapper.map(entry.type))));
+        return unionOf(doclet.returns.map(entry => this.mapper.map(entry.type)));
+    }
+
+    // [parameters, return type] per overload of a function or method. A getter of a variant base
+    // called without its optional parameters (getEntityProperties without desiredProperties)
+    // returns every property, the discriminant included, so that call returns the full union.
+    overloads(member) {
+        const full = this.mappedReturn(member);
+        const returns = this.partialVariants(full);
+        const lists = this.paramLists(member.params, true, this.takesPartialVariants(member)).map(params => [params, returns]);
+        const optional = (member.params || []).filter(param => param.name && !param.name.includes(".") && isOptional(param))
+            .map(param => param.name);
+        if (full === returns || optional.length === 0) {
+            return lists;
+        }
+        const required = member.params.filter(param => !optional.includes((param.name || "").split(".")[0]));
+        return [[this.paramLists(required, false, false)[0], full]].concat(lists);
     }
 
     signalType(doclet) {
@@ -289,13 +335,33 @@ class Emitter {
             if (member.kind === "signal") {
                 lines.push(inner + "readonly " + propertyKey(member.name) + ": " + this.signalType(member) + ";");
             } else {
-                this.paramLists(member.params, true, this.takesPartialVariants(member)).forEach(params => {
-                    lines.push(inner + propertyKey(member.name) + "(" + params + "): " + this.returnType(member) + ";");
+                this.overloads(member).forEach(([params, returns]) => {
+                    lines.push(inner + propertyKey(member.name) + "(" + params + "): " + returns + ";");
                 });
             }
         });
         lines.push(indent + "}");
         return lines;
+    }
+
+    // Deep partial of the variant unions inside T, for edits that nest entity properties in another
+    // object (Pointers.editRenderState's start/path/end). Only the variant unions become partial.
+    partialVariantsPrelude() {
+        if (this.model.variantBases.length === 0) {
+            return "";
+        }
+        const bases = this.model.variantBases.map(base => tsName(base.longname)).join(" | ");
+        return [
+            "/**",
+            " * `T` with every variant union inside it (" + bases + ") made partial, as an edit",
+            " * that nests them in another object takes them.",
+            " */",
+            "type PartialVariants<T> = T extends " + bases + " ? Partial<T>",
+            "    : T extends (...args: any[]) => unknown ? T",
+            "    : T extends object ? { [K in keyof T]: PartialVariants<T[K]> }",
+            "    : T;",
+            ""
+        ].join("\n");
     }
 
     sharedFile(header) {
@@ -312,7 +378,7 @@ class Emitter {
         this.model.containers.filter(container => container.kind === "class")
             .forEach(container => add(tsName(container.longname), indent => this.classLines(container, indent)));
 
-        const out = [header, SIGNAL_PRELUDE];
+        const out = [header, SIGNAL_PRELUDE, this.partialVariantsPrelude()];
         [...groups.keys()].sort().forEach(parent => {
             const entries = groups.get(parent).sort((a, b) => a.name.localeCompare(b.name));
             const indent = parent ? "    " : "";
@@ -348,8 +414,8 @@ class Emitter {
             if (member.kind === "signal") {
                 lines.push(inner + "const " + member.name + ": " + this.signalType(member) + ";");
             } else {
-                this.paramLists(member.params, true, this.takesPartialVariants(member)).forEach(params => {
-                    lines.push(inner + "function " + member.name + "(" + params + "): " + this.returnType(member) + ";");
+                this.overloads(member).forEach(([params, returns]) => {
+                    lines.push(inner + "function " + member.name + "(" + params + "): " + returns + ";");
                 });
             }
         });

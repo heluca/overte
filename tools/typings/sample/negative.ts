@@ -6,8 +6,9 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
-//  Misuse the declarations must reject. Each @ts-expect-error fails the check if its line
-//  type-checks, so a declaration that regresses to `any` or `unknown` is caught.
+//  Misuse the declarations must reject. Each line below is marked as an expected error, which
+//  fails the check if the line type-checks, so a declaration that regresses to `any` or
+//  `unknown` is caught.
 //
 
 /// <reference path="../dist/overte-server-entity.d.ts" />
