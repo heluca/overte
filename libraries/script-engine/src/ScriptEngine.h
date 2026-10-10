@@ -18,10 +18,12 @@
 #ifndef hifi_ScriptEngine_h
 #define hifi_ScriptEngine_h
 
+#include <functional>
 #include <memory>
 
 #include <QtCore/QFlags>
 #include <QtCore/QObject>
+#include <QtCore/QUrl>
 
 #include "ScriptValue.h"
 #include "ScriptException.h"
@@ -50,6 +52,25 @@ scriptValueFromValue(ScriptEngine* engine, const T& t);
 
 template <typename T>
 inline T scriptvalue_cast(const ScriptValue& value);
+
+/// What ScriptEngine::loadModule loads: an ES module and its static import graph.
+struct ScriptModuleRequest {
+    /// Resolved URL of the entry module: its module map key and its import.meta.url
+    QUrl url;
+    /// The entry's source when the caller has fetched it already; null to fetch it
+    QString source;
+    /// Top-level URL of the script; imports of local files outside its directory are refused unless it is local
+    QUrl sandboxURL;
+    /// Module map generation; records are shared within one epoch only
+    int epoch { 0 };
+    /// Bypass ScriptCache for every module of the graph, not only the entry
+    bool forceDownload { false };
+};
+
+/// Called once per ScriptEngine::loadModule, on the engine's thread, unless the script stops first. On failure the error has already been reported
+/// to the script manager: a ScriptEngineException means the graph did not load or link and no module body ran, a
+/// ScriptRuntimeException means a module body threw.
+using ScriptModuleCallback = std::function<void(const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error)>;
 
 class ScriptEngineMemoryStatistics {
 public:
@@ -417,6 +438,13 @@ public:
      * Does nothing while script code is on the stack; the outermost call into the engine performs the checkpoint itself.
      */
     virtual void performMicrotaskCheckpoint() = 0;
+
+    /**
+     * @brief Loads an ES module graph and evaluates it in the engine's main context.
+     * Every module is fetched through ScriptCache without blocking the calling thread; linking and evaluation run
+     * from the engine thread's event loop once the whole static graph is compiled, never inside this call.
+     */
+    virtual void loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) = 0;
 
     /**
      * @brief Queues a function on the engine's microtask queue, as the JavaScript <code>queueMicrotask</code> does.

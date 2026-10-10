@@ -46,6 +46,8 @@
 
 class ScriptContextV8Wrapper;
 class ScriptEngineV8;
+class ScriptModuleLoaderV8;
+class ScriptModuleMapV8;
 class ScriptManager;
 class ScriptObjectV8Proxy;
 class ScriptMethodV8Proxy;
@@ -59,6 +61,8 @@ typedef V8ScriptValueTemplate<v8::Script> V8ScriptProgram;
 using ScriptContextV8Pointer = std::shared_ptr<ScriptContextV8Wrapper>;
 
 const double GARBAGE_COLLECTION_TIME_LIMIT_S = 1.0;
+// Isolate data slot holding the ScriptEngineV8, for static V8 callbacks
+static const uint32_t ENGINE_ISOLATE_DATA_SLOT { 0 };
 
 Q_DECLARE_METATYPE(ScriptEngine::FunctionSignature)
 
@@ -147,6 +151,7 @@ public:  // ScriptEngine implementation
     virtual void processEvents() override;
     virtual void performMicrotaskCheckpoint() override;
     virtual void queueMicrotask(const ScriptValue& callback) override;
+    virtual void loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) override;
     virtual void compileTest() override;
     virtual QString scriptValueDebugDetails(const ScriptValue &value) override;
     QString scriptValueDebugDetailsV8(const V8ScriptValue &value);
@@ -250,6 +255,7 @@ protected:
 
     friend class ScriptSignalV8Proxy;
     friend class MicrotaskCheckpointScopeV8;
+    friend class ScriptModuleLoaderV8;
 
     static void promiseRejectCallback(v8::PromiseRejectMessage message);
     void reportPendingPromiseRejections();
@@ -304,6 +310,8 @@ private:
         int lineNumber;
     };
     std::vector<PendingPromiseRejection> _pendingPromiseRejections;
+    // ES modules of this isolate, see ScriptModuleLoaderV8
+    std::unique_ptr<ScriptModuleMapV8> _modules;
 #ifdef OVERTE_V8_MEMORY_DEBUG
     std::atomic<size_t> scriptValueCount{0};
     std::atomic<size_t> scriptValueProxyCount{0};
