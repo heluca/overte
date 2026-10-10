@@ -38,9 +38,11 @@ class QThread;
 class QVariant;
 class ScriptContext;
 class ScriptEngine;
+class ScriptEnvironment;
 class ScriptManager;
 class ScriptProgram;
 using ScriptEnginePointer = std::shared_ptr<ScriptEngine>;
+using ScriptEnvironmentPointer = std::shared_ptr<ScriptEnvironment>;
 using ScriptProgramPointer = std::shared_ptr<ScriptProgram>;
 
 Q_DECLARE_METATYPE(ScriptEnginePointer);
@@ -65,6 +67,9 @@ struct ScriptModuleRequest {
     int epoch { 0 };
     /// Bypass ScriptCache for every module of the graph, not only the entry
     bool forceDownload { false };
+    /// Environment the graph is evaluated in, and that its URLs are recorded in; null for a new one made from
+    /// sandboxURL and epoch, with no entity
+    ScriptEnvironmentPointer environment;
 };
 
 /// Called once per ScriptEngine::loadModule, on the engine's thread, when the graph's evaluation has settled: after
@@ -510,6 +515,18 @@ public:
      * An exception thrown by the function is reported to the script manager rather than propagated.
      */
     virtual void queueMicrotask(const ScriptValue& callback) = 0;
+
+    /**
+     * @brief The environment of the ES module code that is running, see ScriptEnvironment; null in classic script code.
+     * Promise continuations run in the environment that was current where they were created (<code>then</code>,
+     * <code>await</code>).
+     */
+    virtual ScriptEnvironmentPointer currentEnvironment() = 0;
+
+    /**
+     * @brief Makes an environment current, or none for null, and returns the one that was. See ScriptEnvironmentScope.
+     */
+    virtual ScriptEnvironmentPointer swapCurrentEnvironment(const ScriptEnvironmentPointer& environment) = 0;
 
     /**
      * @brief Test the underlying scripting engine
