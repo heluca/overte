@@ -76,13 +76,17 @@ void ScriptPromiseBridgeV8::drain() {
     if (!engine) {
         return;
     }
+    // Used unlocked: this runs on the engine's thread, which is also where the engine is deleted (ScriptManager's
+    // deleteLater deleter), and the isolate is never disposed.
     for (const auto& settlement : settlements) {
         apply(engine, settlement);
     }
 }
 
 void ScriptPromiseBridgeV8::apply(ScriptEngineV8* engine, const Settlement& settlement) {
-    // Entity script engines and stopped managers settle outside ScriptManager::run(), which otherwise holds the isolate.
+    // Always on the script thread, but not always inside ScriptManager::run(), which otherwise holds the isolate: entity
+    // script engines and stopped managers settle outside it. Callers on other threads never get here, their settlements
+    // are queued, which is why only the QVariant and QString overloads are safe for a caller without the isolate.
     auto scopeGuard = engine->getScopeGuard();
     auto found = _resolvers.find(settlement.id);
     if (found == _resolvers.end()) {

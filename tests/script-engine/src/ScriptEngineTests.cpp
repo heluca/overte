@@ -586,28 +586,48 @@ void ScriptEngineTests::testPromiseSettleAfterStop() {
     QCoreApplication::processEvents();
     QCOMPARE(printed, QStringList());
 
-    // An engine without a manager, destroyed while one settlement is still queued to it
+    // An engine without a manager, destroyed with one settlement still queued to it and another one submitted while
+    // it is being destroyed: both reach the closed bridge, and neither may settle.
+    PromiseTestClass standalone;
     std::weak_ptr<ScriptEngine> destroyedEngine;
-    ScriptPromiseResolverPointer queued, onScriptThread, onWorker;
+    ScriptPromiseResolverPointer afterDestroy, afterDestroyOnWorker;
     {
         auto engine = newScriptEngine();
         destroyedEngine = engine;
         auto engineScopeGuard = engine->getScopeGuard();
-        queued = engine->newPromise().resolver;
-        onScriptThread = engine->newPromise().resolver;
-        onWorker = engine->newPromise().resolver;
-        std::thread([queued] { queued->resolve(QVariant(3)); }).join();
+        standalone.setEngine(engine.get());
+        engine->registerGlobalObject(engineScopeGuard.get(), "standalone", &standalone);
+        engine->evaluate(
+            "function report(v) { standalone.note('settled:' + v); }\n"
+            "['queued', 'duringDestroy', 'afterDestroy', 'afterDestroyOnWorker'].forEach(function(name) {\n"
+            "    standalone.make(name).then(report, report);\n"
+            "});\n");
+        QVERIFY(!engine->hasUncaughtException());
+        standalone.resolveFromWorker("queued", "q");
+        afterDestroy = standalone.resolver("afterDestroy");
+        afterDestroyOnWorker = standalone.resolver("afterDestroyOnWorker");
+        // Delivered by the event processing in ~ScriptEngineV8, after it closed the bridge but before releasing it
+        QMetaObject::invokeMethod(&standalone, [&standalone, &destroyedEngine] {
+            standalone.note(QString("duringDestroy:") + (destroyedEngine.expired() ? "destroying" : "alive"));
+            standalone.resolver("duringDestroy")->resolve(QVariant(5));
+        }, Qt::QueuedConnection);
     }
     QVERIFY(destroyedEngine.expired());
-    onScriptThread->resolve(QVariant(4));
-    std::thread([onWorker] { onWorker->reject(QString("gone")); }).join();
+    QCOMPARE(standalone.log, QStringList({ "joined", "duringDestroy:destroying" }));
+
+    // Once the bridge itself is gone there is nothing left to observe: these only must not crash
+    afterDestroy->resolve(QVariant(6));
+    std::thread([afterDestroyOnWorker] { afterDestroyOnWorker->reject(QString("gone")); }).join();
     QCoreApplication::processEvents();
-    QCOMPARE(printed, QStringList());
 }
 
 void ScriptEngineTests::testPromiseDoubleSettle() {
     QString script =
-        "function report(v) { promises.note('settled:' + (v instanceof Error ? v.message : v)); }\n"
+        "var settled = 0;\n"
+        "function report(v) {\n"
+        "    promises.note('settled:' + (v instanceof Error ? v.message : v));\n"
+        "    if (++settled === 2) { Script.stop(true); }\n"
+        "}\n"
         "promises.make('twice').then(report, report);\n"
         "promises.resolve('twice', 'first');\n"
         "promises.resolve('twice', 'second');\n"
@@ -617,8 +637,7 @@ void ScriptEngineTests::testPromiseDoubleSettle() {
         "promises.resolveFromWorker('workerFirst', 'fifth');\n"
         "promises.reject('workerFirst', 'sixth');\n"
         "promises.make('dropped');\n"
-        "promises.forget('dropped');\n"
-        "setTimeout(function() { Script.stop(true); }, 20);\n";
+        "promises.forget('dropped');\n";
 
     PromiseTestClass promises;
     auto sm = makeManager(script, "testPromiseDoubleSettle.js");
@@ -629,6 +648,37 @@ void ScriptEngineTests::testPromiseDoubleSettle() {
     sm->run();
     QVERIFY(!sm->getUncaughtException());
     QCOMPARE(promises.log, QStringList({ "joined", "joined", "settled:first", "settled:fifth" }));
+    QCOMPARE(promises.pendingResolvers(), 0);
+}
+
+void ScriptEngineTests::testPromiseForget() {
+    QString script =
+        "promises.make('kept');\n"
+        "promises.make('dropped');\n"
+        "promises.make('workerDropped');\n"
+        "promises.make('marker').then(function() {\n"
+        "    promises.note('drained:' + promises.pendingResolvers());\n"
+        "    Script.stop(true);\n"
+        "});\n"
+        "promises.note('made:' + promises.pendingResolvers());\n"
+        "promises.forget('dropped');\n"
+        "promises.note('forgot:' + promises.pendingResolvers());\n"
+        "promises.forgetFromWorker('workerDropped');\n"
+        "promises.resolveFromWorker('marker', 'm');\n"
+        "promises.note('queued:' + promises.pendingResolvers());\n";
+
+    PromiseTestClass promises;
+    auto sm = makeManager(script, "testPromiseForget.js");
+    auto scopeGuard = sm->engine()->getScopeGuard();
+    promises.setEngine(sm->engine().get());
+    sm->engine()->registerGlobalObject(scopeGuard.get(), "promises", &promises);
+
+    sm->run();
+    QVERIFY(!sm->getUncaughtException());
+    QCOMPARE(promises.workerCalls, 2);
+    // Dropped on the script thread the resolver is released at once; dropped on a worker the release is queued, and
+    // applied before the settlement queued after it.
+    QCOMPARE(promises.log, QStringList({ "made:4", "forgot:3", "joined", "joined", "queued:3", "drained:1" }));
 }
 
 // Generous: a test only reaches this when a promise never settles, and then fails on the missing output

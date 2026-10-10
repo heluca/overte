@@ -67,6 +67,14 @@ class PromiseTestClass : public QObject {
             return promise.promise;
         }
         Q_INVOKABLE void forget(const QString& name) { _resolvers.remove(name); }
+        // The worker drops the last reference, so the release of the V8 resolver is queued to the script thread
+        Q_INVOKABLE void forgetFromWorker(const QString& name) {
+            ScriptPromiseResolverPointer resolver = _resolvers.take(name);
+            runOnWorker([&resolver] { resolver.reset(); });
+        }
+        Q_INVOKABLE int pendingResolvers() const {
+            return static_cast<int>(_engine->getMemoryUsageStatistics().pendingPromiseResolvers);
+        }
 
         Q_INVOKABLE void resolve(const QString& name, const QVariant& value) { _resolvers.value(name)->resolve(value); }
         Q_INVOKABLE void resolveValue(const QString& name, const ScriptValue& value) { _resolvers.value(name)->resolve(value); }
@@ -137,6 +145,7 @@ private slots:
     void testPromiseReject();
     void testPromiseSettleAfterStop();
     void testPromiseDoubleSettle();
+    void testPromiseForget();
     void testFetchHeaders();
     void testFetchText();
     void testFetchJson();
