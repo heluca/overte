@@ -59,6 +59,7 @@
 #include "ScriptValueIterator.h"
 #include "ScriptValueUtils.h"
 #include "ScriptManagerScriptingInterface.h"
+#include "ScriptModuleResolver.h"
 
 #include <Profile.h>
 
@@ -77,7 +78,6 @@ const QString ScriptManager::_SETTINGS_ENABLE_EXTENDED_EXCEPTIONS {
 const QString ScriptManager::SCRIPT_EXCEPTION_FORMAT{ "[%0] %1 in %2:%3" };
 const QString ScriptManager::SCRIPT_BACKTRACE_SEP{ "\n    " };
 
-static const int MAX_MODULE_ID_LENGTH { 4096 };
 static const int MAX_DEBUG_VALUE_LENGTH { 80 };
 
 static const ScriptValue::PropertyFlags READONLY_PROP_FLAGS{ ScriptValue::ReadOnly | ScriptValue::Undeletable };
@@ -1503,22 +1503,16 @@ QString ScriptManager::_requireResolve(const QString& moduleId, const QString& r
     };
 
     // de-fuzz the input a little by restricting to rational sizes
-    auto idLength = url.toString().length();
-    if (idLength < 1 || idLength > MAX_MODULE_ID_LENGTH) {
-        auto details = QString("rejecting invalid module id size (%1 chars [1,%2])")
-            .arg(idLength).arg(MAX_MODULE_ID_LENGTH);
-        return throwResolveError(details, "RangeError");
+    QString lengthError = checkModuleSpecifierLength(url.toString());
+    if (!lengthError.isEmpty()) {
+        return throwResolveError(lengthError, "RangeError");
     }
-
-    // this regex matches: absolute, dotted or path-like URLs
-    // (ie: the kind of stuff ScriptManager::resolvePath already handles)
-    QRegularExpression qualified ("^\\w+:|^/|^[.]{1,2}(/|$)");
 
     // this is for module.require (which is a bound version of require that's always relative to the module path)
     if (!relativeTo.isEmpty()) {
         url = QUrl(relativeTo).resolved(moduleId);
         url = resolvePath(url.toString());
-    } else if (qualified.match(moduleId).hasMatch()) {
+    } else if (isAnchoredModuleSpecifier(moduleId)) {
         url = resolvePath(moduleId);
     } else {
         // check if the moduleId refers to a "system" module
@@ -1547,26 +1541,9 @@ QString ScriptManager::_requireResolve(const QString& moduleId, const QString& r
 
     // if it looks like a local file, verify that it's an allowed path and really a file
     if (url.isLocalFile()) {
-        QFileInfo file(url.toLocalFile());
-        QUrl canonical = url;
-        if (file.exists()) {
-            canonical.setPath(file.canonicalFilePath());
-        }
-
-        bool disallowOutsideFiles = !PathUtils::defaultScriptsLocation().isParentOf(canonical) && !currentSandboxURL.isLocalFile();
-        if (disallowOutsideFiles && !PathUtils::isDescendantOf(canonical, currentSandboxURL)) {
-            return throwResolveError(message.arg(
-                QString("path '%1' outside of origin script '%2' '%3'")
-                    .arg(PathUtils::stripFilename(url))
-                    .arg(PathUtils::stripFilename(currentSandboxURL))
-                    .arg(canonical.toString())
-            ));
-        }
-        if (!file.exists()) {
-            return throwResolveError(message.arg("path does not exist: " + url.toLocalFile()));
-        }
-        if (!file.isFile()) {
-            return throwResolveError(message.arg("path is not a file: " + url.toLocalFile()));
+        QString fileError = checkLocalModuleFile(url, currentSandboxURL);
+        if (!fileError.isEmpty()) {
+            return throwResolveError(message.arg(fileError));
         }
     }
 
