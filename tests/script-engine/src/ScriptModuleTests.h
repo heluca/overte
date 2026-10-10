@@ -42,6 +42,19 @@ private slots:
     void testRemoteEntryRefusesLocalImport();
     void testClassicScriptUnchanged();
     void testMicrotaskOrdering();
+    void testTopLevelAwait();
+    void testTopLevelAwaitRejection();
+    void testTopLevelAwaitRejectionWithoutAbort();
+    void testStalledTopLevelAwait();
+    void testDynamicImportFromModule();
+    void testDynamicImportFromClassicScript();
+    void testDynamicImportOfLoadedModule();
+    void testDynamicImportMissing();
+    void testDynamicImportBareSpecifier();
+    void testDynamicImportThrowingBody();
+    void testDynamicImportTopLevelAwaitRejection();
+    void testDeferredEvaluationInNestedLoop();
+    void testDynamicImportMicrotaskOrdering();
 
 private:
     struct Run {
@@ -59,6 +72,9 @@ private:
         int waitAfterRunMs { 0 };
         // The first file's URL, by default its file: URL; the first file's contents are its source either way
         QString entryURL;
+        // Files fetched into ScriptCache before the script runs, so that loading them is a cache hit, which ScriptCache
+        // answers synchronously
+        QStringList cachedFiles;
     };
 
     // Writes the files (path relative to the directory -> contents) and runs the first one as a top-level script
