@@ -931,6 +931,11 @@ ScriptMethodV8Proxy::ScriptMethodV8Proxy(ScriptEngineV8* engine, QObject* object
 }
 
 ScriptMethodV8Proxy::~ScriptMethodV8Proxy() {
+    // weakHandleCallback has reset the handle already. The deferred delete it posts can run once nothing holds the
+    // isolate lock, e.g. from an Agent's event loop after ScriptManager::run() returned, so V8 is not entered then.
+    if (_objectLifetime.IsEmpty()) {
+        return;
+    }
     auto isolate = _engine->getIsolate();
     Q_ASSERT(isolate->IsCurrent());
     v8::HandleScope handleScope(isolate);

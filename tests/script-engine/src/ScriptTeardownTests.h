@@ -14,12 +14,14 @@
 
 #include <QtTest/QtTest>
 
-// Destroying a script engine that still holds objects its script created (#45)
+// Destroying a script engine that still holds objects its script created (#45), and proxies collected after its script
+// finished (#50)
 class ScriptTeardownTests : public QObject {
     Q_OBJECT
 private slots:
     void initTestCase();
     void testTeardownWithScriptOwnedObjects();
+    void testMethodProxiesCollectedAfterScriptFinished();
 };
 
 #endif // overte_ScriptTeardownTests_h

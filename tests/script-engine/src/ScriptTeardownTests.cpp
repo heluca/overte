@@ -22,6 +22,7 @@
 #include "StatTracker.h"
 #include "WebSocketClass.h"
 #include "XMLHttpRequestClass.h"
+#include "v8/ScriptEngineV8.h"
 
 QTEST_MAIN(ScriptTeardownTests)
 
@@ -72,5 +73,52 @@ void ScriptTeardownTests::testTeardownWithScriptOwnedObjects() {
     delete thread;
 
     QCOMPARE(printed, QStringList({ "function function" }));
+    QVERIFY(engineDestroyed);
+}
+
+void ScriptTeardownTests::testMethodProxiesCollectedAfterScriptFinished() {
+    // Like an Agent body script (#50): a socket, a timer and an update handler, and wrapped native objects it drops, whose
+    // method proxies the garbage collector releases. They are made in a callback, as the ones made by top-level code stay
+    // reachable. Nothing listens on port 1.
+    static const QString SCRIPT =
+        "var socket = new WebSocket('ws://127.0.0.1:1');\n"
+        "Script.setInterval(function () {}, 10);\n"
+        "Script.update.connect(function () {});\n"
+        "Script.setTimeout(function () {\n"
+        "    for (var i = 0; i < 100; i++) { new XMLHttpRequest(); }\n"
+        "    print('created');\n"
+        "    Script.stop(true);\n"
+        "}, 0);\n";
+
+    QStringList printed;
+    bool engineDestroyed = false;
+    QThread* thread = QThread::create([&printed, &engineDestroyed] {
+        auto manager = newScriptManager(ScriptManager::NETWORKLESS_TEST_SCRIPT, SCRIPT, "testMethodProxies.js");
+        QObject::connect(manager.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString&) {
+            printed.append(message);
+        });
+        QObject::connect(manager->engine().get(), &QObject::destroyed, [&engineDestroyed] { engineDestroyed = true; });
+        {
+            auto engine = manager->engine();
+            auto scopeGuard = engine->getScopeGuard();
+            engine->globalObject().setProperty("XMLHttpRequest", engine->newFunction(XMLHttpRequestClass::constructor));
+            engine->globalObject().setProperty("WebSocket", engine->newFunction(WebSocketClass::constructor));
+            manager->run();
+            // A collection like those the script's own callbacks trigger; its weak callbacks post deferred deletes
+            std::dynamic_pointer_cast<ScriptEngineV8>(engine)->getIsolate()->LowMemoryNotification();
+        }
+        // As in an Agent after its script stopped: the thread's event loop delivers them while nothing holds the isolate
+        // lock, before the manager and engine are deleted
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        manager.reset();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    });
+    thread->start();
+    if (!thread->wait(TEARDOWN_TIMEOUT_MS)) {
+        QFAIL("script engine teardown did not finish");
+    }
+    delete thread;
+
+    QCOMPARE(printed, QStringList({ "created" }));
     QVERIFY(engineDestroyed);
 }
