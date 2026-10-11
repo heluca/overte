@@ -251,11 +251,12 @@ inline void initEntityTestDependencies() {
     initModuleTestDependencies();
 }
 
-// "@A", "@B", "@C" and "@CALLER" stand for the IDs, "@/path" for the URL of a file in the test directory, and
-// "@H/path" for one on the server whose base is given
+// "@A", "@B", "@C" and "@CALLER" stand for the IDs, "@/path" for the URL of a file in the test directory, "@P/path"
+// for its path without a scheme, and "@H/path" for a file on the server whose base is given
 inline QString fillEntityTest(QString text, const QTemporaryDir& dir, const QString& httpBase = QString()) {
     text.replace("@A", ENTITY_A).replace("@B", ENTITY_B).replace("@CALLER", CALLER).replace("@C", ENTITY_C);
     text.replace("@H/", httpBase);
+    text.replace("@P/", dir.path() + "/");
     static const QRegularExpression path("@/([\\w./-]+)");
     QRegularExpressionMatch match;
     while ((match = path.match(text)).hasMatch()) {

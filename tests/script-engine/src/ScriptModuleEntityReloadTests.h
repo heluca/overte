@@ -27,6 +27,8 @@ private slots:
     void testCommonJsCacheIdentity();
     void testFailureKeepsSharedEpoch();
     void testUnloadWhileOtherWaitsInTopLevelAwait();
+    void testSchemelessEntryURL();
+    void testCommonJsSharedAcrossEntryFiles();
 };
 
 #endif // overte_ScriptModuleEntityReloadTests_h

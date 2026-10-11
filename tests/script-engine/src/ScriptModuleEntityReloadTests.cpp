@@ -241,4 +241,58 @@ void ScriptModuleEntityReloadTests::testUnloadWhileOtherWaitsInTopLevelAwait() {
     QCOMPARE(run.printed, QStringList({ "body", "A [] B loading", "preload " + ENTITY_B, "B running" }));
 }
 
+void ScriptModuleEntityReloadTests::testSchemelessEntryURL() {
+    // A path without a scheme is fetched as a file: URL, so it is a module with an epoch of its own: its import resolves
+    // next to it, a reload fetches the import anew, and unloading releases its records
+    std::unique_ptr<EntityModuleProbe> probe;
+    QTemporaryDir dir;
+    auto run = runEntities(dir, {
+        { "main.mjs",
+          "await Probe.load('@A', '@P/door.mjs', false);\n"
+          "Probe.writeFile('@/dep.mjs', 'export const version = 2;');\n"
+          "Probe.unload('@A', '@P/door.mjs');\n"
+          "await Probe.load('@A', '@P/door.mjs', true);\n"
+          "const records = Probe.moduleRecords();\n"
+          "Probe.unload('@A', '@P/door.mjs');\n"
+          "print('released ' + (records - Probe.moduleRecords()));\n"
+          "Script.stop(true);\n" },
+        { "door.mjs",
+          "import { version } from './dep.mjs';\n"
+          "export default class { preload(id) { print('preload ' + import.meta.url + ' dep ' + version); } }\n" },
+        { "dep.mjs", "export const version = 1;\n" },
+    }, probe);
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QString url = urlOf(dir, "door.mjs");
+    QCOMPARE(run.printed, QStringList({ "preload " + url + " dep 1", "preload " + url + " dep 2", "released 2" }));
+}
+
+void ScriptModuleEntityReloadTests::testCommonJsSharedAcrossEntryFiles() {
+    // Entity scripts of different files importing one CommonJS file share it and Script.require.cache, whether or not
+    // their graphs were fetched anew; the same file with another query replaces it
+    std::unique_ptr<EntityModuleProbe> probe;
+    QTemporaryDir dir;
+    QString entity = "import util from './util.js';\n"
+                     "export default class { preload(id) { globalThis.utils.push(util); "
+                     "print('preload ' + id + ', required ' + (util === Script.require('@/util.js'))); } }\n";
+    auto run = runEntities(dir, {
+        { "main.mjs",
+          "globalThis.utils = [];\n"
+          "await Probe.load('@A', '@/door.mjs', false);\n"
+          "await Probe.load('@B', '@/lamp.mjs', false);\n"
+          "print('shared ' + (globalThis.utils[0] === globalThis.utils[1]));\n"
+          "await Probe.load('@C', '@/door.mjs?v=2', false);\n"
+          "print('replaced ' + (globalThis.utils[2] !== globalThis.utils[0]));\n"
+          "Script.stop(true);\n" },
+        { "door.mjs", entity },
+        { "lamp.mjs", entity },
+        { "util.js", "print('util body');\nmodule.exports = {};\n" },
+    }, probe);
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "util body", "preload " + ENTITY_A + ", required true",
+                                        "preload " + ENTITY_B + ", required true", "shared true", "util body",
+                                        "preload " + ENTITY_C + ", required true", "replaced true" }));
+}
+
 #include "moc_ScriptModuleEntityProbe.cpp"
