@@ -329,6 +329,8 @@ private:
     std::unique_ptr<ScriptEnvironmentTableV8> _environments;
     bool _environmentCarriedAcrossAwait { false };
     void initEnvironments(v8::Local<v8::Context> context);
+    // loadModule() without an environment that survives await: reports ScriptModuleLoaderV8::MODULES_UNAVAILABLE
+    void refuseModuleLoad(const QUrl& url, ScriptModuleCallback onEvaluated);
 #ifdef OVERTE_V8_MEMORY_DEBUG
     std::atomic<size_t> scriptValueCount{0};
     std::atomic<size_t> scriptValueProxyCount{0};

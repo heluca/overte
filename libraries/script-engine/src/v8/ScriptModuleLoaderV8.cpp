@@ -55,6 +55,10 @@ static std::atomic<quint64> nextLoaderId { 1 };
 
 void ScriptEngineV8::loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) {
     Q_ASSERT(QThread::currentThread() == thread());
+    if (!_environmentCarriedAcrossAwait) {
+        refuseModuleLoad(request.url, std::move(onEvaluated));
+        return;
+    }
     ScriptModuleRequest withEnvironment = request;
     if (!withEnvironment.environment) {
         withEnvironment.environment = std::make_shared<ScriptEnvironment>(EntityItemID(), request.sandboxURL, request.epoch);

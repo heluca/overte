@@ -15,6 +15,7 @@
 
 #include "ScriptEngineLoggingV8.h"
 #include "ScriptEngineV8.h"
+#include "ScriptModuleLoaderV8.h"
 
 ScriptEnvironmentTableV8::ScriptEnvironmentTableV8(ScriptEngineV8* engine) : _engine(engine) {
     v8::Isolate* isolate = engine->getIsolate();
@@ -46,7 +47,7 @@ ScriptEnvironmentPointer ScriptEnvironmentTableV8::current() {
     }
     // Only setCurrent() puts objects in CPED, and an entry lives as long as its object
     auto entry = static_cast<Entry*>(object->GetAlignedPointerFromInternalField(0));
-    return entry ? entry->environment : ScriptEnvironmentPointer();
+    return entry && entry->table == this ? entry->environment : ScriptEnvironmentPointer();
 }
 
 void ScriptEnvironmentTableV8::setCurrent(const ScriptEnvironmentPointer& environment) {
@@ -117,6 +118,23 @@ void ScriptEngineV8::initEnvironments(v8::Local<v8::Context> context) {
     }
 }
 
+void ScriptEngineV8::refuseModuleLoad(const QUrl& url, ScriptModuleCallback onEvaluated) {
+    // Reported from the event loop, as a load failure always is
+    QMetaObject::invokeMethod(this, [this, url, onEvaluated = std::move(onEvaluated)] {
+        QString message = ScriptModuleLoaderV8::MODULES_UNAVAILABLE;
+        auto exception = std::make_shared<ScriptEngineException>(message, "module loading", -1);
+        if (_manager) {
+            _manager->scriptErrorMessage(message, url.toString(), -1);
+        } else {
+            qCWarning(scriptengine_v8) << message;
+        }
+        setUncaughtException(exception);
+        if (onEvaluated) {
+            onEvaluated(undefinedValue(), exception);
+        }
+    }, Qt::QueuedConnection);
+}
+
 ScriptEnvironmentPointer ScriptEngineV8::currentEnvironment() {
     // Other threads (log messages, for one) get none: the script thread holds the isolate's lock while it runs
     if (!_environments || QThread::currentThread() != thread()) {
@@ -128,7 +146,7 @@ ScriptEnvironmentPointer ScriptEngineV8::currentEnvironment() {
 
 ScriptEnvironmentPointer ScriptEngineV8::swapCurrentEnvironment(const ScriptEnvironmentPointer& environment) {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (!_environments) {
+    if (!_environments || QThread::currentThread() != thread()) {
         return ScriptEnvironmentPointer();
     }
     auto scopeGuard = getScopeGuard();

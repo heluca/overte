@@ -60,6 +60,10 @@ public:
                                                                v8::Local<v8::String> specifier,
                                                                v8::Local<v8::FixedArray> importAttributes);
 
+    /// Why loadModule and import() refuse when the CPED self-test failed (ScriptEnvironmentTableV8::selfTest): module
+    /// code would lose its entity, sandbox and permission environment at its first await
+    static constexpr const char* MODULES_UNAVAILABLE { "ES modules unavailable: V8 does not preserve continuation data" };
+
     static QString toQString(v8::Isolate* isolate, v8::Local<v8::Value> value);
     static v8::Local<v8::String> toV8String(v8::Isolate* isolate, const QString& text);
     /// "url:line", or the URL alone without a line

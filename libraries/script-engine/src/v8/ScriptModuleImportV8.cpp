@@ -94,8 +94,9 @@ v8::MaybeLocal<v8::Promise> ScriptModuleLoaderV8::importModuleDynamically(v8::Lo
     QUrl sandboxURL = environment->sandboxURL;
 
     ScriptPromise promise = engine->newPromise();
-    QString error;
-    QUrl url = resolveImport(site, importAttributes->Length() > 0, sandboxURL, &error);
+    QString error = MODULES_UNAVAILABLE;
+    QUrl url = engine->isEnvironmentCarriedAcrossAwait()
+        ? resolveImport(site, importAttributes->Length() > 0, sandboxURL, &error) : QUrl();
     if (url.isEmpty()) {
         V8ScriptValue reason(engine, v8::Exception::TypeError(toV8String(isolate, error)));
         promise.resolver->reject(ScriptValue(new ScriptValueV8Wrapper(engine, std::move(reason))));
