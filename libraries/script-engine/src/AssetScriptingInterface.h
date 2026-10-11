@@ -143,12 +143,17 @@ public:
      * @param {Assets~setMappingCallback} callback - The function to call upon completion.
      */
     /*@jsdoc
+     * What the promise returned by {@link Assets.setMapping} resolves with, and the callback's second argument.
+     * @typedef {object} Assets.SetMappingResult
+     * @property {number} error - The error code: <code>0</code> once the mapping is set.
+     */
+    /*@jsdoc
      * Sets a path-to-hash mapping within the asset server.
      * @function Assets.setMapping
      * @param {string} path - A user-friendly path for the file in the asset server, without leading <code>"atp:"</code>.
      * @param {string} hash - The hash in the asset server.
-     * @returns {Promise<void>} Resolves once the path-to-hash mapping is set; rejects with an <code>Error</code> describing
-     *     the error, whose <code>error</code> property is the error code, if it isn't.
+     * @returns {Promise<Assets.SetMappingResult>} Resolves once the path-to-hash mapping is set; rejects with an
+     *     <code>Error</code> describing the error, whose <code>error</code> property is the error code, if it isn't.
      */
     Q_INVOKABLE ScriptValue setMapping(QString path, QString hash, const ScriptValue& callback = ScriptValue());
 
