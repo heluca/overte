@@ -668,7 +668,7 @@ public slots:
      * runs synchronously: an <code>async</code> method must read it before its first <code>await</code>. For an assignment 
      * client (Agent) script, it is the Agent's session ID, the same as its avatar's ID, and it stays the same for as long as 
      * the assignment runs.</p>
-     * <p><strong>Supported Script Types:</strong> Interface Scripts &bull; Client Entity Scripts &bull; Avatar Scripts &bull; 
+     * <p class="availableIn"><strong>Supported Script Types:</strong> Interface Scripts &bull; Client Entity Scripts &bull; Avatar Scripts &bull; 
      * Assignment Client Scripts</p>
      * @function Entities.callEntityServerMethod
      * @param {Uuid} entityID - The ID of the entity to call the method in.
@@ -952,7 +952,7 @@ public slots:
 
     /*@jsdoc
      * Reloads an entity's server entity script such that the latest version re-downloaded.
-     * <p><strong>Supported Script Types:</strong> Interface Scripts &bull; Client Entity Scripts &bull; Avatar Scripts &bull; 
+     * <p class="availableIn"><strong>Supported Script Types:</strong> Interface Scripts &bull; Client Entity Scripts &bull; Avatar Scripts &bull; 
      * Assignment Client Scripts</p>
      * @function Entities.reloadServerScripts
      * @param {Uuid} entityID - The ID of the entity to reload the server entity script of.
@@ -964,7 +964,7 @@ public slots:
 
     /*@jsdoc
      * Gets the status of a server entity script attached to an entity.
-     * <p><strong>Supported Script Types:</strong> Interface Scripts &bull; Client Entity Scripts &bull; Avatar Scripts &bull; 
+     * <p class="availableIn"><strong>Supported Script Types:</strong> Interface Scripts &bull; Client Entity Scripts &bull; Avatar Scripts &bull; 
      * Assignment Client Scripts</p>
      * @function Entities.getServerScriptStatus
      * @param {Uuid} entityID - The ID of the entity to get the server entity script status of.

@@ -1346,6 +1346,7 @@ void EntityScriptingInterface::handleEntityScriptCallMethodPacket(QSharedPointer
         // An assignment-client Agent has no entity tree before its script starts or after it finishes
         auto entityTree = getEntityTree();
         if (!entityTree) {
+            qCDebug(entities) << "Dropped a call to" << method << "on" << entityID << "with no entity tree";
             return;
         }
         auto entity = entityTree->findEntityByEntityItemID(entityID);
