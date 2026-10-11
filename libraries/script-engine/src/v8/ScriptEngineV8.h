@@ -158,11 +158,12 @@ public:  // ScriptEngine implementation
     virtual void queueMicrotask(const ScriptValue& callback) override;
     virtual void loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) override;
     virtual void reportStalledTopLevelAwaits() override;
-    virtual int newModuleEpoch() override;
+    virtual int newModuleEpoch(bool reload) override;
     virtual void releaseModuleEpoch(int epoch) override;
     virtual ScriptValue callReportingRejection(const ScriptValue& function, const ScriptValue& thisObject,
         const ScriptValueList& args,
         std::function<void(const QString& reason, const QString& fileName, int lineNumber)> onRejected) override;
+    virtual ScriptValue constructCatching(const ScriptValue& constructor, std::shared_ptr<ScriptException>* thrown) override;
     virtual ScriptEnvironmentPointer currentEnvironment() override;
     virtual ScriptEnvironmentPointer swapCurrentEnvironment(const ScriptEnvironmentPointer& environment) override;
     virtual void compileTest() override;
@@ -346,6 +347,8 @@ private:
     int _lastModuleEpoch { 0 };
     // Epochs whose modules all bypass ScriptCache, see ScriptModuleRequest::forceDownload
     QSet<int> _downloadModuleEpochs;
+    // Epochs made for a reload, see newModuleEpoch()
+    QSet<int> _reloadModuleEpochs;
     void applyModuleEpochDownload(ScriptModuleRequest& request);
     // Reports the modules of the epoch (of every epoch if negative) still suspended in a top-level await, as a warning
     // starting with what

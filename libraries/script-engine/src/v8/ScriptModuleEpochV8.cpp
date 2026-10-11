@@ -23,9 +23,14 @@
 #include "ScriptEngineV8.h"
 #include "ScriptValueV8Wrapper.h"
 
-int ScriptEngineV8::newModuleEpoch() {
+int ScriptEngineV8::newModuleEpoch(bool reload) {
     Q_ASSERT(QThread::currentThread() == thread());
-    return ++_lastModuleEpoch;
+    int epoch = ++_lastModuleEpoch;
+    if (reload) {
+        _reloadModuleEpochs.insert(epoch);
+        _downloadModuleEpochs.insert(epoch);
+    }
+    return epoch;
 }
 
 void ScriptEngineV8::applyModuleEpochDownload(ScriptModuleRequest& request) {
@@ -42,6 +47,7 @@ void ScriptEngineV8::releaseModuleEpoch(int epoch) {
     Q_ASSERT(QThread::currentThread() == thread());
     reportStalledTopLevelAwaits(epoch, "Entity script unloaded while a top-level await was still pending at ");
     _downloadModuleEpochs.remove(epoch);
+    _reloadModuleEpochs.remove(epoch);
     ScriptModuleLoaderV8::releaseEpoch(this, epoch);
 }
 

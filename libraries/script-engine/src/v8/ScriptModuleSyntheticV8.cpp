@@ -142,8 +142,21 @@ v8::MaybeLocal<v8::Value> ScriptModuleLoaderV8::evaluateCommonJs(ScriptEngineV8*
     ScriptValue cache = jsRequire.property("cache");
     ScriptValue module = cache.property(modulePath);
     // The test Script.require makes for a cached module. A reload's epoch evaluates the file it fetched anew instead,
-    // replacing the entry for every later Script.require too.
-    if (record.forceDownload || !module.property("exports").isObject()) {
+    // replacing the entry for every later Script.require too; so does a graph fetched anew for a changed entry URL
+    // when the entry was made by another epoch's import, not by Script.require.
+    auto isOtherEpochsImport = [&] {
+        v8::Local<v8::Value> value = ScriptValueV8Wrapper::fullUnwrap(engine, module).get();
+        for (const auto& other : engine->_modules->records()) {
+            if (other->epoch != record.epoch && !other->commonJsModule.IsEmpty()
+                && other->commonJsModule.Get(isolate)->StrictEquals(value)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    bool reevaluate = record.forceDownload
+        && (engine->_reloadModuleEpochs.contains(record.epoch) || isOtherEpochsImport());
+    if (reevaluate || !module.property("exports").isObject()) {
         module = manager->newModule(modulePath);
         // Before evaluation, as in Script.require, so that a cyclic require() finds it
         cache.setProperty(modulePath, module);

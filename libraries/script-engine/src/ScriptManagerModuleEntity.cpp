@@ -23,14 +23,16 @@
 #include "ScriptModuleResolver.h"
 
 int ScriptManager::entityModuleEpoch(const QString& scriptURL, bool forceRedownload) {
-    if (!isModuleURL(QUrl(scriptURL))) {
+    // Script text given inline, which ScriptCache does not fetch, is never a module
+    QUrl url(scriptURL);
+    if (!isModuleURL(url) || url.scheme().isEmpty() || url.scheme() == "javascript") {
         return 0;
     }
     auto current = _entityModuleEpochs.find(scriptURL);
     bool join = current != _entityModuleEpochs.end()
         && (!forceRedownload || (current->forceDownload && !current->loadStarted));
     if (!join) {
-        int epoch = _engine->newModuleEpoch();
+        int epoch = _engine->newModuleEpoch(forceRedownload);
         _entityModuleEpochsInUse.insert(epoch);
         current = _entityModuleEpochs.insert(scriptURL, { epoch, forceRedownload, false });
     }
@@ -51,20 +53,25 @@ void ScriptManager::loadEntityModule(const EntityItemID& entityID, const QString
     }
     int epoch = details.moduleEpoch;
     auto current = _entityModuleEpochs.find(scriptURL);
-    bool startsEpoch = current != _entityModuleEpochs.end() && current->epoch == epoch && !current->loadStarted;
+    bool isCurrent = current != _entityModuleEpochs.end() && current->epoch == epoch;
+    bool startsEpoch = isCurrent && !current->loadStarted;
+    bool reloadEpoch = isCurrent && current->forceDownload;
     if (startsEpoch) {
         current->loadStarted = true;
     }
     // The graph is fetched as freshly as its entry was: from the network after a reload, a first load or a changed URL
     // (a cache-busting query on the entry alone would otherwise leave its imports as ScriptCache had them)
-    bool forceDownload = startsEpoch && fetchStatus != ScriptCache::STATUS_CACHED;
+    bool forceDownload = reloadEpoch || (startsEpoch && fetchStatus != ScriptCache::STATUS_CACHED);
+    // A load that joined a reload with its entry from ScriptCache, which still holds the old one while the reload's
+    // fetch is in flight, may arrive first: the entry is fetched anew
+    QString source = reloadEpoch && fetchStatus == ScriptCache::STATUS_CACHED ? QString() : contents;
 
     QUrl url(scriptURL);
     QUrl sandboxURL = currentSandboxURL().isEmpty() ? url : currentSandboxURL();
     auto environment = std::make_shared<ScriptEnvironment>(entityID, sandboxURL, epoch);
     // A second entity script with the URL joins the graph already in the epoch, in flight or evaluated, and waits for
     // its top-level await if there is one
-    _engine->loadModule({ url, contents, sandboxURL, epoch, forceDownload, environment },
+    _engine->loadModule({ url, source, sandboxURL, epoch, forceDownload, environment },
         [this, entityID, scriptURL, epoch, environment, lastModified](const ScriptValue& moduleNamespace,
                                                                       std::shared_ptr<ScriptException> error) {
             entityModuleEvaluated(entityID, scriptURL, epoch, environment, lastModified, moduleNamespace, error);
@@ -107,14 +114,16 @@ void ScriptManager::entityModuleEvaluated(const EntityItemID& entityID, const QS
     }
 
     ScriptValue entityScriptObject;
-    doWithEnvironment(entityID, environment->sandboxURL, [&] { entityScriptObject = constructor.construct(); },
-                      environment);
-    if (!entityScriptObject.isObject()) {
-        // construct() has logged why
-        QString message = QString("Could not construct the default export of %1").arg(scriptURL);
-        doWithEnvironment(entityID, environment->sandboxURL, [&] { scriptErrorMessage(message, scriptURL, -1); },
-                          environment);
-        setError(message);
+    std::shared_ptr<ScriptException> thrown;
+    doWithEnvironment(entityID, environment->sandboxURL, [&] {
+        entityScriptObject = _engine->constructCatching(constructor, &thrown);
+    }, environment);
+    if (thrown) {
+        QString errorInfo = thrown->backtrace.isEmpty() ? thrown->errorMessage : thrown->backtrace.join("\n");
+        QString message = QString("Error in the constructor of %1: %2").arg(scriptURL, errorInfo);
+        doWithEnvironment(entityID, environment->sandboxURL,
+                          [&] { scriptErrorMessage(message, scriptURL, thrown->errorLine); }, environment);
+        setError(errorInfo);
         return;
     }
 
