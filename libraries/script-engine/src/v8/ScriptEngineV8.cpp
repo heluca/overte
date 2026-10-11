@@ -17,6 +17,7 @@
 #include <chrono>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEventLoop>
@@ -547,6 +548,11 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
         return nullValue();
     }
     MicrotaskCheckpointScopeV8 microtaskCheckpointScope(this);
+    ScriptClosureFailureV8* failure = std::exchange(_closureFailure, nullptr);
+    if (failure) {
+        // Until the code has run, so that every early return below counts as a failure
+        failure->failed = true;
+    }
     _evaluatingCounter++;
     Q_ASSERT(_v8Isolate->IsCurrent());
     v8::HandleScope handleScope(_v8Isolate);
@@ -618,12 +624,18 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
         if (compileResult->state() != ScriptSyntaxCheckResult::Valid) {
             QString errorMessage(QString("Can't compile script for evaluating in closure. Error message: : \"") + compileResult->errorMessage() + QString("\" ")
                 + QString(" line: ") + QString::number(compileResult->errorLineNumber()) + " column: " + QString::number(compileResult->errorColumnNumber()));
-            if (_manager) {
-                _manager->scriptErrorMessage(errorMessage, _program->fileName(),
-                                                      compileResult->errorLineNumber());
+            if (failure) {
+                failure->syntaxError = compileResult->errorMessage();
+                failure->fileName = _program->fileName();
+                failure->line = compileResult->errorLineNumber();
+            } else {
+                if (_manager) {
+                    _manager->scriptErrorMessage(errorMessage, _program->fileName(), compileResult->errorLineNumber());
+                }
+                qCCritical(scriptengine_v8) << errorMessage << _program->fileName() << ":" << compileResult->errorLineNumber();
             }
-            qCCritical(scriptengine_v8) << errorMessage << _program->fileName() << ":" << compileResult->errorLineNumber();
             popContext();
+            _evaluatingCounter--;
             return nullValue();
         }
         const V8ScriptProgram& program = unwrappedProgram->toV8Value();
@@ -735,7 +747,17 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
 
             auto maybeResult = program.constGet()->GetUnboundScript()->BindToCurrentContext()->Run(closureContext);
             v8::Local<v8::Value> v8Result;
-            if (!maybeResult.ToLocal(&v8Result)) {
+            if (!maybeResult.ToLocal(&v8Result) && failure) {
+                // Handed over before anything formats its stack, which would lose the location V8 reports it at
+                failure->exception.Reset(_v8Isolate, tryCatch.Exception());
+                v8::Local<v8::Message> exceptionMessage = tryCatch.Message();
+                if (!exceptionMessage.IsEmpty()) {
+                    // The throw site, which may be in a file the code require()d
+                    failure->fileName = QString(*v8::String::Utf8Value(_v8Isolate, exceptionMessage->GetScriptResourceName()));
+                    failure->line = exceptionMessage->GetLineNumber(closureContext).FromMaybe(-1);
+                }
+                v8Result = v8::Null(_v8Isolate);
+            } else if (!maybeResult.ToLocal(&v8Result)) {
                 v8::String::Utf8Value utf8Value(getIsolate(), tryCatch.Exception());
                 QString errorMessage = QString(__FUNCTION__) + " hasCaught:" + QString(*utf8Value) + "\n"
                     + "tryCatch details:" + formatErrorMessageFromTryCatch(tryCatch);
@@ -751,6 +773,8 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
                 } else {
                     qWarning(scriptengine_v8) << errorMessage;
                 }
+            } else if (failure) {
+                failure->failed = false;
             }
 
             if (hasUncaughtException()) {

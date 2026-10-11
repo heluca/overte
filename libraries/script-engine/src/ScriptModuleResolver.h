@@ -34,6 +34,11 @@ bool isAnchoredModuleSpecifier(const QString& specifier);
 /// Whether the URL names an ES module, by its .mjs extension. A query string or fragment does not count.
 bool isModuleURL(const QUrl& url);
 
+/// What an import of a URL loads, by the extension of its path (a query string or fragment does not count): .mjs is an
+/// ES module, .js a CommonJS file evaluated as Script.require does, .json a JSON file (only with { type: 'json' }).
+enum class ScriptModuleKind { SourceText, CommonJS, Json, Unsupported };
+ScriptModuleKind moduleKindOf(const QUrl& url);
+
 /// Resolves an import specifier against the importing module's URL. Accepted: absolute URLs, Windows paths with a
 /// drive letter, "/~/" paths into the default scripts, and "/", "./" or "../" paths resolved against the referrer as
 /// URLs ("/" is the root of the referrer's origin, or of its drive for a local Windows referrer). Bare specifiers

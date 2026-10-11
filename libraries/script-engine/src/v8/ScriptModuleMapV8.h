@@ -28,15 +28,25 @@
 
 #include "v8.h"
 
+#include "../ScriptModuleResolver.h"
+
 /// [V8] One ES module of an engine's module map.
 struct ScriptModuleRecordV8 {
     enum class State { Fetching, Compiled, Failed };
 
     State state { State::Fetching };
+    /// From the URL's extension. CommonJS and JSON files are synthetic modules with a single default export.
+    ScriptModuleKind kind { ScriptModuleKind::SourceText };
     /// Resolved URL as imported: the map key, the ScriptOrigin resource name and import.meta.url
     QUrl url;
     int epoch { 0 };
     v8::Global<v8::Module> module;
+    /// A CommonJS file's source, from its fetch until its evaluation
+    QString commonJsSource;
+    /// A JSON file's value, parsed when it is fetched, until its evaluation
+    v8::Global<v8::Value> jsonValue;
+    /// What a CommonJS file's evaluation failed with, when it is not an Error; errorFileName and errorLine say where
+    v8::Global<v8::Value> commonJsError;
     /// Specifier -> resolved URL for each static import, filled when a loader walks the record
     QHash<QString, QUrl> resolvedImports;
 
