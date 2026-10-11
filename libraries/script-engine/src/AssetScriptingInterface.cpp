@@ -268,7 +268,9 @@ ScriptValue AssetScriptingInterface::getAsset(const ScriptValue& options, const 
     COMPLETION_VERIFY(options.isObject() || options.isString(), "expected request options Object or URL as first parameter");
 
     auto decompress = options.property("decompress").toBool() || options.property("compressed").toBool();
-    auto responseType = options.property("responseType").toString().toLower();
+    // An absent property's toString() is "undefined", not empty
+    auto responseTypeOption = options.property("responseType");
+    auto responseType = responseTypeOption.isValid() ? responseTypeOption.toString().toLower() : QString();
     auto url = options.property("url").toString();
     if (options.isString()) {
         url = options.toString();
@@ -362,7 +364,8 @@ ScriptValue AssetScriptingInterface::decompressData(const ScriptValue& options, 
     COMPLETION_VERIFY(true, QString());
     auto data = options.property("data");
     QByteArray dataByteArray = scriptvalue_cast<QByteArray>(data);
-    auto responseType = options.property("responseType").toString().toLower();
+    auto responseTypeOption = options.property("responseType");
+    auto responseType = responseTypeOption.isValid() ? responseTypeOption.toString().toLower() : QString();
     if (responseType.isEmpty()) {
         responseType = "text";
     }
