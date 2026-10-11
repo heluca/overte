@@ -55,8 +55,12 @@ private slots:
     void testArgumentErrors();
     void testEnvironmentAfterAwait();
     void testStopBeforeSettle();
+    void testEngineGoneBeforeSettle();
     void testUnhandledRejection();
     void testLoadRecording();
+    void testLoadRecordingLoaded();
+    void testLoadRecordingWithoutManager();
+    void testRejectionDetails();
 };
 
 #endif // overte_PromiseApiTests_h

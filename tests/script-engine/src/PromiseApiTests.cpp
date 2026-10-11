@@ -23,7 +23,11 @@
 #include "ScriptEnvironment.h"
 #include "ScriptModuleTestRunner.h"
 #include "ScriptValueUtils.h"
+#include <recording/Clip.h>
 #include <recording/ClipCache.h>
+#include <recording/Deck.h>
+#include <recording/Frame.h>
+#include <recording/Recorder.h>
 #include <recording/RecordingScriptingInterface.h>
 
 QTEST_MAIN(PromiseApiTests)
@@ -100,6 +104,8 @@ void PromiseApiTests::initTestCase() {
     DependencyManager::set<AssetClient>();
     initModuleTestDependencies();
     DependencyManager::set<ResourceCacheSharedItems>();
+    DependencyManager::set<recording::Deck>();
+    DependencyManager::set<recording::Recorder>();
     DependencyManager::set<recording::ClipCache>();
     DependencyManager::set<RecordingScriptingInterface>();
 }
@@ -325,6 +331,23 @@ Script.stop(true);
     probe->kept.reset();
 }
 
+void PromiseApiTests::testEngineGoneBeforeSettle() {
+    // The engine is destroyed while the resolver is still unsettled: completing and releasing it afterwards is a no-op
+    std::unique_ptr<PromiseApiProbe> probe;
+    QTemporaryDir dir;
+    auto run = runScript(dir, {
+        { "main.js", "Probe.later().then(function() { print('settled'); });\nScript.stop(true);\n" },
+    }, withGlobals(probe));
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(!probe->kept->engine());
+    probe->kept->complete(QString(), QVariantMap({ { "value", 1 } }));
+    probe->kept.reset();
+    QCoreApplication::processEvents();
+    QCOMPARE(run.printed, QStringList());
+}
+
 void PromiseApiTests::testUnhandledRejection() {
     // A promise form left without a handler is reported as any unhandled rejection is, with where it was made
     std::unique_ptr<PromiseApiProbe> probe;
@@ -352,8 +375,8 @@ void PromiseApiTests::testUnhandledRejection() {
 
 void PromiseApiTests::testLoadRecording() {
     // #31: without a callback and with the clip not cached, loadRecording dereferenced a null engine. It now returns a
-    // promise, pending while the clip loads. The URLs differ because the clip cache keeps a failed clip, which then
-    // never signals again.
+    // promise, pending while the clip loads. The empty URL makes a clip loader that has failed before anyone waits on
+    // it and never signals: it is rejected at once rather than left pending.
     std::unique_ptr<PromiseApiProbe> probe;
     QTemporaryDir dir;
     auto missing = [&dir](const QString& name) { return urlOf(dir, name); };
@@ -378,6 +401,8 @@ const callback = await new Promise(resolve => {
 print('callback ' + callback);
 await Recording.loadRecording(URLS[2], null).catch(e => print('null ' + e.message));
 await Recording.loadRecording(URLS[3], 42).catch(e => print('42 ' + e.name + ': ' + e.message));
+await Recording.loadRecording('').catch(e => print('empty [' + e.message + ']'));
+Recording.loadRecording('', function(success, url) { print('empty callback ' + success + ' [' + url + ']'); });
 Script.stop(true);
 )JS" },
     }, withGlobals(probe));
@@ -389,5 +414,69 @@ Script.stop(true);
         "callback undefined false " + missing("two.hfr"),
         "null Failed to load recording: " + missing("three.hfr"),
         "42 TypeError: callback is not a function",
+        "empty [Failed to load recording: ]",
+        "empty callback false []",
     }));
+}
+
+void PromiseApiTests::testLoadRecordingLoaded() {
+    // A clip that loads resolves with its URL, and is queued on the deck; loaded again from the cache, it resolves at
+    // once, in both forms
+    QTemporaryDir dir;
+    auto clip = recording::Clip::newClip();
+    clip->addFrame(std::make_shared<recording::Frame>(recording::Frame::registerFrameType("PromiseApiTests"),
+                                                      recording::Frame::secondsToFrameTime(0.5f),
+                                                      QByteArray("frame")));
+    recording::Clip::toFile(dir.filePath("clip.hfr"), clip);
+    QString url = urlOf(dir, "clip.hfr");
+    std::unique_ptr<PromiseApiProbe> probe;
+    auto run = runScript(dir, {
+        { "main.mjs", "const URL = '" + url + "';\n" + R"JS(
+print('loaded ' + ((await Recording.loadRecording(URL)) === URL) + ' length ' + Recording.playerLength());
+let returned = 'not yet';
+returned = Recording.loadRecording(URL, function(success, url) { print('cached callback ' + returned + ' ' + success + ' ' + (url === URL)); });
+print('cached returned ' + typeof returned);
+print('cached promise ' + ((await Recording.loadRecording(URL)) === URL));
+Script.stop(true);
+)JS" },
+    }, withGlobals(probe));
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "loaded true length 0.5", "cached callback not yet true true",
+                                        "cached returned undefined", "cached promise true" }));
+}
+
+void PromiseApiTests::testLoadRecordingWithoutManager() {
+    // An engine without a ScriptManager cannot wait for the clip: the promise rejects instead of staying pending
+    QTemporaryDir dir;
+    auto engine = newScriptEngine();
+    auto scopeGuard = engine->getScopeGuard();
+    engine->globalObject().setProperty("Recording",
+        engine->newQObject(DependencyManager::get<RecordingScriptingInterface>().data()));
+    engine->evaluate("Recording.loadRecording('" + urlOf(dir, "unmanaged.hfr") + "')"
+                     ".catch(function(e) { globalThis.outcome = e.name + ': ' + e.message; });");
+    QVERIFY(!engine->hasUncaughtException());
+    QCOMPARE(engine->globalObject().property("outcome").toString(),
+             "Error: Failed to load recording: " + urlOf(dir, "unmanaged.hfr"));
+}
+
+void PromiseApiTests::testRejectionDetails() {
+    // The result's properties are copied onto the Error, but never over its own message, name or stack
+    std::unique_ptr<PromiseApiProbe> probe;
+    QTemporaryDir dir;
+    auto run = runScript(dir, {
+        { "main.mjs", R"JS(
+const later = Probe.later();
+Probe.completeLater('boom', { code: 3, message: 'not this', name: 'NotThis', stack: 'not this either' });
+try {
+    await later;
+} catch (e) {
+    print(e.name + ': ' + e.message + ' code ' + e.code + ' stack replaced ' + (e.stack === 'not this either'));
+}
+Script.stop(true);
+)JS" },
+    }, withGlobals(probe));
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "Error: boom code 3 stack replaced false" }));
 }
