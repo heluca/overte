@@ -2107,25 +2107,16 @@ QVariant ScriptManager::cloneEntityScriptDetails(const EntityItemID& entityID, c
 #ifdef DEBUG_ENTITY_STATES
         qCDebug(scriptengine) << "cloneEntityScriptDetails" << entityID << QThread::currentThread();
 #endif
-        EntityScriptDetails scriptDetails;
-        if (getEntityScriptDetails(entityID, scriptURL, scriptDetails)) {
+        EntityScriptStatus status { EntityScriptStatus::PENDING };
+        QString errorInfo;
+        if (getEntityScriptStatus(entityID, scriptURL, status, errorInfo)) {
 #ifdef DEBUG_ENTITY_STATES
-            qCDebug(scriptengine) << "gotEntityScriptDetails" << scriptDetails.status << QThread::currentThread();
+            qCDebug(scriptengine) << "gotEntityScriptDetails" << status << QThread::currentThread();
 #endif
             map["isRunning"] = isEntityScriptRunning(entityID, scriptURL);
-            map["status"] = EntityScriptStatus_::valueToKey(scriptDetails.status).toLower();
-            map["errorInfo"] = scriptDetails.errorInfo;
+            map["status"] = EntityScriptStatus_::valueToKey(status).toLower();
+            map["errorInfo"] = errorInfo;
             map["entityID"] = entityID.toString();
-#ifdef DEBUG_ENTITY_STATES
-            {
-                auto debug = QVariantMap();
-                debug["script"] = scriptDetails.scriptText;
-                debug["scriptObject"] = scriptDetails.scriptObject.toVariant();
-                debug["lastModified"] = (qlonglong)scriptDetails.lastModified;
-                debug["sandboxURL"] = scriptDetails.definingSandboxURL;
-                map["debug"] = debug;
-            }
-#endif
         } else {
 #ifdef DEBUG_ENTITY_STATES
             qCDebug(scriptengine) << "!gotEntityScriptDetails" <<  QThread::currentThread();
@@ -2179,7 +2170,7 @@ void ScriptManager::loadEntityScript(const EntityItemID& entityID, const QString
     if (isStopping() || !scriptEngines || scriptEngines->isStopped()) {
         qCDebug(scriptengine) << "loadEntityScript.start " << entityID.toString()
                                      << " but isStopping==" << isStopping()
-                                     << " || engines->isStopped==" << scriptEngines->isStopped();
+                                     << " || engines->isStopped==" << (scriptEngines && scriptEngines->isStopped());
         return;
     }
 
