@@ -74,6 +74,13 @@ void EnvironmentProbe::unloadEntity(const QString& entityID, const QString& url)
     _manager->unloadEntityScript(EntityItemID(QUuid(entityID)), url);
 }
 
+ScriptValue EnvironmentProbe::resolveLater() {
+    ScriptPromise promise = _manager->engine()->newPromise();
+    auto resolver = promise.resolver;
+    QMetaObject::invokeMethod(_manager, [resolver] { resolver->resolve(QVariant(true)); }, Qt::QueuedConnection);
+    return promise.promise;
+}
+
 static Options withProbe(std::unique_ptr<EnvironmentProbe>& probe, Options options = Options()) {
     options.beforeRun = [&probe](ScriptManager* manager) {
         probe = std::make_unique<EnvironmentProbe>(manager);
@@ -155,6 +162,44 @@ void ScriptModuleEnvTests::testClassicEntityTimerKeepsEntity() {
     QCOMPARE(run.errors, QStringList());
     QCOMPARE(run.printed, QStringList({ "preload " + ENTITY, "timer " + ENTITY,
                                         "continuation timer " + ENTITY + " " + ENTITY_URL }));
+}
+
+void ScriptModuleEnvTests::testClassicEntityImportAfterAwait() {
+    // A classic entity script's continuation keeps its entity and sandbox after awaiting a promise settled outside the
+    // entity's own calls (as fetch()'s is), not only after a timer it set, whose callback runs in its environment: a
+    // module it import()s there gets them, and its timer is cleared with the entity's. Permission checks in the classic
+    // code keep the classic frame rule before and after the awaits: a gated native passed straight to then() is judged
+    // by the manager's URL, where the module rule would refuse it.
+    HeldScriptServer server("print('lib ' + import.meta.url + ' ' + Probe.entityID() + ' ' + Probe.sandboxURL());\n"
+                            "Script.setTimeout(function() { print('lib timer after unload'); }, 0);\n"
+                            "export const loaded = true;\n");
+    QString entityURL = QString(server.url()).replace("held.js", "dir/entity.js");
+    QString libURL = QString(server.url()).replace("held.js", "dir/lib.mjs");
+    std::unique_ptr<EnvironmentProbe> probe;
+    QTemporaryDir dir;
+    QString entity =
+        "(function() {\n"
+        "    this.preload = async function() {\n"
+        "        var frameless = await Promise.resolve().then(Probe.allowed);\n"
+        "        print('before ' + Probe.allowed() + ' ' + frameless + ' ' + Probe.entityID());\n"
+        "        await new Promise(function(resolve) { Script.setTimeout(resolve, 0); });\n"
+        "        await Probe.resolveLater();\n"
+        "        frameless = await Promise.resolve().then(Probe.allowed);\n"
+        "        print('after ' + Probe.allowed() + ' ' + frameless + ' ' + Probe.entityID() + ' '\n"
+        "              + Probe.sandboxURL());\n"
+        "        var ns = await import('./lib.mjs');\n"
+        "        print('imported ' + ns.loaded);\n"
+        "        Probe.unloadEntity('" + ENTITY + "', '" + entityURL + "');\n"
+        "        Script.setTimeout(function() { print('end'); Script.stop(true); }, 0);\n"
+        "    };\n"
+        "})\n";
+    auto run = runScript(dir, {
+        { "main.js", "Probe.loadClassicEntity('" + ENTITY + "', '" + entityURL + "', `" + entity + "`);\n" },
+    }, withProbe(probe));
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "before false true " + ENTITY, "after false true " + ENTITY + " " + entityURL,
+                                        "lib " + libURL + " " + ENTITY + " " + entityURL, "imported true", "end" }));
 }
 
 void ScriptModuleEnvTests::testEntityEnvironmentAcrossAwait() {

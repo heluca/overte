@@ -39,6 +39,8 @@ public:
     // promise resolves once its preload has run
     Q_INVOKABLE ScriptValue loadClassicEntity(const QString& entityID, const QString& url, const QString& source);
     Q_INVOKABLE void unloadEntity(const QString& entityID, const QString& url);
+    // A promise settled from the event loop, outside any script call, as a network reply settles fetch()'s
+    Q_INVOKABLE ScriptValue resolveLater();
     Q_INVOKABLE void emitPing() { emit ping(); }
 
 signals:
@@ -56,6 +58,7 @@ private slots:
     void testEnvironmentSelfTest();
     void testTimerAfterAwaitKeepsModuleSandbox();
     void testClassicEntityTimerKeepsEntity();
+    void testClassicEntityImportAfterAwait();
     void testEntityEnvironmentAcrossAwait();
     void testModuleTimerClearedOnEntityUnload();
     void testDynamicImportAfterAwaitUsesEnvironmentSandbox();
