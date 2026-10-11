@@ -17,8 +17,11 @@
 static const char* const WEB_GLOBALS_PRELUDE_PARTS[] = {
 R"JS((function (native) {
     "use strict";
-    // The built-ins as they are when the engine starts: scripts may replace the globals and their members later, and
-    // what reaches the natives must not depend on that
+    // These globals, the methods taken from them and the typed-array, DataView and buffer getters are captured as they
+    // are when the engine starts, so a script replacing them later does not change what the globals pass on. Other
+    // lookups stay live (for-of over arrays, Array.prototype.includes, the String.prototype and RegExp.prototype
+    // methods, String.fromCharCode, Promise.reject): replacing those can make a result wrong, and the natives check
+    // their arguments, rejecting what is not of the right type.
     const { Array, ArrayBuffer, DataView, Error, Object, Promise, RangeError, Reflect, String, Symbol, TypeError,
         Uint8Array } = globalThis;
     const apply = Reflect.apply;
@@ -206,6 +209,8 @@ R"JS((function (native) {
 R"JS(    const INTEGER_ARRAYS = ["Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array",
         "Uint32Array", "BigInt64Array", "BigUint64Array"];
     const DIGESTS = ["SHA-1", "SHA-256", "SHA-384", "SHA-512"];
+    // MAX_DIGEST_BYTES in v8/WebGlobalsV8.h
+    const MAX_DIGEST_BYTES = 256 * 1024 * 1024;
     const crypto = {
         getRandomValues(array) {
             if (!isArrayBufferView(array)) {
@@ -241,7 +246,11 @@ R"JS(    const INTEGER_ARRAYS = ["Int8Array", "Uint8Array", "Uint8ClampedArray",
                         throw new DOMException("crypto.subtle.digest: " + name + " is not supported; use SHA-1, " +
                             "SHA-256, SHA-384 or SHA-512", "NotSupportedError");
                     }
-                    const copy = copyBytes(bytesOf(data, "crypto.subtle.digest"), 0);
+                    const bytes = bytesOf(data, "crypto.subtle.digest");
+                    if (byteLengthOf(bytes) > MAX_DIGEST_BYTES) {
+                        throw new RangeError("crypto.subtle.digest: the data is over the limit of 256 MiB");
+                    }
+                    const copy = copyBytes(bytes, 0);
                     return native.digest(name, apply(TYPED_ARRAY.buffer, copy, []));
                 } catch (error) {
                     return Promise.reject(error);

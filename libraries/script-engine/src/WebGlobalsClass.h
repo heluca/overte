@@ -149,9 +149,11 @@
  * @function crypto.subtle.digest
  * @param {string|crypto.subtle.Algorithm} algorithm - <code>"SHA-1"</code>, <code>"SHA-256"</code>,
  *     <code>"SHA-384"</code> or <code>"SHA-512"</code>, in any case, or an object with one of them as its name.
- * @param {ArrayBuffer|ArrayBufferView} data - The data. To hash a string, encode it with {@link TextEncoder} first.
+ * @param {ArrayBuffer|ArrayBufferView} data - The data, at most 256 MiB. To hash a string, encode it with
+ *     {@link TextEncoder} first.
  * @returns {Promise<ArrayBuffer>} The hash. Rejected with a <code>DOMException</code> named
- *     <code>"NotSupportedError"</code> for any other algorithm, or a <code>TypeError</code> if the data is not bytes.
+ *     <code>"NotSupportedError"</code> for any other algorithm, a <code>TypeError</code> if the data is not bytes, or a
+ *     <code>RangeError</code> if it is over 256 MiB.
  * @example <caption>Print the SHA-256 hash of a string in hex.</caption>
  * crypto.subtle.digest("SHA-256", new TextEncoder().encode("abc")).then(function (hash) {
  *     print(Array.from(new Uint8Array(hash), function (byte) {
@@ -182,7 +184,8 @@
  * @param {Array<ArrayBuffer>} [options.transfer] - <code>ArrayBuffer</code>s to move into the copy instead of copying.
  *     Afterwards they are detached, with a <code>byteLength</code> of <code>0</code>.
  * @returns {*} The copy.
- * @throws {DOMException} A <code>DataCloneError</code> if the value or the transfer list cannot be copied.
+ * @throws {DOMException} A <code>DataCloneError</code> if the value or the transfer list cannot be copied, or a
+ *     <code>TypeError</code> if the transfer list holds a value that is not an object.
  */
 
 /*@jsdoc
