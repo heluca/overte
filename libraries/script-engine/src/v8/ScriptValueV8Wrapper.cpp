@@ -81,6 +81,7 @@ ScriptValue ScriptValueV8Wrapper::call(const ScriptValue& thisObject, const Scri
     Q_ASSERT(_engine == _value.getEngine());
     auto isolate = _engine->getIsolate();
     Q_ASSERT(isolate->IsCurrent());
+    MicrotaskCheckpointScopeV8 microtaskCheckpointScope(_engine);
     v8::HandleScope handleScope(isolate);
     auto context = _engine->getContext();
     v8::Context::Scope contextScope(context);
@@ -163,6 +164,7 @@ ScriptValue ScriptValueV8Wrapper::construct(const ScriptValueList& args) {
     //V8TODO: there is CallAsContructor in V8
     auto isolate = _engine->getIsolate();
     Q_ASSERT(isolate->IsCurrent());
+    MicrotaskCheckpointScopeV8 microtaskCheckpointScope(_engine);
     v8::HandleScope handleScope(isolate);
     auto context = _engine->getContext();
     v8::Context::Scope contextScope(context);
@@ -574,7 +576,7 @@ QString ScriptValueV8Wrapper::toString() const {
     v8::Context::Scope contextScope(_engine->getContext());
     v8::String::Utf8Value string(_engine->getIsolate(), _value.constGet());
     Q_ASSERT(*string != nullptr);
-    return QString(*string);
+    return QString::fromUtf8(*string, string.length());
 }
 
 quint16 ScriptValueV8Wrapper::toUInt16() const {

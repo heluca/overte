@@ -94,6 +94,13 @@ public:
      *
      */
     QUrl definingSandboxURL;
+
+    /**
+     * @brief Environment the function was registered in (see ScriptEngine::currentEnvironment()); null for classic script
+     * code outside entity scripts
+     *
+     */
+    ScriptEnvironmentPointer definingEnvironment;
 };
 
 
@@ -205,6 +212,19 @@ public:
      * not to the parent context.
      */
     QUrl definingSandboxURL { QUrl("about:EntityScript") };
+
+    /**
+     * @brief For an ES module (.mjs) entity script: the module map epoch its module graph is loaded under, else 0
+     *
+     * Entity scripts with the same URL share the module instance of one epoch. A reload loads the graph under a new one,
+     * and an epoch's modules are dropped once no entity script's details name it.
+     */
+    int moduleEpoch { 0 };
+
+    /**
+     * @brief For a running ES module entity script: the environment its methods run in, else null
+     */
+    ScriptEnvironmentPointer environment;
 };
 
 // declare a static script initializers
@@ -1184,6 +1204,21 @@ public:
     bool hasEntityScriptDetails(const EntityItemID& entityID, const QString& scriptURL) const;
 
     /**
+     * @brief Get the status and error information of an entity script, from any thread
+     *
+     * Unlike getEntityScriptDetails(), this does not copy the script object, which only the script thread may do.
+     *
+     * @param entityID Entity ID
+     * @param scriptURL Script URL
+     * @param status Status of the script
+     * @param errorInfo Error information of the script
+     * @return true If there are script details for the entity
+     * @return false If there are none. status and errorInfo will be unmodified.
+     */
+    bool getEntityScriptStatus(const EntityItemID& entityID, const QString& scriptURL, EntityScriptStatus& status,
+                               QString& errorInfo) const;
+
+    /**
      * @brief Set a shared pointer to the ScriptEngines class
      *
      * This is used to ask ScriptEngines whether the system is being stopped.
@@ -1501,6 +1536,25 @@ signals:
      */
     void releaseEntityPacketSenderMessages(bool wait);
 
+public:
+    /**
+     * @brief The entity whose script is running, if any
+     *
+     * The current ScriptEnvironment's, which promise continuations, timers and handlers keep: ES module code's, or the
+     * classic one doWithEnvironment() makes for classic code; with none, the one set by the innermost
+     * doWithEnvironment(). Script thread only for the environment's.
+     *
+     * @return EntityItemID Entity ID, null outside entity scripts
+     */
+    EntityItemID currentEntityIdentifier() const;
+
+    /**
+     * @brief The top-level URL of the script that loaded the code that is running, chosen as for currentEntityIdentifier()
+     *
+     * @return QUrl Sandbox URL, empty for classic Interface and Agent scripts
+     */
+    QUrl currentSandboxURL() const;
+
 protected:
     // Is called by the constructor, bceause all types need to be registered before method discovery with ScriptObjectV8Proxy::investigate()
     void initMetaTypes();
@@ -1612,8 +1666,24 @@ protected:
      */
     Q_INVOKABLE void entityScriptContentAvailable(const EntityItemID& entityID, const QString& scriptOrURL, const QString& contents, bool isURL, bool success, const QString& status);
 
-    EntityItemID currentEntityIdentifier; // Contains the defining entity script entity id during execution, if any. Empty for interface script execution.
-    QUrl currentSandboxURL; // The toplevel url string for the entity script that loaded the code being executed, else empty.
+    // Classic script code's environment, see currentEntityIdentifier() and currentSandboxURL()
+    EntityItemID _currentEntityIdentifier; // Contains the defining entity script entity id during execution, if any. Empty for interface script execution.
+    QUrl _currentSandboxURL; // The toplevel url string for the entity script that loaded the code being executed, else empty.
+    // Classic entity script code's environment per loaded entity, made on first use and dropped at unload
+    QHash<EntityItemID, ScriptEnvironmentPointer> _classicEnvironments;
+
+    /**
+     * @brief Records a file loaded by Script.include or Script.require in the environment that loaded it
+     *
+     * The hook for design question Q3 of #10; does nothing while CLASSIC_LOADS_TAINT_ENVIRONMENT is off.
+     *
+     * @param url URL of the file
+     * @param environment Environment of the code that loaded it; classic or null for classic script code
+     */
+    void noteClassicLoad(const QUrl& url, const ScriptEnvironmentPointer& environment);
+
+    // Classic code's environment for the entity and sandbox, see doWithEnvironment(); null when both are empty
+    ScriptEnvironmentPointer classicEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL);
 
     /**
      * @brief Execute operation in the appropriate context for (the possibly empty) entityID.
@@ -1621,11 +1691,18 @@ protected:
      * of the code being executed (e.g., if we ever sandbox different entity scripts, or provide different
      * global values for different entity scripts).
      *
+     * The operation runs in the ES module environment given, and continuations it creates carry it; with none it runs as
+     * classic script code even if called from module code, in a classic environment (ScriptEnvironment::classic) that
+     * its continuations carry when there is an entity or sandbox, else without one.
+     *
      * @param entityID Entity ID, may be null
      * @param sandboxURL Sandbox URL
      * @param operation Operation to call
+     * @param environment ES module environment, whose entity and sandbox are entityID and sandboxURL; null for classic
+     * code, which then runs in the entity's classic environment, see ScriptEnvironment::classic
      */
-    void doWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, std::function<void()> operation);
+    void doWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, std::function<void()> operation,
+                           const ScriptEnvironmentPointer& environment = ScriptEnvironmentPointer());
 
     /**
      * @brief Execute operation in the appropriate context for (the possibly empty) entityID.
@@ -1646,8 +1723,38 @@ protected:
      * @param function  Function to call
      * @param thisObject "this" object to use for the call
      * @param args Arguments
+     * @param environment ES module environment; null for classic code, as for doWithEnvironment()
      */
-    void callWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, const ScriptValue& function, const ScriptValue& thisObject, const ScriptValueList& args);
+    void callWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, const ScriptValue& function, const ScriptValue& thisObject, const ScriptValueList& args,
+                             const ScriptEnvironmentPointer& environment = ScriptEnvironmentPointer());
+
+    // ES module entity scripts (#11), see ScriptManagerModuleEntity.cpp
+
+    // The epoch to load an entity script URL under, see EntityScriptDetails::moduleEpoch; 0 if it is not a module
+    int entityModuleEpoch(const QString& scriptURL, bool forceRedownload);
+    // Loads an entity script module from its fetched source; the entity stays LOADING until its graph has evaluated
+    void loadEntityModule(const EntityItemID& entityID, const QString& scriptURL, const QString& contents,
+                          const QString& fetchStatus, int64_t lastModified);
+    void entityModuleEvaluated(const EntityItemID& entityID, const QString& scriptURL, int epoch,
+                               const ScriptEnvironmentPointer& environment, int64_t lastModified,
+                               const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error);
+    // Releases the epochs of entity script modules that no entity script's details name any more
+    void releaseUnusedEntityModuleEpochs();
+    // Calls an entity script's method in its environment; a promise it returns that rejects is reported for the entity
+    void callEntityScriptFunction(const EntityItemID& entityID, const EntityScriptDetails& details, const QString& methodName,
+                                  const ScriptValue& entityScript, const ScriptValueList& args);
+
+    struct EntityModuleEpoch {
+        int epoch { 0 };
+        // Made for a reload. Another reload joins it only while no load under it has started, as when every entity
+        // script is reloaded at once.
+        bool forceDownload { false };
+        bool loadStarted { false };
+    };
+    // The current epoch of each entity script module URL
+    QHash<QString, EntityModuleEpoch> _entityModuleEpochs;
+    // Epochs made by entityModuleEpoch() and not released yet
+    QSet<int> _entityModuleEpochsInUse;
 
     Context _context;
     Type _type;

@@ -349,7 +349,7 @@ bool ScriptEngineV8::castValueToVariant(const V8ScriptValue& v8Val, QVariant& de
                 if (val->IsString()) {
                     v8::String::Utf8Value string(_v8Isolate, val);
                     Q_ASSERT(*string != nullptr);
-                    dest = QVariant::fromValue(QString(*string));
+                    dest = QVariant::fromValue(QString::fromUtf8(*string, string.length()));
                     break;
                 }
                 if (val->IsNumber()) {
@@ -431,7 +431,7 @@ bool ScriptEngineV8::castValueToVariant(const V8ScriptValue& v8Val, QVariant& de
                 {
                     v8::String::Utf8Value string(_v8Isolate, val);
                     Q_ASSERT(*string != nullptr);
-                    dest = QVariant::fromValue(QString(*string));
+                    dest = QVariant::fromValue(QString::fromUtf8(*string, string.length()));
                 }
                 break;
             case QMetaType::UShort:
@@ -469,7 +469,7 @@ bool ScriptEngineV8::castValueToVariant(const V8ScriptValue& v8Val, QVariant& de
                 if (val->IsString()) {
                     v8::String::Utf8Value string(_v8Isolate, val);
                     Q_ASSERT(*string != nullptr);
-                    dest = QVariant::fromValue(QString(*string));
+                    dest = QVariant::fromValue(QString::fromUtf8(*string, string.length()));
                     return true;
                 }
                 if (val->IsNumber()) {
@@ -709,7 +709,12 @@ V8ScriptValue ScriptEngineV8::castVariantToValue(const QVariant& val) {
             return V8ScriptValue(this, v8::Number::New(_v8Isolate, val.toDouble()));
         case QMetaType::QString:
         case QMetaType::QByteArray:
-            return V8ScriptValue(this, v8::String::NewFromUtf8(_v8Isolate, val.toString().toStdString().c_str()).ToLocalChecked());
+        {
+            // QVariant::toString() on a QByteArray stops at its first NUL
+            QString string = valTypeId == QMetaType::QByteArray
+                ? QString::fromUtf8(val.toByteArray().constData(), val.toByteArray().size()) : val.toString();
+            return V8ScriptValue(this, v8::String::NewFromTwoByte(_v8Isolate, reinterpret_cast<const uint16_t*>(string.utf16()), v8::NewStringType::kNormal, string.length()).ToLocalChecked());
+        }
         case QMetaType::QVariant:
             return castVariantToValue(val.value<QVariant>());
         case QMetaType::QObjectStar: {

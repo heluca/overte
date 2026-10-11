@@ -23,6 +23,7 @@
 #include <NodeList.h>
 
 #include <RegisteredMetaTypes.h>
+#include "ScriptCompletion.h"
 #include "ScriptEngine.h"
 #include "ScriptEngineCast.h"
 #include "ScriptEngineLogging.h"
@@ -43,11 +44,12 @@ STATIC_SCRIPT_TYPES_INITIALIZER((+[](ScriptManager* manager){
 }));
 
 
-AssetScriptingInterface::AssetScriptingInterface(ScriptManager* parent) : BaseAssetScriptingInterface(parent), _scriptManager(parent) {
+AssetScriptingInterface::AssetScriptingInterface(ScriptManager* parent) : BaseAssetScriptingInterface(parent) {
     qCDebug(scriptengine) << "AssetScriptingInterface::AssetScriptingInterface" << parent;
 }
 
 #define JS_VERIFY(cond, error) { if (!this->jsVerify(cond, error)) { return; } }
+#define COMPLETION_VERIFY(cond, error) { if (!completion.verify(cond, error)) { return completion.takeReturnValue(); } }
 
 bool AssetScriptingInterface::initializeCache() {
     if (!Parent::initializeCache()) {
@@ -69,17 +71,16 @@ bool AssetScriptingInterface::initializeCache() {
 }
 
 void AssetScriptingInterface::uploadData(QString data, const ScriptValue& callback) {
-    auto handler = jsBindCallback(thisObject(), callback);
+    ScriptCompletion completion(engine(), thisObject(), callback);
+    JS_VERIFY(completion.hasCallback(), "expected a callback function");
     QByteArray dataByteArray = data.toUtf8();
     auto upload = DependencyManager::get<AssetClient>()->createUpload(dataByteArray);
 
     Promise deferred = makePromise(__FUNCTION__);
-    Q_ASSERT(engine());
-    auto scriptEngine = engine();
-    deferred->ready([=, this](QString error, QVariantMap result) {
-        auto url = result.value("url").toString();
-        auto hash = result.value("hash").toString();
-        jsCallback(handler, scriptEngine->newValue(url), scriptEngine->newValue(hash));
+    deferred->ready([completion](QString error, QVariantMap result) {
+        auto engine = completion.engine();
+        completion.resolve(ScriptValue(), { engine->newValue(result.value("url").toString()),
+                                            engine->newValue(result.value("hash").toString()) });
     });
 
     connect(upload, &AssetUpload::finished, upload, [deferred](AssetUpload* upload, const QString& hash) {
@@ -94,15 +95,11 @@ void AssetScriptingInterface::uploadData(QString data, const ScriptValue& callba
     upload->start();
 }
 
-void AssetScriptingInterface::setMapping(QString path, QString hash, const ScriptValue& callback) {
-    auto handler = jsBindCallback(thisObject(), callback);
+ScriptValue AssetScriptingInterface::setMapping(QString path, QString hash, const ScriptValue& callback) {
+    ScriptCompletion completion(engine(), ScriptCompletion::isAbsent(callback) ? callback : thisObject(), callback);
+    COMPLETION_VERIFY(true, QString());
     auto setMappingRequest = assetClient()->createSetMappingRequest(path, hash);
-    Promise deferred = makePromise(__FUNCTION__);
-    Q_ASSERT(engine());
-    auto scriptEngine = engine();
-    deferred->ready([=, this](QString error, QVariantMap result) {
-        jsCallback(handler, scriptEngine->newValue(error), result);
-    });
+    Promise deferred = jsPromiseReady(makePromise(__FUNCTION__), completion);
 
     connect(setMappingRequest, &SetMappingRequest::finished, setMappingRequest, [deferred](SetMappingRequest* request) {
         Q_ASSERT(QThread::currentThread() == request->thread());
@@ -113,6 +110,7 @@ void AssetScriptingInterface::setMapping(QString path, QString hash, const Scrip
         request->deleteLater();
     });
     setMappingRequest->start();
+    return completion.takeReturnValue();
 }
 
 /*@jsdoc
@@ -131,16 +129,18 @@ void AssetScriptingInterface::downloadData(QString urlString, const ScriptValue&
         return;
     }
     QString hash = AssetUtils::extractAssetHash(urlString);
-    auto handler = jsBindCallback(thisObject(), callback);
+    ScriptCompletion completion(engine(), thisObject(), callback);
+    JS_VERIFY(completion.hasCallback(), "expected a callback function");
     auto assetClient = DependencyManager::get<AssetClient>();
     auto assetRequest = assetClient->createRequest(hash);
 
     Promise deferred = makePromise(__FUNCTION__);
-    Q_ASSERT(engine());
-    auto scriptEngine = engine();
-    deferred->ready([=, this](QString error, QVariantMap result) {
+    deferred->ready([completion](QString error, QVariantMap result) {
         // FIXME: to remain backwards-compatible the signature here is "callback(data, n/a)"
-        jsCallback(handler, scriptEngine->newValue(result.value("data").toString()), { { "errorMessage", error } });
+        auto engine = completion.engine();
+        QString data = result.value("data").toString();
+        completion.resolve(ScriptValue(), { data.isEmpty() ? engine->nullValue() : engine->newValue(data),
+                                            engine->toScriptValue(QVariantMap({ { "errorMessage", error } })) });
     });
 
     connect(assetRequest, &AssetRequest::finished, assetRequest, [deferred](AssetRequest* request) {
@@ -194,17 +194,16 @@ void AssetScriptingInterface::sendFakedHandshake() {
 
 #endif
 
-void AssetScriptingInterface::getMapping(QString asset, const ScriptValue& callback) {
+ScriptValue AssetScriptingInterface::getMapping(QString asset, const ScriptValue& callback) {
+    ScriptCompletion completion(engine(), ScriptCompletion::isAbsent(callback) ? callback : thisObject(), callback);
     auto path = AssetUtils::getATPUrl(asset).path();
-    auto handler = jsBindCallback(thisObject(), callback);
-    JS_VERIFY(AssetUtils::isValidFilePath(path), "invalid ATP file path: " + asset + "(path:"+path+")");
-    JS_VERIFY(callback.isFunction(), "expected second parameter to be a callback function");
-    Promise promise = getAssetInfo(path);
-    Q_ASSERT(engine());
-    auto scriptEngine = engine();
-    promise->ready([=, this](QString error, QVariantMap result) {
-        jsCallback(handler, scriptEngine->newValue(error), scriptEngine->newValue(result.value("hash").toString()));
+    COMPLETION_VERIFY(AssetUtils::isValidFilePath(path), "invalid ATP file path: " + asset + "(path:"+path+")");
+    getAssetInfo(path)->ready([completion](QString error, QVariantMap result) {
+        if (auto engine = completion.engine()) {
+            completion.complete(error, engine->newValue(result.value("hash").toString()));
+        }
     });
+    return completion.takeReturnValue();
 }
 
 bool AssetScriptingInterface::jsVerify(bool condition, const QString& error) {
@@ -219,47 +218,19 @@ bool AssetScriptingInterface::jsVerify(bool condition, const QString& error) {
     return false;
 }
 
-ScriptValue AssetScriptingInterface::jsBindCallback(const ScriptValue& scope, const ScriptValue& callback) {
-    ScriptValue handler = ::makeScopedHandlerObject(scope, callback);
-    ScriptValue value = handler.property("callback");
-    if (!jsVerify(handler.isObject() && value.isFunction(),
-                 QString("jsBindCallback -- .callback is not a function (%1)").arg(value.toVariant().typeName()))) {
-        return ScriptValue();
-    }
-    return handler;
-}
-
 Promise AssetScriptingInterface::jsPromiseReady(Promise promise, const ScriptValue& scope, const ScriptValue& callback) {
-    auto handler = jsBindCallback(scope, callback);
-    if (!jsVerify(handler.isValid(), "jsPromiseReady -- invalid callback handler")) {
+    // The methods without a promise form yet still require a callback
+    ScriptCompletion completion(engine(), scope, callback);
+    if (!jsVerify(completion.hasCallback(), "jsPromiseReady -- invalid callback handler")) {
         return nullptr;
     }
-    Q_ASSERT(engine());
-    auto scriptEngine = engine();
-    return promise->ready([this, handler, scriptEngine](QString error, QVariantMap result) {
-        jsCallback(handler, scriptEngine->newValue(error), result);
+    return jsPromiseReady(promise, completion);
+}
+
+Promise AssetScriptingInterface::jsPromiseReady(Promise promise, const ScriptCompletion& completion) {
+    return promise->ready([completion](QString error, QVariantMap result) {
+        completion.complete(error, result);
     });
-}
-
-void AssetScriptingInterface::jsCallback(const ScriptValue& handler,
-                                         const ScriptValue& error, const ScriptValue& result) {
-    Q_ASSERT(thread() == QThread::currentThread());
-    //V8TODO: which kind of script context guard needs to be used here?
-    ScriptContextGuard scriptContextGuard(_scriptManager->engine()->currentContext());
-    auto errorValue = !error.toBool() ? engine()->nullValue() : error;
-    JS_VERIFY(handler.isObject() && handler.property("callback").isFunction(),
-              QString("jsCallback -- .callback is not a function (%1)")
-              .arg(handler.property("callback").toVariant().typeName()));
-    ::callScopedHandlerObject(handler, errorValue, result);
-}
-
-void AssetScriptingInterface::jsCallback(const ScriptValue& handler,
-                                         const ScriptValue& error, const QVariantMap& result) {
-    Q_ASSERT(thread() == QThread::currentThread());
-    Q_ASSERT(handler.engine());
-    auto engine = handler.engine();
-
-    jsCallback(handler, error, engine->toScriptValue(result));
 }
 
 void AssetScriptingInterface::deleteAsset(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
@@ -292,11 +263,14 @@ void AssetScriptingInterface::deleteAsset(const ScriptValue& options, const Scri
  * @property {boolean} [wasRedirected] - <code>true</code> if the downloaded data is the baked version of the asset, 
  *      <code>false</code> if it isn't baked.
  */
-void AssetScriptingInterface::getAsset(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
-    JS_VERIFY(options.isObject() || options.isString(), "expected request options Object or URL as first parameter");
+ScriptValue AssetScriptingInterface::getAsset(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
+    ScriptCompletion completion(engine(), scope, callback);
+    COMPLETION_VERIFY(options.isObject() || options.isString(), "expected request options Object or URL as first parameter");
 
     auto decompress = options.property("decompress").toBool() || options.property("compressed").toBool();
-    auto responseType = options.property("responseType").toString().toLower();
+    // An absent property's toString() is "undefined", not empty
+    auto responseTypeOption = options.property("responseType");
+    auto responseType = responseTypeOption.isValid() ? responseTypeOption.toString().toLower() : QString();
     auto url = options.property("url").toString();
     if (options.isString()) {
         url = options.toString();
@@ -305,15 +279,12 @@ void AssetScriptingInterface::getAsset(const ScriptValue& options, const ScriptV
         responseType = "text";
     }
     auto asset = AssetUtils::getATPUrl(url).path();
-    JS_VERIFY(AssetUtils::isValidHash(asset) || AssetUtils::isValidFilePath(asset),
-              QString("Invalid ATP url '%1'").arg(url));
-    JS_VERIFY(RESPONSE_TYPES.contains(responseType),
-              QString("Invalid responseType: '%1' (expected: %2)").arg(responseType).arg(RESPONSE_TYPES.join(" | ")));
+    COMPLETION_VERIFY(AssetUtils::isValidHash(asset) || AssetUtils::isValidFilePath(asset),
+                      QString("Invalid ATP url '%1'").arg(url));
+    COMPLETION_VERIFY(RESPONSE_TYPES.contains(responseType),
+                      QString("Invalid responseType: '%1' (expected: %2)").arg(responseType).arg(RESPONSE_TYPES.join(" | ")));
 
-    Promise fetched = jsPromiseReady(makePromise("fetched"), scope, callback);
-    if (!fetched) {
-        return;
-    }
+    Promise fetched = jsPromiseReady(makePromise("fetched"), completion);
 
     Promise mapped = makePromise("mapped");
     mapped->fail(fetched);
@@ -340,6 +311,7 @@ void AssetScriptingInterface::getAsset(const ScriptValue& options, const ScriptV
     } else {
         getAssetInfo(asset)->ready(mapped);
     }
+    return completion.takeReturnValue();
 }
 
 /*@jsdoc
@@ -358,16 +330,18 @@ void AssetScriptingInterface::getAsset(const ScriptValue& options, const ScriptV
  * @property {boolean} [wasRedirected] - <code>true</code> if the resolved data is for the baked version of the asset,
  *      <code>false</code> if it isn't.
  */
-void AssetScriptingInterface::resolveAsset(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
+ScriptValue AssetScriptingInterface::resolveAsset(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
+    ScriptCompletion completion(engine(), scope, callback);
     const QString& URL{ "url" };
 
     auto url = (options.isString() ? options : options.property(URL)).toString();
     auto asset = AssetUtils::getATPUrl(url).path();
 
-    JS_VERIFY(AssetUtils::isValidFilePath(asset) || AssetUtils::isValidHash(asset),
-             "expected options to be an asset URL or request options containing .url property");
+    COMPLETION_VERIFY(AssetUtils::isValidFilePath(asset) || AssetUtils::isValidHash(asset),
+                      "expected options to be an asset URL or request options containing .url property");
 
-    jsPromiseReady(getAssetInfo(asset), scope, callback);
+    jsPromiseReady(getAssetInfo(asset), completion);
+    return completion.takeReturnValue();
 }
 
 /*@jsdoc
@@ -385,14 +359,17 @@ void AssetScriptingInterface::resolveAsset(const ScriptValue& options, const Scr
  * @property {string|object|ArrayBuffer} [response] - The decompressed data.
  * @property {Assets.ResponseType} [responseType] - The type of the decompressed data in <code>response</code>.
  */
-void AssetScriptingInterface::decompressData(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
+ScriptValue AssetScriptingInterface::decompressData(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
+    ScriptCompletion completion(engine(), scope, callback);
+    COMPLETION_VERIFY(true, QString());
     auto data = options.property("data");
     QByteArray dataByteArray = scriptvalue_cast<QByteArray>(data);
-    auto responseType = options.property("responseType").toString().toLower();
+    auto responseTypeOption = options.property("responseType");
+    auto responseType = responseTypeOption.isValid() ? responseTypeOption.toString().toLower() : QString();
     if (responseType.isEmpty()) {
         responseType = "text";
     }
-    Promise completed = jsPromiseReady(makePromise(__FUNCTION__), scope, callback);
+    Promise completed = jsPromiseReady(makePromise(__FUNCTION__), completion);
     Promise decompressed = decompressBytes(dataByteArray);
     if (responseType == "arraybuffer") {
         decompressed->ready(completed);
@@ -403,6 +380,7 @@ void AssetScriptingInterface::decompressData(const ScriptValue& options, const S
             converted->ready(completed);
         });
     }
+    return completion.takeReturnValue();
 }
 
 namespace {
@@ -426,12 +404,14 @@ namespace {
  * @property {string} [contentType] - The MIME type of the compressed data, i.e., <code>"application/gzip"</code>.
  * @property {ArrayBuffer} [data] - The compressed data.
  */
-void AssetScriptingInterface::compressData(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
+ScriptValue AssetScriptingInterface::compressData(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
+    ScriptCompletion completion(engine(), scope, callback);
     auto data = options.property("data").isValid() ? options.property("data") : options;
     QByteArray dataByteArray = data.isString() ? data.toString().toUtf8() : scriptvalue_cast<QByteArray>(data);
     int level = options.property("level").isNumber() ? options.property("level").toInt32() : DEFAULT_GZIP_COMPRESSION_LEVEL;
-    JS_VERIFY(level >= DEFAULT_GZIP_COMPRESSION_LEVEL || level <= MAX_GZIP_COMPRESSION_LEVEL, QString("invalid .level %1").arg(level));
-    jsPromiseReady(compressBytes(dataByteArray, level), scope, callback);
+    COMPLETION_VERIFY(level >= DEFAULT_GZIP_COMPRESSION_LEVEL || level <= MAX_GZIP_COMPRESSION_LEVEL, QString("invalid .level %1").arg(level));
+    jsPromiseReady(compressBytes(dataByteArray, level), completion);
+    return completion.takeReturnValue();
 }
 
 /*@jsdoc
@@ -455,7 +435,8 @@ void AssetScriptingInterface::compressData(const ScriptValue& options, const Scr
  * @property {string} [url] - The <code>atp:</code> URL of the content: using the path if specified, otherwise the hash.
  * @property {string} [path] - The uploaded content's mapped path, if specified.
  */
-void AssetScriptingInterface::putAsset(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
+ScriptValue AssetScriptingInterface::putAsset(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback) {
+    ScriptCompletion completion(engine(), scope, callback);
     auto compress = options.property("compress").toBool() || options.property("compressed").toBool();
     auto data = options.isObject() ? options.property("data") : options;
     auto rawPath = options.property("path").toString();
@@ -463,16 +444,16 @@ void AssetScriptingInterface::putAsset(const ScriptValue& options, const ScriptV
 
     QByteArray dataByteArray = data.isString() ? data.toString().toUtf8() : scriptvalue_cast<QByteArray>(data);
 
-    JS_VERIFY(path.isEmpty() || AssetUtils::isValidFilePath(path),
-              QString("expected valid ATP file path '%1' ('%2')").arg(rawPath).arg(path));
-    JS_VERIFY(dataByteArray.size() > 0,
-              QString("expected non-zero .data (got %1 / #%2 bytes)").arg(data.toVariant().typeName()).arg(dataByteArray.size()));
+    COMPLETION_VERIFY(path.isEmpty() || AssetUtils::isValidFilePath(path),
+                      QString("expected valid ATP file path '%1' ('%2')").arg(rawPath).arg(path));
+    COMPLETION_VERIFY(dataByteArray.size() > 0,
+                      QString("expected non-zero .data (got %1 / #%2 bytes)").arg(data.toVariant().typeName()).arg(dataByteArray.size()));
 
     // [compressed] => uploaded to server => [mapped to path]
     Promise prepared = makePromise("putAsset::prepared");
     Promise uploaded = makePromise("putAsset::uploaded");
     Promise completed = makePromise("putAsset::completed");
-    jsPromiseReady(completed, scope, callback);
+    jsPromiseReady(completed, completion);
 
     if (compress) {
         Promise compress = compressBytes(dataByteArray, DEFAULT_GZIP_COMPRESSION_LEVEL);
@@ -503,6 +484,7 @@ void AssetScriptingInterface::putAsset(const ScriptValue& options, const ScriptV
             }
         });
     }
+    return completion.takeReturnValue();
 }
 
 /*@jsdoc
