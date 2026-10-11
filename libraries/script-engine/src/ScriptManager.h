@@ -211,6 +211,19 @@ public:
      * not to the parent context.
      */
     QUrl definingSandboxURL { QUrl("about:EntityScript") };
+
+    /**
+     * @brief For an ES module (.mjs) entity script: the module map epoch its module graph is loaded under, else 0
+     *
+     * Entity scripts with the same URL share the module instance of one epoch. A reload loads the graph under a new one,
+     * and an epoch's modules are dropped once no entity script's details name it.
+     */
+    int moduleEpoch { 0 };
+
+    /**
+     * @brief For a running ES module entity script: the environment its methods run in, else null
+     */
+    ScriptEnvironmentPointer environment;
 };
 
 // declare a static script initializers
@@ -1690,6 +1703,34 @@ protected:
      */
     void callWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, const ScriptValue& function, const ScriptValue& thisObject, const ScriptValueList& args,
                              const ScriptEnvironmentPointer& environment = ScriptEnvironmentPointer());
+
+    // ES module entity scripts (#11), see ScriptManagerModuleEntity.cpp
+
+    // The epoch to load an entity script URL under, see EntityScriptDetails::moduleEpoch; 0 if it is not a module
+    int entityModuleEpoch(const QString& scriptURL, bool forceRedownload);
+    // Loads an entity script module from its fetched source; the entity stays LOADING until its graph has evaluated
+    void loadEntityModule(const EntityItemID& entityID, const QString& scriptURL, const QString& contents,
+                          const QString& fetchStatus, int64_t lastModified);
+    void entityModuleEvaluated(const EntityItemID& entityID, const QString& scriptURL, int epoch,
+                               const ScriptEnvironmentPointer& environment, int64_t lastModified,
+                               const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error);
+    // Releases the epochs of entity script modules that no entity script's details name any more
+    void releaseUnusedEntityModuleEpochs();
+    // Calls an entity script's method in its environment; a promise it returns that rejects is reported for the entity
+    void callEntityScriptFunction(const EntityItemID& entityID, const EntityScriptDetails& details, const QString& methodName,
+                                  const ScriptValue& entityScript, const ScriptValueList& args);
+
+    struct EntityModuleEpoch {
+        int epoch { 0 };
+        // Made for a reload. Another reload joins it only while no load under it has started, as when every entity
+        // script is reloaded at once.
+        bool forceDownload { false };
+        bool loadStarted { false };
+    };
+    // The current epoch of each entity script module URL
+    QHash<QString, EntityModuleEpoch> _entityModuleEpochs;
+    // Epochs made by entityModuleEpoch() and not released yet
+    QSet<int> _entityModuleEpochsInUse;
 
     Context _context;
     Type _type;

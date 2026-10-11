@@ -664,6 +664,8 @@ public slots:
      * method must be exposed as a property in the target server entity script. Additionally, the server entity script must 
      * include the method's name in an exposed property called <code>remotelyCallable</code> that is an array of method names 
      * that can be called.
+     * <p>The method can read the caller's session ID as <code>Script.remoteCallerID</code>. It is set only while the method 
+     * runs synchronously: an <code>async</code> method must read it before its first <code>await</code>.</p>
      * @function Entities.callEntityServerMethod
      * @param {Uuid} entityID - The ID of the entity to call the method in.
      * @param {string} method - The name of the method to call. The method is called with the entity ID as the first parameter 
