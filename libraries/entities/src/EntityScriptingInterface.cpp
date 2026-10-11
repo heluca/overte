@@ -1343,7 +1343,12 @@ void EntityScriptingInterface::handleEntityScriptCallMethodPacket(QSharedPointer
             params << paramString;
         }
 
-        auto entity = getEntityTree()->findEntityByEntityItemID(entityID);
+        // An assignment-client Agent has no entity tree before its script starts or after it finishes
+        auto entityTree = getEntityTree();
+        if (!entityTree) {
+            return;
+        }
+        auto entity = entityTree->findEntityByEntityItemID(entityID);
         if (entity) {
             std::lock_guard<std::recursive_mutex> lock(_entitiesScriptEngineLock);
             auto& scriptEngine = (entity->isLocalEntity() || entity->isMyAvatarEntity()) ? _persistentEntitiesScriptManager : _nonPersistentEntitiesScriptManager;
