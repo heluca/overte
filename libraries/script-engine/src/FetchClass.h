@@ -35,9 +35,10 @@ class ResourceRequest;
  * <p><code>file:</code> and <code>qrc:</code> URLs are only available to Interface and agent scripts. In client and server
  * entity scripts they reject with a <code>TypeError</code>, since an entity script comes from whatever domain is visited.</p>
  * <p>Header names and values are sent as Latin-1; a character outside it is sent as <code>?</code>.</p>
- * <p>In an entity script, errors and parsed JSON values come from the main script context, not the entity script's own,
- * so <code>instanceof TypeError</code> or <code>instanceof Array</code> is <code>false</code> there: check
- * <code>error.name</code> and use <code>Array.isArray()</code> instead.</p>
+ * <p>In a module loaded with {@link Script.require}, which runs in a script context of its own, errors and parsed JSON
+ * values come from the main script context, so <code>instanceof TypeError</code> or <code>instanceof Array</code> is
+ * <code>false</code> there: check <code>error.name</code> and use <code>Array.isArray()</code> instead. Entity scripts
+ * run in the main context and are not affected.</p>
  * <p>The promise is rejected with a <code>TypeError</code> when there is no response at all: the host is not found, the
  * connection is refused, the scheme is not supported, or the file or asset is missing. An HTTP error status such as
  * <code>404</code> still resolves, with <code>response.ok</code> set to <code>false</code>. Aborting through
