@@ -44,8 +44,8 @@
  * with an <code>Error</code> whose message is what the callback would get as its error, carrying the result's properties
  * if the result is an object; with a <code>TypeError</code> if an argument is invalid, where the callback form throws; and
  * with a <code>TypeError</code> if a callback is given that is not a function.</p>
- * <p>In an entity script, the promise and its errors come from the main script context, not the entity script's own, so
- * <code>instanceof Promise</code> or <code>instanceof Error</code> is <code>false</code> there: check
+ * <p>The promise and its errors come from the main script context. Where an entity script runs in a context of its own,
+ * <code>instanceof Promise</code> and <code>instanceof Error</code> are <code>false</code> there: check
  * <code>error.name</code> instead.</p>
  *
  * @namespace Assets
