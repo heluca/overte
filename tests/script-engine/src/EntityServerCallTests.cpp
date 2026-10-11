@@ -201,7 +201,8 @@ void EntityServerCallTests::testStatusWithoutReplyFails() {
     clientThread.wait();
     nodeList->killNodeWithUUID(server->getUUID());
 
-    // The request reached the server, so the callback below is not the immediate failure without a server
+    // A send was attempted, so the request was pending rather than failed at once for want of a server. The socket only
+    // sees connection handshakes: the request itself waits for a handshake reply that never comes.
     QVERIFY(silentServer.hasPendingDatagrams());
     QVERIFY(!run.timedOut);
     QCOMPARE(run.errors, QStringList());
