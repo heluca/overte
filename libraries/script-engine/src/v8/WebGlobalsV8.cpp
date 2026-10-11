@@ -88,6 +88,10 @@ Utf8Scan scanUtf8(const uint8_t* bytes, size_t length) {
     return result;
 }
 
+ScriptValue throwTypeError(ScriptContext* context, ScriptEngine* engine, const QString& message) {
+    return context->throwValue(engine->makeError(engine->newValue(message), "TypeError"));
+}
+
 ScriptValue cloneResult(ScriptEngine* engine, bool ok, const ScriptValue& valueOrMessage) {
     ScriptValue result = engine->newArray(2);
     result.setProperty(0u, engine->newValue(ok));
@@ -103,7 +107,11 @@ ScriptValue webGlobalsEncodeUtf8(ScriptContext* context, ScriptEngine* engine) {
     v8::HandleScope handleScope(isolate);
     v8::Context::Scope contextScope(engineV8->getContext());
 
-    auto text = v8::Local<v8::String>::Cast(argument(context, 0));
+    v8::Local<v8::Value> input = argument(context, 0);
+    if (!input->IsString()) {
+        return throwTypeError(context, engine, "encodeUtf8: expected a string");
+    }
+    auto text = input.As<v8::String>();
     const int length = text->Utf8Length(isolate);
     v8::Local<v8::ArrayBuffer> buffer = v8::ArrayBuffer::New(isolate, length);
     text->WriteUtf8(isolate, static_cast<char*>(buffer->Data()), length, nullptr,
@@ -117,7 +125,11 @@ ScriptValue webGlobalsBase64Encode(ScriptContext* context, ScriptEngine* engine)
     v8::HandleScope handleScope(isolate);
     v8::Context::Scope contextScope(engineV8->getContext());
 
-    auto text = v8::Local<v8::String>::Cast(argument(context, 0));
+    v8::Local<v8::Value> input = argument(context, 0);
+    if (!input->IsString() || !input.As<v8::String>()->ContainsOnlyOneByte()) {
+        return throwTypeError(context, engine, "base64Encode: expected a string of U+0000 - U+00FF");
+    }
+    auto text = input.As<v8::String>();
     QByteArray bytes(text->Length(), Qt::Uninitialized);
     text->WriteOneByte(isolate, reinterpret_cast<uint8_t*>(bytes.data()), 0, bytes.size(), v8::String::NO_NULL_TERMINATION);
     return engine->newValue(QString::fromLatin1(bytes.toBase64()));
@@ -129,6 +141,9 @@ ScriptValue webGlobalsBase64Decode(ScriptContext* context, ScriptEngine* engine)
     v8::HandleScope handleScope(isolate);
     v8::Context::Scope contextScope(engineV8->getContext());
 
+    if (!context->argument(0).isString()) {
+        return throwTypeError(context, engine, "base64Decode: expected a string");
+    }
     const QByteArray bytes = QByteArray::fromBase64(context->argument(0).toString().toLatin1());
     v8::Local<v8::String> text;
     if (!v8::String::NewFromOneByte(isolate, reinterpret_cast<const uint8_t*>(bytes.constData()), v8::NewStringType::kNormal,
@@ -144,7 +159,11 @@ ScriptValue webGlobalsDecodeUtf8(ScriptContext* context, ScriptEngine* engine) {
     v8::HandleScope handleScope(isolate);
     v8::Context::Scope contextScope(engineV8->getContext());
 
-    auto view = v8::Local<v8::ArrayBufferView>::Cast(argument(context, 0));
+    v8::Local<v8::Value> input = argument(context, 0);
+    if (!input->IsArrayBufferView()) {
+        return throwTypeError(context, engine, "decodeUtf8: expected an ArrayBufferView");
+    }
+    auto view = input.As<v8::ArrayBufferView>();
     const bool fatal = context->argument(1).toBool();
     const bool stream = context->argument(2).toBool();
     std::vector<char> bytes(view->ByteLength());
@@ -172,11 +191,14 @@ ScriptValue webGlobalsClone(ScriptContext* context, ScriptEngine* engine) {
     auto v8Context = engineV8->getContext();
     v8::Context::Scope contextScope(v8Context);
 
+    v8::Local<v8::Value> transferList = argument(context, 1);
+    if (!transferList->IsArray()) {
+        return throwTypeError(context, engine, "clone: expected a transfer list array");
+    }
     v8::TryCatch tryCatch(isolate);
     v8::Local<v8::Value> copy;
     std::string dataCloneError;
-    if (cloneValueV8(isolate, v8Context, argument(context, 0), v8::Local<v8::Array>::Cast(argument(context, 1)), copy,
-                     dataCloneError)) {
+    if (cloneValueV8(isolate, v8Context, argument(context, 0), transferList.As<v8::Array>(), copy, dataCloneError)) {
         return cloneResult(engine, true, wrap(engineV8, copy));
     }
     if (!dataCloneError.empty()) {

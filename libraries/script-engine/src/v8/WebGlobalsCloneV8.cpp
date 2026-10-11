@@ -55,7 +55,10 @@ bool cloneValueV8(v8::Isolate* isolate, v8::Local<v8::Context> context, v8::Loca
 
     std::vector<v8::Local<v8::ArrayBuffer>> transfers;
     for (uint32_t i = 0; i < transferList->Length(); i++) {
-        v8::Local<v8::Value> item = transferList->Get(context, i).ToLocalChecked();
+        v8::Local<v8::Value> item;
+        if (!transferList->Get(context, i).ToLocal(&item)) {
+            return false;
+        }
         if (!item->IsArrayBuffer()) {
             dataCloneError = "Only an ArrayBuffer can be transferred.";
             return false;

@@ -12,6 +12,7 @@
 #include "WebGlobalsClass.h"
 
 #include <chrono>
+#include <cmath>
 
 #include <QCryptographicHash>
 #include <QRandomGenerator>
@@ -25,8 +26,20 @@
 #include "v8/FastScriptValueUtils.h"
 #include "v8/WebGlobalsV8.h"
 
+static ScriptValue throwTypeError(ScriptContext* context, ScriptEngine* engine, const QString& message) {
+    return context->throwValue(engine->makeError(engine->newValue(message), "TypeError"));
+}
+
+// The same limit as crypto.getRandomValues
+static const int MAX_RANDOM_BYTES = 65536;
+
 static ScriptValue randomBytes(ScriptContext* context, ScriptEngine* engine) {
-    const int size = context->argument(0).toInt32();
+    const ScriptValue length = context->argument(0);
+    const double requested = length.isNumber() ? length.toNumber() : -1.0;
+    if (!(requested >= 0.0 && requested <= MAX_RANDOM_BYTES) || requested != std::floor(requested)) {
+        return throwTypeError(context, engine, "randomBytes: expected a length from 0 to 65536");
+    }
+    const int size = (int)requested;
     QVector<quint32> words((size + 3) / 4);
     QRandomGenerator::system()->fillRange(words.data(), words.size());
     return engine->newArrayBuffer(QByteArray(reinterpret_cast<const char*>(words.constData()), size));
@@ -36,15 +49,25 @@ static ScriptValue randomUUID(ScriptContext* context, ScriptEngine* engine) {
     return engine->newValue(QUuid::createUuid().toString(QUuid::WithoutBraces));
 }
 
-// digest(name, arrayBuffer): the prelude has normalised the name to one of the four below
+// digest(name, arrayBuffer), with the name one of the four below as the prelude normalises it
 static ScriptValue digest(ScriptContext* context, ScriptEngine* engine) {
-    const QString name = context->argument(0).toString();
+    const QString name = context->argument(0).isString() ? context->argument(0).toString() : QString();
     QByteArray bytes;
-    qBytearrayFromScriptValue(context->argument(1), bytes);
-    const QCryptographicHash::Algorithm algorithm = name == "SHA-1" ? QCryptographicHash::Sha1
-        : name == "SHA-256" ? QCryptographicHash::Sha256
-        : name == "SHA-384" ? QCryptographicHash::Sha384
-        : QCryptographicHash::Sha512;
+    if (!qBytearrayFromScriptValue(context->argument(1), bytes)) {
+        return throwTypeError(context, engine, "digest: expected an ArrayBuffer");
+    }
+    QCryptographicHash::Algorithm algorithm;
+    if (name == "SHA-1") {
+        algorithm = QCryptographicHash::Sha1;
+    } else if (name == "SHA-256") {
+        algorithm = QCryptographicHash::Sha256;
+    } else if (name == "SHA-384") {
+        algorithm = QCryptographicHash::Sha384;
+    } else if (name == "SHA-512") {
+        algorithm = QCryptographicHash::Sha512;
+    } else {
+        return throwTypeError(context, engine, "digest: expected SHA-1, SHA-256, SHA-384 or SHA-512");
+    }
     ScriptPromise promise = engine->newPromise();
     promise.resolver->resolve(engine->newArrayBuffer(QCryptographicHash::hash(bytes, algorithm)));
     return promise.promise;
@@ -199,8 +222,11 @@ static ScriptValue urlRecord(ScriptEngine* engine, const ParsedUrl& parsed) {
 
 // parseUrl(input, base) -> the URL record the prelude keeps, or null if either does not parse
 static ScriptValue parseUrlNative(ScriptContext* context, ScriptEngine* engine) {
-    ParsedUrl base;
     const bool hasBase = !context->argument(1).isUndefined();
+    if (!context->argument(0).isString() || (hasBase && !context->argument(1).isString())) {
+        return throwTypeError(context, engine, "parseUrl: expected strings");
+    }
+    ParsedUrl base;
     if (hasBase && !parseUrl(context->argument(1).toString(), nullptr, base)) {
         return engine->nullValue();
     }
