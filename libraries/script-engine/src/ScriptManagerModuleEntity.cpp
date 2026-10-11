@@ -16,6 +16,11 @@
 
 #include "ScriptManager.h"
 
+#include <QtCore/QDir>
+
+#include <DependencyManager.h>
+#include <ResourceManager.h>
+
 #include "ScriptCache.h"
 #include "ScriptEngine.h"
 #include "ScriptEnvironment.h"
@@ -23,9 +28,9 @@
 #include "ScriptModuleResolver.h"
 
 int ScriptManager::entityModuleEpoch(const QString& scriptURL, bool forceRedownload) {
-    // Script text given inline, which ScriptCache does not fetch, is never a module
+    // A path without a scheme is fetched as a URL, like any other; javascript: is script text
     QUrl url(scriptURL);
-    if (!isModuleURL(url) || url.scheme().isEmpty() || url.scheme() == "javascript") {
+    if (!isModuleURL(url) || url.scheme() == "javascript") {
         return 0;
     }
     auto current = _entityModuleEpochs.find(scriptURL);
@@ -66,7 +71,16 @@ void ScriptManager::loadEntityModule(const EntityItemID& entityID, const QString
     // fetch is in flight, may arrive first: the entry is fetched anew
     QString source = reloadEpoch && fetchStatus == ScriptCache::STATUS_CACHED ? QString() : contents;
 
-    QUrl url(scriptURL);
+    // As ScriptCache fetched it, so that a path without a scheme is a file: URL its imports resolve against
+    QUrl url = DependencyManager::get<ResourceManager>()->normalizeURL(QUrl(scriptURL));
+    if (QUrl(scriptURL).scheme().isEmpty() && url.isLocalFile()) {
+        // normalizeURL makes /path file:////path
+        QUrl local = QUrl::fromLocalFile(QDir::cleanPath(url.toLocalFile()));
+        if (url.hasQuery()) {
+            local.setQuery(url.query());
+        }
+        url = local;
+    }
     QUrl sandboxURL = currentSandboxURL().isEmpty() ? url : currentSandboxURL();
     auto environment = std::make_shared<ScriptEnvironment>(entityID, sandboxURL, epoch);
     // A second entity script with the URL joins the graph already in the epoch, in flight or evaluated, and waits for
