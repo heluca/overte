@@ -32,6 +32,7 @@ const MIN_TIMEOUT_S = 5;
 const MAX_TIMEOUT_S = 86400;
 const COUNTDOWN_STEP_S = 5;
 const NULL_ID = /^\{?0{8}-0{4}-0{4}-0{4}-0{12}\}?$/;
+/** @type {Record<string, string>} */
 const REASON_TEXT = {
     four: "four in a row",
     timeout: "out of time",
@@ -93,6 +94,17 @@ function cleanName(name, caller) {
  */
 
 export class RefereeCore {
+    // Game fields; resetTable() puts them back to these values.
+    board = newBoard();
+    toMove = 0;
+    moveNo = 0;
+    /** @type {Move[]} */ history = [];
+    /** @type {Result | null} */ result = null;
+    /** @type {string | null} */ gameId = null;
+    /** @type {number | null} */ turnDeadline = null;
+    /** @type {number | null} */ seatDeadline = null;
+    /** @type {number | null} */ idleDeadline = null;
+
     /**
      * @param {World} world
      * @param {{ tableId?: string, turnTimeoutS?: unknown, waitTimeoutS?: unknown, overIdleS?: unknown }} [options]
@@ -111,7 +123,6 @@ export class RefereeCore {
         this.seats = [null, null];
         this.firstSeat = 0;
         this.lastText = "";
-        this.resetTable();
     }
 
     /** Clears the board and the last result; seats are left to the caller. */
@@ -119,17 +130,11 @@ export class RefereeCore {
         this.board = newBoard();
         this.toMove = 0;
         this.moveNo = 0;
-        /** @type {Move[]} */
         this.history = [];
-        /** @type {Result | null} */
         this.result = null;
-        /** @type {string | null} */
         this.gameId = null;
-        /** @type {number | null} */
         this.turnDeadline = null;
-        /** @type {number | null} */
         this.seatDeadline = null;
-        /** @type {number | null} */
         this.idleDeadline = null;
     }
 
