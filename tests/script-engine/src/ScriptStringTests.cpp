@@ -80,9 +80,12 @@ void ScriptStringTests::testCppStringWithNulReachesScript() {
 }
 
 void ScriptStringTests::testCppByteArrayWithNulReachesScript() {
-    // Without a QByteArray marshaller registered, as here, a QByteArray reaches script as a string
+    // Without a QByteArray marshaller a QByteArray reaches script as a string. This test links libentities, whose static
+    // initializer registers the marshaller for every engine wherever the library is loaded (always on macOS, where
+    // linked dylibs are kept), and then it arrives as an ArrayBuffer. Either way the NUL byte must survive.
     QString script =
         "var bytes = strings.bytesWithNul();\n"
+        "if (bytes instanceof ArrayBuffer) { bytes = String.fromCharCode.apply(null, new Uint8Array(bytes)); }\n"
         "print([typeof bytes, bytes.length, bytes.charCodeAt(1), bytes.charAt(2)].join(','));\n"
         "Script.stop(true);\n";
 
