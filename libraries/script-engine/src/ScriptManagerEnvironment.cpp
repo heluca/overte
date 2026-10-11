@@ -30,6 +30,21 @@ QUrl ScriptManager::currentSandboxURL() const {
     return _currentSandboxURL;
 }
 
+// Classic code run for an entity or sandbox gets an environment that carries them, so that a promise continuation that
+// resumes outside this call still has them: after awaiting a promise settled from the event loop (fetch()) or by
+// another script's handler. The current one is reused for nested calls with the same entity and sandbox.
+static ScriptEnvironmentPointer classicEnvironment(ScriptEngine* engine, const EntityItemID& entityID,
+                                                   const QUrl& sandboxURL) {
+    if (entityID.isInvalidID() && sandboxURL.isEmpty()) {
+        return ScriptEnvironmentPointer();
+    }
+    ScriptEnvironmentPointer current = engine->currentEnvironment();
+    if (current && current->classic && current->entityID == entityID && current->sandboxURL == sandboxURL) {
+        return current;
+    }
+    return std::make_shared<ScriptEnvironment>(entityID, sandboxURL, 0, true);
+}
+
 // Execute operation in the appropriate context for (the possibly empty) entityID.
 // Even if entityID is supplied as currentEntityIdentifier, this still documents the source
 // of the code being executed (e.g., if we ever sandbox different entity scripts, or provide different
@@ -40,7 +55,11 @@ void ScriptManager::doWithEnvironment(const EntityItemID& entityID, const QUrl& 
     QUrl oldSandboxURL = _currentSandboxURL;
     _currentEntityIdentifier = entityID;
     _currentSandboxURL = sandboxURL;
-    ScriptEnvironmentScope environmentScope(_engine.get(), environment);
+    ScriptEnvironmentPointer current = environment;
+    if (!current) {
+        current = classicEnvironment(_engine.get(), entityID, sandboxURL);
+    }
+    ScriptEnvironmentScope environmentScope(_engine.get(), current);
 
 #if DEBUG_CURRENT_ENTITY
     ScriptValue oldData = this->globalObject().property("debugEntityID");

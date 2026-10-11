@@ -96,7 +96,8 @@ public:
     QUrl definingSandboxURL;
 
     /**
-     * @brief ES module environment the function was registered in; null for classic script code
+     * @brief Environment the function was registered in (see ScriptEngine::currentEnvironment()); null for classic script
+     * code outside entity scripts
      *
      */
     ScriptEnvironmentPointer definingEnvironment;
@@ -1524,8 +1525,9 @@ public:
     /**
      * @brief The entity whose script is running, if any
      *
-     * In ES module code, the current ScriptEnvironment's, which promise continuations, timers and handlers keep; in
-     * classic script code, the one set by the innermost doWithEnvironment(). Script thread only for module code.
+     * The current ScriptEnvironment's, which promise continuations, timers and handlers keep: ES module code's, or the
+     * classic one doWithEnvironment() makes for classic code; with none, the one set by the innermost
+     * doWithEnvironment(). Script thread only for the environment's.
      *
      * @return EntityItemID Entity ID, null outside entity scripts
      */
@@ -1659,7 +1661,7 @@ protected:
      * The hook for design question Q3 of #10; does nothing while CLASSIC_LOADS_TAINT_ENVIRONMENT is off.
      *
      * @param url URL of the file
-     * @param environment Environment of the code that loaded it; null for classic script code
+     * @param environment Environment of the code that loaded it; classic or null for classic script code
      */
     void noteClassicLoad(const QUrl& url, const ScriptEnvironmentPointer& environment);
 
@@ -1670,7 +1672,8 @@ protected:
      * global values for different entity scripts).
      *
      * The operation runs in the ES module environment given, and continuations it creates carry it; with none it runs as
-     * classic script code, without one even if called from module code.
+     * classic script code even if called from module code, in a classic environment (ScriptEnvironment::classic) that
+     * its continuations carry when there is an entity or sandbox, else without one.
      *
      * @param entityID Entity ID, may be null
      * @param sandboxURL Sandbox URL

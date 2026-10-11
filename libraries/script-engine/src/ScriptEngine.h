@@ -543,8 +543,8 @@ public:
     virtual void queueMicrotask(const ScriptValue& callback) = 0;
 
     /**
-     * @brief The environment of the ES module code that is running, see ScriptEnvironment; null in classic script code.
-     * Promise continuations run in the environment that was current where they were created (<code>then</code>,
+     * @brief The environment of the ES module code that is running, see ScriptEnvironment; in classic script code a
+     * classic one (ScriptEnvironment::classic) for an entity or sandbox, else null. Promise continuations run in the environment that was current where they were created (<code>then</code>,
      * <code>await</code>).
      */
     virtual ScriptEnvironmentPointer currentEnvironment() = 0;
