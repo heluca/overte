@@ -230,9 +230,9 @@ public:
     QString getStatusText() const;
 
     ScriptValue getOnTimeout() const { return _onTimeout; }
-    void setOnTimeout(const ScriptValue& function) { _onTimeout = function; }
+    void setOnTimeout(const ScriptValue& function);
     ScriptValue getOnReadyStateChange() const { return _onReadyStateChange; }
-    void setOnReadyStateChange(const ScriptValue& function) { _onReadyStateChange = function; }
+    void setOnReadyStateChange(const ScriptValue& function);
 
 public slots:
 
@@ -316,6 +316,9 @@ private:
     ScriptValue _responseData;
     ScriptValue _onTimeout;
     ScriptValue _onReadyStateChange;
+    // The script environment each handler was assigned in, which it runs in, as a timer runs in the one it was set in
+    ScriptEnvironmentPointer _onTimeoutEnvironment;
+    ScriptEnvironmentPointer _onReadyStateChangeEnvironment;
     ReadyState _readyState { XMLHttpRequestClass::UNSENT };
 
     /*@jsdoc
