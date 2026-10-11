@@ -24,3 +24,12 @@ if (readBack.type === "Box") {
 
 // Edits need no type.
 Entities.editEntity(cloneSource, { alpha: 0.5 });
+
+// Assets without a callback returns a promise; with one, the callback gets the result.
+async function readSaved(): Promise<string> {
+    const saved = await Assets.getAsset({ url: "/games/saved.json", responseType: "text" });
+    const hash: string = await Assets.getMapping("/games/saved.json");
+    return String(saved.response) + hash;
+}
+readSaved().then(print, (error: Error) => print(error.message));
+Assets.getAsset("/games/saved.json", (error, result) => print(error === null ? String(result.response) : error));
