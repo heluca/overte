@@ -39,8 +39,10 @@ Entities.addEntity({
 ```
 
 - The disc grid follows the Box's `dimensions`: 7 columns across `x`, 6 rows down `y`.
-- Do not lock the board. A locked entity accepts only changes to `locked`, and the referee writes
-  the game into the board's `userData`.
+- Do not lock the board. A locked entity accepts only changes to `locked`, so the referee could
+  not write the game into the board's `userData`. On a locked board it still referees (the
+  channel, `GT.Status` and the discs work), but it logs a warning, shows `BOARD LOCKED` on
+  `GT.Status`, and leaves `userData` alone.
 - `gameTableConfig` is read once, when the script loads. `turnTimeoutS` (default 180) is how long
   the player to move has before forfeiting; `waitTimeoutS` (default 600) is how long a lone player
   keeps a seat. Values outside 5 to 86400 seconds fall back to the defaults.
@@ -54,9 +56,14 @@ The children are found by name, so a reload does not duplicate them:
 - `GT.Disc r<row>c<col>`: one red or black checker model per disc, collisionless and not
   grabbable. The discs of a winning line are drawn larger. Row 0 is the top row.
 
-On unload the referee deletes its discs and shows "Referee not running" on the status Text. When
-it loads and finds a game still in progress in `userData`, the old instance died mid-game: it
-announces that game as abandoned and starts an empty table.
+When the referee loads, it sweeps the board's children for a few seconds while the entity server
+delivers them. It adopts `GT.Status`, and deletes any duplicate of it and any disc it did not
+create.
+
+On unload the referee abandons a game in progress (an `over` message with reason `abandoned`). It
+then writes the table to `userData` as `offline`, deletes its discs, and shows "Referee not running"
+on the status Text. If it loads and finds a game still `playing` in `userData`, the old instance
+died without unloading. It then announces that game as abandoned and starts an empty table.
 
 ### Server API
 
@@ -71,15 +78,17 @@ so one player cannot act for another.
 | `join` | `[name]` | The table is `waiting` and has a free seat; the first joiner is Red (seat 0). Idempotent for a seated caller. The second join starts the game. `name` is cosmetic, at most 32 characters |
 | `move` | `[column]` | The game is `playing`, the caller holds the seat to move, and `column` is exactly one digit `0`-`6` whose column has room |
 | `leave` | `[]` | The caller is seated. In a game in progress the caller resigns and the opponent wins. The seat is freed and the table waits for a new opponent |
-| `state` | `[]` | Always: republishes the current state on the channel (call it after subscribing) |
+| `state` | `[]` | Always: sends the current state on the channel (call it after subscribing). It stores nothing, so it cannot be used to flood the board with edits; nor does a repeated `join` |
 | `newGame` | `[]` | The game is `over` and the caller is seated. Same seats; the first move alternates between games |
 
 A refused call changes nothing and sends a `rejected` message (below). Calls without a caller ID
 (the null UUID, as from a script on the server itself) are refused.
 
 The clock: the player to move forfeits when `turnDeadline` passes (`result.reason` `"timeout"`).
-A lone seat is freed after `waitTimeoutS`. A finished game resets to an empty table after 300
-seconds. The entity script server cannot see avatars come and go, so these timeouts are how the
+A lone seat is freed after `waitTimeoutS` (an `expired` message). A finished game resets to an
+empty table after 300 seconds; an empty table starts its next game with Red. Every call applies a
+passed deadline before anything else, so a move that arrives after `turnDeadline` is refused even
+before the next clock tick. The entity script server cannot see avatars come and go, so these timeouts are how the
 referee notices a player has gone.
 
 ### State
@@ -113,17 +122,18 @@ keeping any other keys. Readers (`Entities.getEntityProperties(boardID, ["userDa
 
 | Field | Meaning |
 | --- | --- |
-| `phase` | `waiting` (seats filling; may still show the last game's board and result), `playing`, `over` |
+| `phase` | `waiting` (seats filling; may still show the last game's board and result), `playing`, `over`, or `offline` (the referee script is not running) |
 | `seats` | Seat 0 is Red (`R`), seat 1 is Black (`B`); `null` when free. `session` is the player's session ID, which is the avatar ID other avatars see |
 | `toMove` | The seat to move while `playing`, else `null` |
 | `rows` | Six strings of seven characters, top row first: `.` empty, `R`, `B` |
 | `legal` | Columns with room while `playing`, else `[]` |
 | `last` | The last disc played: seat, column and the row it landed on |
-| `result` | `null`, or `{ "winner": 0 \| 1 \| null, "reason": "four" \| "draw" \| "timeout" \| "resign", "line": [[row, col], ...] \| null }`; `line` is the four winning cells |
+| `result` | `null`, or `{ "winner": 0 \| 1 \| null, "reason": "four" \| "draw" \| "timeout" \| "resign" \| "abandoned", "line": [[row, col], ...] \| null }`; `line` is the four winning cells (the first line found, if a move made two) |
 | `turnDeadline` | Epoch milliseconds when the player to move forfeits, while `playing` |
 
 The state is output only. The referee never reads it back as input (anyone who can edit the board
-can change `userData`), and its next write repairs any change.
+can change `userData`), and its next write repairs any change. The one exception is at load: a
+`playing` phase there means the previous instance died mid-game.
 
 ### Messages channel
 
@@ -133,9 +143,10 @@ sender ID is whatever the sending client wrote.
 
 | `type` | When | Other fields |
 | --- | --- | --- |
-| `state` | After every change, and on `state` | The whole state above |
+| `state` | After every change, on `state`, and on a repeated `join` | The whole state above |
 | `rejected` | A call was refused | `to` (the caller's session ID), `method`, `reason` |
-| `over` | A game ended, or a reload found one abandoned (`reason` `"abandoned"`) | `gameId`, `result`, `seats` |
+| `over` | A game ended, or was abandoned by an unload or a crash (`result.reason` `"abandoned"`) | `gameId`, `result`, `seats` as they played |
+| `expired` | A lone player's seat timed out | `seat`, `session`, `name` |
 
 `reason` for `rejected` is one of: `no caller id`, `table full`, `game not started`, `game over`,
 `game not over`, `not seated`, `not your turn`, `column must be one digit 0-6`, `column full`.
@@ -144,11 +155,14 @@ sender ID is whatever the sending client wrote.
 
 An agent is a player like any other: its session ID is its seat. The referee neither knows nor
 cares which players are AI. From an Agent assignment client script, with `chooseColumn` the
-agent's own:
+agent's own. The channel name comes from the board's state. The same state can arrive more than
+once (after `state`, a repeated `join`, or a refused call), so the agent plays each turn once:
 
 ```js
 const board = "<board entity id>";
-const channel = "gametable:" + board;
+const userData = JSON.parse(Entities.getEntityProperties(board, ["userData"]).userData || "{}");
+const channel = userData.gameTable.channel;
+let lastTurn = null;
 Messages.subscribe(channel);
 Messages.messageReceived.connect((ch, text) => {
     if (ch !== channel) {
@@ -158,8 +172,10 @@ Messages.messageReceived.connect((ch, text) => {
     if (message.type !== "state" || message.phase !== "playing") {
         return;
     }
+    const turn = message.gameId + "/" + message.moveNo;
     const mine = message.seats.findIndex(seat => seat && seat.session === Agent.sessionUUID);
-    if (mine === message.toMove) {
+    if (mine === message.toMove && turn !== lastTurn) {
+        lastTurn = turn;
         Entities.callEntityServerMethod(board, "move", [String(chooseColumn(message.rows, message.legal))]);
     }
 });
@@ -182,8 +198,12 @@ npm run typecheck   # tsc over the three modules against tools/typings' server e
 ```
 
 `typecheck` needs the declarations built first: `npm ci && npm run build` in `tools/typings`.
-`overte-server-entity-extras.d.ts` declares the two things the generated declarations lack:
-`Script.remoteCallerID` and `import.meta.url`.
+`overte-server-entity-extras.d.ts` is a stop-gap. It declares the two things the generated
+declarations lack: `Script.remoteCallerID` (typed `string | undefined`) and `import.meta.url`.
+The real fix is a `remoteCallerID` property in the `Script` JSDoc in
+`libraries/script-engine/src/ScriptManagerScriptingInterface.h`, where it appears today only as a
+`@param` of `callEntityScriptMethod`, plus an `ImportMeta` declaration from
+`tools/typings/generate.js` (heluca/overte#40). Delete the file when that lands.
 
 ## The original physics table
 
