@@ -17,13 +17,16 @@ const BOARD = "{b0a4d000-0000-4000-8000-000000000000}";
 const ALICE = "{aaaaaaaa-0000-4000-8000-000000000001}";
 const BOB = "{bbbbbbbb-0000-4000-8000-000000000002}";
 
-function fakeEngine(boardUserData = "") {
+function fakeEngine(boardUserData = "", locked = false) {
     let nextId = 1;
-    const entities = new Map([[BOARD, { name: "Board", dimensions: { x: 0.7, y: 0.6, z: 0.04 }, userData: boardUserData }]]);
+    const entities = new Map([[BOARD, {
+        name: "Board", dimensions: { x: 0.7, y: 0.6, z: 0.04 }, userData: boardUserData, locked
+    }]]);
     const engine = {
         entities,
         sent: [],
         printed: [],
+        boardEdits: 0,
         timers: new Map(),
         Entities: {
             addEntity(properties) {
@@ -32,6 +35,9 @@ function fakeEngine(boardUserData = "") {
                 return id;
             },
             editEntity(id, properties) {
+                if (id === BOARD) {
+                    engine.boardEdits++;
+                }
                 Object.assign(entities.get(id), properties);
                 return id;
             },
@@ -65,7 +71,16 @@ function fakeEngine(boardUserData = "") {
         discs() {
             return [...entities.values()].filter(entity => (entity.name || "").startsWith("GT.Disc "));
         },
-        projection() { return JSON.parse(entities.get(BOARD).userData).gameTable; }
+        projection() { return JSON.parse(entities.get(BOARD).userData).gameTable; },
+        // A child the entity server delivers after preload has started
+        arrive(name) {
+            return engine.Entities.addEntity({ name, parentID: BOARD });
+        },
+        runTimer(id) {
+            const callback = engine.timers.get(id);
+            engine.timers.delete(id);
+            callback();
+        }
     };
     Object.assign(globalThis, { Entities: engine.Entities, Messages: engine.Messages, Script: engine.Script, print: engine.print });
     return engine;
@@ -162,7 +177,72 @@ test("a reload finds its status Text, deletes stale discs and reports the abando
     assert.equal(engine.discs().length, 0);
     assert.equal(engine.projection().phase, "waiting");
     assert.ok(engine.sent.some(sent => sent.message.type === "over" && sent.message.result.reason === "abandoned"));
-    assert.equal(second.ready, true);
+    assert.match(engine.named("GT.Status")[0].text, /Waiting for players/);
+});
+
+test("the sweep runs for the whole search window and deletes discs that arrive late", () => {
+    const engine = fakeEngine();
+    const referee = new GameTableReferee();
+    referee.preload(BOARD);
+    assert.ok(engine.timers.has(referee.searchTimer), "still sweeping");
+    engine.call(referee, ALICE, "join", ["Alice"]);
+    engine.call(referee, BOB, "join", ["Bob"]);
+    engine.call(referee, ALICE, "move", ["4"]);
+    const status = engine.arrive("GT.Status");
+    engine.runTimer(referee.searchTimer);
+    assert.equal(referee.statusID, status);
+    assert.match(engine.named("GT.Status")[0].text, /Black to move/);
+    // Found its status display, but keeps sweeping: stale discs and a duplicate display arrive later
+    const stale = [engine.arrive("GT.Disc r5c0"), engine.arrive("GT.Disc r5c4")];
+    const duplicate = engine.arrive("GT.Status");
+    assert.ok(engine.timers.has(referee.searchTimer));
+    engine.runTimer(referee.searchTimer);
+    [...stale, duplicate].forEach(id => assert.equal(engine.entities.has(id), false));
+    assert.deepEqual(engine.discs().map(disc => disc.name), ["GT.Disc r5c4"]);
+    assert.equal(engine.entities.has(referee.discs.get("r5c4").id), true);
+    // After the window it stops, and creates no second display
+    engine.Script.clearTimeout(referee.searchTimer);
+    referee.findChildren(0);
+    assert.equal(engine.timers.has(referee.searchTimer), false);
+    assert.equal(engine.named("GT.Status").length, 1);
+});
+
+test("state and a repeated join go to the channel without editing the board", () => {
+    const engine = fakeEngine();
+    const referee = loaded(engine);
+    engine.call(referee, ALICE, "join", ["Alice"]);
+    const edits = engine.boardEdits;
+    const sent = engine.sent.length;
+    for (let i = 0; i < 5; i++) {
+        engine.call(referee, BOB, "state");
+        engine.call(referee, ALICE, "join", ["Alice"]);
+    }
+    assert.equal(engine.boardEdits, edits);
+    assert.equal(engine.sent.length, sent + 10);
+    assert.ok(engine.sent.slice(sent).every(entry => entry.message.type === "state"));
+    assert.equal(engine.printed.filter(line => line.includes('"state"')).length, 0);
+});
+
+test("leaving mid-game edits the board once", () => {
+    const engine = fakeEngine();
+    const referee = loaded(engine);
+    engine.call(referee, ALICE, "join", ["Alice"]);
+    engine.call(referee, BOB, "join", ["Bob"]);
+    const edits = engine.boardEdits;
+    engine.call(referee, BOB, "leave");
+    assert.equal(engine.boardEdits, edits + 1);
+    assert.equal(engine.projection().phase, "waiting");
+});
+
+test("a locked board warns in the log and on the display, and is not edited", () => {
+    const engine = fakeEngine(JSON.stringify({ owner: "kept" }), true);
+    const referee = loaded(engine);
+    engine.call(referee, ALICE, "join", ["Alice"]);
+    assert.equal(engine.boardEdits, 0);
+    assert.deepEqual(JSON.parse(engine.entities.get(BOARD).userData), { owner: "kept" });
+    assert.ok(engine.printed.some(line => /BOARD LOCKED/.test(line)));
+    assert.match(engine.named("GT.Status")[0].text, /^BOARD LOCKED[^\n]*\nRed: Alice/);
+    assert.equal(engine.sent[engine.sent.length - 1].message.type, "state");
 });
 
 test("unload stops the clock, removes the discs and marks the display offline", () => {
@@ -176,4 +256,14 @@ test("unload stops the clock, removes the discs and marks the display offline", 
     assert.equal(engine.timers.size, 0);
     assert.equal(engine.discs().length, 0);
     assert.match(engine.named("GT.Status")[0].text, /Referee not running/);
+    const state = engine.projection();
+    assert.equal(state.phase, "offline");
+    assert.equal(state.toMove, null);
+    assert.equal(state.turnDeadline, null);
+    assert.ok(engine.sent.some(sent => sent.message.type === "over" && sent.message.result.reason === "abandoned"));
+
+    // The next load finds it offline, not mid-game, and reports nothing more
+    const abandoned = engine.sent.filter(sent => sent.message.type === "over").length;
+    loaded(engine);
+    assert.equal(engine.sent.filter(sent => sent.message.type === "over").length, abandoned);
 });

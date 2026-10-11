@@ -38,6 +38,7 @@ const STATUS_SIZE = { x: 1.0, y: 0.4, z: 0.01 };
 const STATUS_GAP = 0.05;
 const STATUS_LINE_HEIGHT = 0.03;
 const OFFLINE_TEXT = "Game table\nReferee not running";
+const LOCKED_TEXT = "BOARD LOCKED: the game is not saved in userData. Unlock the board and reload its script.";
 
 /**
  * @param {unknown} text
@@ -66,15 +67,20 @@ export default class GameTableReferee {
     /** @type {Map<string, { id: Uuid, look: string }>} cell "r<row>c<col>" -> disc */ discs = new Map();
     /** @type {{ text: string, board: string[], line: number[][] | null } | null} */ view = null;
     shownText = "";
-    ready = false;
+    locked = false;
 
     /** @param {Uuid} entityID */
     preload(entityID) {
         this.entityID = entityID;
         this.channel = channelFor(entityID);
         const properties = /** @type {Partial<Entities.EntityProperties_Box>} */ (
-            Entities.getEntityProperties(entityID, ["userData", "dimensions"]));
+            Entities.getEntityProperties(entityID, ["userData", "dimensions", "locked"]));
         this.dimensions = /** @type {Vec3} */ (properties.dimensions);
+        // A locked entity takes no edit but to `locked`, so the state could not be stored.
+        this.locked = properties.locked === true;
+        if (this.locked) {
+            print("Game table " + entityID + ": " + LOCKED_TEXT);
+        }
         const userData = parseObject(properties.userData);
         const config = userData.gameTableConfig || {};
         this.core = new RefereeCore({
@@ -92,6 +98,7 @@ export default class GameTableReferee {
     }
 
     unload() {
+        this.core.stop();
         Script.clearInterval(this.timer);
         if (this.searchTimer !== null) {
             Script.clearTimeout(this.searchTimer);
@@ -134,40 +141,44 @@ export default class GameTableReferee {
 
     /** @param {object} state */
     publish(state) {
-        const userData = parseObject(Entities.getEntityProperties(this.entityID, ["userData"]).userData);
-        userData.gameTable = state;
-        Entities.editEntity(this.entityID, { userData: JSON.stringify(userData) });
+        if (!this.locked) {
+            const userData = parseObject(Entities.getEntityProperties(this.entityID, ["userData"]).userData);
+            userData.gameTable = state;
+            Entities.editEntity(this.entityID, { userData: JSON.stringify(userData) });
+        }
         Messages.sendMessage(this.channel, JSON.stringify({ type: "state", ...state }));
     }
 
-    /** @param {object} event */
+    /** @param {{ type: string }} event */
     announce(event) {
         const message = JSON.stringify(event);
         Messages.sendMessage(this.channel, message);
-        print("Game table " + this.entityID + ": " + message);
+        if (event.type !== "state") {
+            print("Game table " + this.entityID + ": " + message);
+        }
     }
 
     /**
      * Children persist with the board, and the entity server may still be sending them when
-     * preload runs, so look for a while before creating the status display (as Shortbow does).
-     * Discs left by an instance that died without unloading are deleted.
+     * preload runs, so sweep them for a while (as Shortbow does): adopt the status display,
+     * delete any duplicate of it and any disc this instance did not create (left by one that
+     * died without unloading). The status display is created only if none turned up.
      * @param {number} deadline
      */
     findChildren(deadline) {
         this.searchTimer = null;
+        const ours = new Set([...this.discs.values()].map(disc => disc.id));
         Entities.getChildrenIDs(this.entityID).forEach(id => {
             const name = Entities.getEntityProperties(id, ["name"]).name || "";
             if (name === STATUS_NAME && (this.statusID === null || this.statusID === id)) {
                 this.statusID = id;
-            } else if (name === STATUS_NAME || name.startsWith(DISC_PREFIX)) {
+            } else if (name === STATUS_NAME || (name.startsWith(DISC_PREFIX) && !ours.has(id))) {
                 Entities.deleteEntity(id);
             }
         });
-        if (this.statusID === null && Date.now() < deadline) {
+        if (Date.now() < deadline) {
             this.searchTimer = Script.setTimeout(() => this.findChildren(deadline), CHILD_POLL_MS);
-            return;
-        }
-        if (this.statusID === null) {
+        } else if (this.statusID === null) {
             this.statusID = Entities.addEntity({
                 type: "Text",
                 name: STATUS_NAME,
@@ -185,17 +196,17 @@ export default class GameTableReferee {
                 grab: { grabbable: false }
             });
         }
-        this.ready = true;
         this.draw();
     }
 
     /** Brings the Text child and the disc entities in line with the latest view. */
     draw() {
-        if (!this.ready || !this.view || !this.statusID) {
+        if (!this.view) {
             return;
         }
-        const { text, board, line } = this.view;
-        if (text !== this.shownText) {
+        const { board, line } = this.view;
+        const text = this.locked ? LOCKED_TEXT + "\n" + this.view.text : this.view.text;
+        if (this.statusID && text !== this.shownText) {
             Entities.editEntity(this.statusID, { text });
             this.shownText = text;
         }
