@@ -468,7 +468,9 @@ public:
      * @param {Uuid} entityID - The ID of the entity running the entity script.
      * @param {string} methodName - The name of the method to call.
      * @param {string[]} [parameters=[]] - The parameters to call the specified method with.
-     * @param {Uuid} [remoteCallerID=Uuid.NONE] - An ID that identifies the caller.
+     * @param {Uuid} [remoteCallerID=Uuid.NONE] - An ID that identifies the caller. The method reads it as
+     *     <code>Script.remoteCallerID</code>, which is set only while the method runs synchronously: an <code>async</code>
+     *     method must read it before its first <code>await</code>.
      */
     Q_INVOKABLE void callEntityScriptMethod(const EntityItemID& entityID, const QString& methodName,
                                             const QStringList& params = QStringList(),

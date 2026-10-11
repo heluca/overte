@@ -604,8 +604,8 @@ void EntityScriptServer::checkAndCallPreload(const EntityItemID& entityID, const
             return;
         }
 
-        EntityScriptDetails details;
-        bool isRunning = _entitiesScriptManager->getEntityScriptDetails(entityID, oldScriptURL, details);
+        // Not getEntityScriptDetails(): copying the details copies the script object, which only the script thread may do
+        bool isRunning = _entitiesScriptManager->hasEntityScriptDetails(entityID, oldScriptURL);
         bool reload = oldScriptURL == newScriptURL;
 
         // TODO: Check if this is running on script engine thread, otherwise lambda capturing script engine pointer is needed

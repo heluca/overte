@@ -21,6 +21,7 @@
 
 #include <functional>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <QtCore/QByteArray>
@@ -29,6 +30,7 @@
 #include <QtCore/QMutex>
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
+#include <QtCore/QSet>
 #include <QtCore/QSharedPointer>
 #include <QtCore/QString>
 #include <QQueue>
@@ -156,6 +158,11 @@ public:  // ScriptEngine implementation
     virtual void queueMicrotask(const ScriptValue& callback) override;
     virtual void loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) override;
     virtual void reportStalledTopLevelAwaits() override;
+    virtual int newModuleEpoch() override;
+    virtual void releaseModuleEpoch(int epoch) override;
+    virtual ScriptValue callReportingRejection(const ScriptValue& function, const ScriptValue& thisObject,
+        const ScriptValueList& args,
+        std::function<void(const QString& reason, const QString& fileName, int lineNumber)> onRejected) override;
     virtual ScriptEnvironmentPointer currentEnvironment() override;
     virtual ScriptEnvironmentPointer swapCurrentEnvironment(const ScriptEnvironmentPointer& environment) override;
     virtual void compileTest() override;
@@ -335,6 +342,20 @@ private:
     void initEnvironments(v8::Local<v8::Context> context);
     // loadModule() without an environment that survives await: reports ScriptModuleLoaderV8::MODULES_UNAVAILABLE
     void refuseModuleLoad(const QUrl& url, ScriptModuleCallback onEvaluated);
+    // See newModuleEpoch(); epoch 0 is the one every engine starts with
+    int _lastModuleEpoch { 0 };
+    // Epochs whose modules all bypass ScriptCache, see ScriptModuleRequest::forceDownload
+    QSet<int> _downloadModuleEpochs;
+    void applyModuleEpochDownload(ScriptModuleRequest& request);
+    // Reports the modules of the epoch (of every epoch if negative) still suspended in a top-level await, as a warning
+    // starting with what
+    void reportStalledTopLevelAwaits(int epoch, const QString& what);
+    // See callReportingRejection(); by id, as the promise may never settle
+    using RejectionHandler = std::function<void(const QString& reason, const QString& fileName, int lineNumber)>;
+    std::unordered_map<quint64, RejectionHandler> _rejectionHandlers;
+    quint64 _lastRejectionHandler { 0 };
+    static void rejectionHandlerFulfilled(const v8::FunctionCallbackInfo<v8::Value>& info);
+    static void rejectionHandlerRejected(const v8::FunctionCallbackInfo<v8::Value>& info);
 #ifdef OVERTE_V8_MEMORY_DEBUG
     std::atomic<size_t> scriptValueCount{0};
     std::atomic<size_t> scriptValueProxyCount{0};

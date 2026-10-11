@@ -2200,6 +2200,7 @@ void ScriptManager::loadEntityScript(const EntityItemID& entityID, const QString
     newDetails.scriptText = entityScript;
     newDetails.status = EntityScriptStatus::LOADING;
     newDetails.definingSandboxURL = currentSandboxURL();
+    newDetails.moduleEpoch = entityModuleEpoch(entityScript, forceRedownload);
     setEntityScriptDetails(entityID, entityScript, newDetails);
 
     auto scriptCache = DependencyManager::get<ScriptCache>();
@@ -2284,10 +2285,12 @@ void ScriptManager::entityScriptContentAvailable(const EntityItemID& entityID, c
     }
 
     // SYNTAX ERRORS
+    // Not for an ES module: checkSyntax compiles a classic script, which rejects import and export
+    bool isModule = isURL && isModuleURL(QUrl(scriptOrURL));
     //auto syntaxError = _engine->lintScript(contents, fileName);
     auto program = _engine->newProgram( contents, fileName );
-    auto syntaxCheck = program->checkSyntax();
-    if (syntaxCheck->state() != ScriptSyntaxCheckResult::Valid) {
+    auto syntaxCheck = isModule ? ScriptSyntaxCheckResultPointer() : program->checkSyntax();
+    if (syntaxCheck && syntaxCheck->state() != ScriptSyntaxCheckResult::Valid) {
         auto message = syntaxCheck->errorMessage();
         //syntaxError.property("formatted").toString();
         //if (message.isEmpty()) {
@@ -2531,6 +2534,11 @@ void ScriptManager::entityScriptContentAvailable(const EntityItemID& entityID, c
         lastModified = (quint64)QFileInfo(file).lastModified().toMSecsSinceEpoch();
     }
 
+    if (isModule) {
+        loadEntityModule(entityID, scriptOrURL, contents, status, lastModified);
+        return;
+    }
+
     // THE ACTUAL EVALUATION AND CONSTRUCTION
     ScriptValue entityScriptConstructor, entityScriptObject;
     QUrl sandboxURL = currentSandboxURL().isEmpty() ? scriptOrURL : currentSandboxURL();
@@ -2636,6 +2644,7 @@ void ScriptManager::unloadEntityScript(const EntityItemID& entityID, const QStri
         }
 
         stopAllTimersForEntityScript(entityID);
+        releaseUnusedEntityModuleEpochs();
     }
 }
 
@@ -2698,6 +2707,7 @@ void ScriptManager::unloadAllEntityScriptsForEntity(const EntityItemID& entityID
 
         stopAllTimersForEntityScript(entityID);
     }
+    releaseUnusedEntityModuleEpochs();
 }
 
 QList<EntityItemID> ScriptManager::getListOfEntityScriptIDs() {
@@ -2736,6 +2746,7 @@ void ScriptManager::unloadAllEntityScripts(bool blockingCall) {
         QWriteLocker locker{ &_entityScriptsLock };
         _entityScripts.clear();
     }
+    releaseUnusedEntityModuleEpochs();
     emit entityScriptDetailsUpdated();
 
 #ifdef DEBUG_ENGINE_STATE
@@ -2842,8 +2853,7 @@ void ScriptManager::callEntityScriptMethod(const EntityItemID& entityID, const Q
                     .property("Script")
                     .setProperty("remoteCallerID",
                                  remoteCallerID.toString());  // Make the remoteCallerID available to javascript as a global.
-                callWithEnvironment(entityID, details.definingSandboxURL, entityScript.property(methodName), entityScript,
-                                    args);
+                callEntityScriptFunction(entityID, details, methodName, entityScript, args);
                 scriptEngine->globalObject().property("Script").setProperty("remoteCallerID", oldData);
             }
         }
@@ -2918,8 +2928,7 @@ void ScriptManager::callEntityScriptMethodForScript(const EntityItemID& entityID
                 .property("Script")
                 .setProperty("remoteCallerID",
                                 remoteCallerID.toString());  // Make the remoteCallerID available to javascript as a global.
-            callWithEnvironment(entityID, details.definingSandboxURL, entityScript.property(methodName), entityScript,
-                                args);
+            callEntityScriptFunction(entityID, details, methodName, entityScript, args);
             scriptEngine->globalObject().property("Script").setProperty("remoteCallerID", oldData);
         }
     }
@@ -2962,8 +2971,7 @@ void ScriptManager::callEntityScriptMethodForScript(const EntityItemID& entityID
             ScriptValueList args;
             args << EntityItemIDtoScriptValue(scriptEngine, entityID);
             args << scriptValueFromValue(scriptEngine, param);
-            callWithEnvironment(entityID, details.definingSandboxURL, entityScript.property(methodName), entityScript,
-                                args);
+            callEntityScriptFunction(entityID, details, methodName, entityScript, args);
         }
     }
 }
@@ -3005,7 +3013,7 @@ void ScriptManager::callEntityScriptMethod(const EntityItemID& entityID, const Q
                 ScriptValueList args;
                 args << EntityItemIDtoScriptValue(scriptEngine, entityID);
                 args << event.toScriptValue(scriptEngine);
-                callWithEnvironment(entityID, details.definingSandboxURL, entityScript.property(methodName), entityScript, args);
+                callEntityScriptFunction(entityID, details, methodName, entityScript, args);
             }
         }
     }
@@ -3049,8 +3057,7 @@ void ScriptManager::callEntityScriptMethod(const EntityItemID& entityID, const Q
                 args << EntityItemIDtoScriptValue(scriptEngine, entityID);
                 args << EntityItemIDtoScriptValue(scriptEngine, otherID);
                 args << collisionToScriptValue(scriptEngine, collision);
-                callWithEnvironment(entityID, details.definingSandboxURL, entityScript.property(methodName), entityScript,
-                                    args);
+                callEntityScriptFunction(entityID, details, methodName, entityScript, args);
             }
         }
     }

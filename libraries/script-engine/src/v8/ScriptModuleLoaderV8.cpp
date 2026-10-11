@@ -60,6 +60,7 @@ void ScriptEngineV8::loadModule(const ScriptModuleRequest& request, ScriptModule
         return;
     }
     ScriptModuleRequest withEnvironment = request;
+    applyModuleEpochDownload(withEnvironment);
     if (!withEnvironment.environment) {
         withEnvironment.environment = std::make_shared<ScriptEnvironment>(EntityItemID(), request.sandboxURL, request.epoch);
     }
@@ -79,7 +80,7 @@ ScriptModuleLoaderV8::ScriptModuleLoaderV8(ScriptEngineV8* engine, const ScriptM
 }
 
 void ScriptModuleLoaderV8::start() {
-    if (abandonIfStopping()) {
+    if (_finished || abandonIfStopping()) {
         return;
     }
     auto scopeGuard = _engine->getScopeGuard();
@@ -97,6 +98,7 @@ void ScriptModuleLoaderV8::start() {
 
 void ScriptModuleLoaderV8::fetch(ScriptEngineV8* engine, const ScriptModuleRecordV8Pointer& record, bool forceDownload) {
     auto scriptCache = DependencyManager::get<ScriptCache>();
+    record->forceDownload = forceDownload;
     // The BatchLoader pattern: the proxy outlives a loader deleted mid-fetch, and the result belongs to the record
     // (other loaders may be waiting on it), so it is delivered to the engine rather than to this loader.
     auto proxy = new ScriptCacheSignalProxy();
@@ -105,6 +107,9 @@ void ScriptModuleLoaderV8::fetch(ScriptEngineV8* engine, const ScriptModuleRecor
     // otherwise compile and walk the module in the middle of walking its importer.
     QObject::connect(proxy, &ScriptCacheSignalProxy::contentAvailable, engine,
         [engine, record](const QString&, const QString& contents, bool isURL, bool success, const QString& status) {
+            if (record->released) {
+                return;
+            }
             auto scopeGuard = engine->getScopeGuard();
             if (success && isURL && record->kind != ScriptModuleKind::SourceText) {
                 compileSynthetic(engine, record, contents);
@@ -461,6 +466,8 @@ void ScriptModuleLoaderV8::fail(const QString& message, const QString& fileName,
 
 void ScriptModuleLoaderV8::report(const QString& message, const QString& fileName, int line,
                                   std::shared_ptr<ScriptException> exception) {
+    // An entity script's load failure is reported for its entity
+    ScriptEnvironmentScope environmentScope(_engine, _request.environment);
     if (auto manager = _engine->manager()) {
         manager->scriptErrorMessage(message, fileName, line);
     } else {
@@ -468,32 +475,4 @@ void ScriptModuleLoaderV8::report(const QString& message, const QString& fileNam
     }
     _engine->setUncaughtException(exception);
     finish(_engine->undefinedValue(), exception);
-}
-
-void ScriptModuleLoaderV8::rejectImport(v8::Local<v8::Value> reason) {
-    _importResolver->reject(ScriptValue(new ScriptValueV8Wrapper(_engine, V8ScriptValue(_engine, reason))));
-    finish(_engine->undefinedValue(), std::shared_ptr<ScriptException>());
-}
-
-bool ScriptModuleLoaderV8::abandonIfStopping() {
-    auto manager = _engine->manager();
-    if (!manager || !manager->isStopping()) {
-        return false;
-    }
-    // A stopped script neither reports nor hears about a load that completes late, e.g. in run()'s final event pass
-    _finished = true;
-    _onEvaluated = ScriptModuleCallback();
-    _importResolver.reset();
-    deleteLater();
-    return true;
-}
-
-void ScriptModuleLoaderV8::finish(const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error) {
-    _finished = true;
-    deleteLater();
-    _importResolver.reset();
-    auto onEvaluated = std::move(_onEvaluated);
-    if (onEvaluated) {
-        onEvaluated(moduleNamespace, error);
-    }
 }
