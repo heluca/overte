@@ -43,9 +43,11 @@
 #include "ZoneEntityItem.h"
 #include "WebEntityItem.h"
 #include <EntityScriptClient.h>
+#include "EntityScriptClientAccess.h"
 #include <Profile.h>
 #include "GrabPropertyGroup.h"
 #include <ScriptContext.h>
+#include <Scriptable.h>
 #include <ScriptEngineCast.h>
 #include <ScriptValue.h>
 
@@ -1301,7 +1303,11 @@ void EntityScriptingInterface::callEntityMethod(const QUuid& id, const QString& 
 
 void EntityScriptingInterface::callEntityServerMethod(const QUuid& id, const QString& method, const QStringList& params) {
     PROFILE_RANGE(script_entities, __FUNCTION__);
-    DependencyManager::get<EntityScriptClient>()->callEntityServerMethod(id, method, params);
+    auto client = entityScriptClientOrRaise(Scriptable::engine().get(), "callEntityServerMethod");
+    if (!client) {
+        return;
+    }
+    client->callEntityServerMethod(id, method, params);
 }
 
 void EntityScriptingInterface::callEntityClientMethod(const QUuid& clientSessionID, const QUuid& entityID, const QString& method, const QStringList& params) {
@@ -1337,7 +1343,13 @@ void EntityScriptingInterface::handleEntityScriptCallMethodPacket(QSharedPointer
             params << paramString;
         }
 
-        auto entity = getEntityTree()->findEntityByEntityItemID(entityID);
+        // An assignment-client Agent has no entity tree before its script starts or after it finishes
+        auto entityTree = getEntityTree();
+        if (!entityTree) {
+            qCDebug(entities) << "Dropped a call to" << method << "on" << entityID << "with no entity tree";
+            return;
+        }
+        auto entity = entityTree->findEntityByEntityItemID(entityID);
         if (entity) {
             std::lock_guard<std::recursive_mutex> lock(_entitiesScriptEngineLock);
             auto& scriptEngine = (entity->isLocalEntity() || entity->isMyAvatarEntity()) ? _persistentEntitiesScriptManager : _nonPersistentEntitiesScriptManager;
@@ -1544,7 +1556,10 @@ ParabolaToEntityIntersectionResult EntityScriptingInterface::evalParabolaInterse
 }
 
 bool EntityScriptingInterface::reloadServerScripts(const QUuid& entityID) {
-    auto client = DependencyManager::get<EntityScriptClient>();
+    auto client = entityScriptClientOrRaise(Scriptable::engine().get(), "reloadServerScripts");
+    if (!client) {
+        return false;
+    }
     return client->reloadServerScript(entityID);
 }
 
@@ -1552,17 +1567,20 @@ bool EntityPropertyMetadataRequest::script(EntityItemID entityID, const ScriptVa
     using LocalScriptStatusRequest = QFutureWatcher<QVariant>;
 
     LocalScriptStatusRequest* request = new LocalScriptStatusRequest;
-    QObject::connect(request, &LocalScriptStatusRequest::finished, _scriptManager, [=, this]() mutable {
+    // This EntityPropertyMetadataRequest lives on the caller's stack and is gone when the future finishes; the
+    // connection ends with the manager, so the manager outlives the handler
+    ScriptManager* manager = _scriptManager;
+    QObject::connect(request, &LocalScriptStatusRequest::finished, _scriptManager, [=]() mutable {
         auto details = request->result().toMap();
         ScriptValue err, result;
         if (details.contains("isError")) {
             if (!details.contains("message")) {
                 details["message"] = details["errorInfo"];
             }
-            err = _scriptManager->engine()->makeError(_scriptManager->engine()->toScriptValue(details));
+            err = manager->engine()->makeError(manager->engine()->toScriptValue(details));
         } else {
             details["success"] = true;
-            result = _scriptManager->engine()->toScriptValue(details);
+            result = manager->engine()->toScriptValue(details);
         }
         callScopedHandlerObject(handler, err, result);
         request->deleteLater();
@@ -1585,11 +1603,14 @@ bool EntityPropertyMetadataRequest::script(EntityItemID entityID, const ScriptVa
 }
 
 bool EntityPropertyMetadataRequest::serverScripts(EntityItemID entityID, const ScriptValue& handler) {
-    auto client = DependencyManager::get<EntityScriptClient>();
+    auto client = entityScriptClientOrRaise(_scriptManager->engine().get(), "queryPropertyMetadata(\"serverScripts\")");
+    if (!client) {
+        return false;
+    }
     auto request = client->createScriptStatusRequest(entityID);
+    // This EntityPropertyMetadataRequest lives on the caller's stack and is gone when the reply arrives
     QPointer<ScriptManager> manager = _scriptManager;
-    QObject::connect(request, &GetScriptStatusRequest::finished, _scriptManager, [=, this](GetScriptStatusRequest* request) mutable {
-        auto manager = _scriptManager;
+    QObject::connect(request, &GetScriptStatusRequest::finished, _scriptManager, [=, handler = handler](GetScriptStatusRequest* request) mutable {
         if (!manager) {
             qCDebug(entities) << __FUNCTION__ << " -- engine destroyed while inflight" << entityID;
             return;
@@ -1614,8 +1635,11 @@ bool EntityPropertyMetadataRequest::serverScripts(EntityItemID entityID, const S
         }
         callScopedHandlerObject(handler, err, result);
         request->deleteLater();
+        // Release the script value here, on the script thread, not with the connection on the client's thread
+        handler = ScriptValue();
     });
-    request->start();
+    // On the client's thread, which owns its pending requests
+    QMetaObject::invokeMethod(request, "start");
     return true;
 }
 
@@ -1668,8 +1692,10 @@ bool EntityScriptingInterface::queryPropertyMetadata(const QUuid& entityID,
 
 //bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, const ScriptValue& callback) {
 bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, ScriptValue callback) {
-    auto client = DependencyManager::get<EntityScriptClient>();
-    auto request = client->createScriptStatusRequest(entityID);
+    auto client = entityScriptClientOrRaise(callback.engine().get(), "getServerScriptStatus");
+    if (!client) {
+        return false;
+    }
 
     auto engine = callback.engine();
     auto manager = engine->manager();
@@ -1679,6 +1705,7 @@ bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, Scri
         engine->raiseException("This script does not belong to a ScriptManager");
         return false;
     }
+    auto request = client->createScriptStatusRequest(entityID);
 
     connect(request, &GetScriptStatusRequest::finished, manager, [callback](GetScriptStatusRequest* request) mutable {
         auto engine = callback.engine();
@@ -1694,7 +1721,8 @@ bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, Scri
         // This causes ScriptValueProxy to be released, and thus its destructor is called on script engine thread and not main thread
         callback = ScriptValue();
     });
-    request->start();
+    // On the client's thread, which owns its pending requests
+    QMetaObject::invokeMethod(request, "start");
     return true;
 }
 

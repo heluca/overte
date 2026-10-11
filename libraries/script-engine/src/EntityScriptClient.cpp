@@ -25,6 +25,15 @@ GetScriptStatusRequest::~GetScriptStatusRequest() {
 
 void GetScriptStatusRequest::start() {
     auto client = DependencyManager::get<EntityScriptClient>();
+    // start() is queued to the client's thread, and the client can be destroyed before it runs
+    if (!client) {
+        _responseReceived = false;
+        _isRunning = false;
+        _status = EntityScriptStatus::ERROR_LOADING_SCRIPT;
+        _errorInfo = "entity script client unavailable";
+        emit finished(this);
+        return;
+    }
     client->getEntityServerScriptStatus(_entityID, [this](bool responseReceived, bool isRunning, EntityScriptStatus status, QString errorInfo) {
         _responseReceived = responseReceived;
         _isRunning = isRunning;
