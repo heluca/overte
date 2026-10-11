@@ -624,6 +624,7 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
             }
             qCCritical(scriptengine_v8) << errorMessage << _program->fileName() << ":" << compileResult->errorLineNumber();
             popContext();
+            _evaluatingCounter--;
             return nullValue();
         }
         const V8ScriptProgram& program = unwrappedProgram->toV8Value();
