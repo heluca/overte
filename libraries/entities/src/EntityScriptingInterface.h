@@ -966,6 +966,9 @@ public slots:
      * Gets the status of a server entity script attached to an entity.
      * <p class="availableIn"><strong>Supported Script Types:</strong> Interface Scripts &bull; Client Entity Scripts &bull; Avatar Scripts &bull; 
      * Assignment Client Scripts</p>
+     * <p>The entity script server does not reply for an entity it does not run server scripts for. If there is no reply
+     * within 5 seconds, the callback is called with <code>success</code> <code>false</code> and <code>errorInfo</code>
+     * <code>"no reply from the entity script server"</code>. The callback is not called once the script has stopped.</p>
      * @function Entities.getServerScriptStatus
      * @param {Uuid} entityID - The ID of the entity to get the server entity script status of.
      * @param {Entities~getServerScriptStatusCallback} callback - The function to call upon completion.
@@ -988,7 +991,10 @@ public slots:
     /*@jsdoc
      * Gets metadata for certain entity properties such as <code>script</code> and <code>serverScripts</code>.
      * <p>The <code>serverScripts</code> property can be queried from Interface, client entity, avatar, and assignment client 
-     * (Agent) scripts, but not from server entity scripts.</p>
+     * (Agent) scripts, but not from server entity scripts. The entity script server does not reply for an entity it does
+     * not run server scripts for: if there is no reply within 5 seconds, the callback is called with an error whose
+     * message is <code>"no reply from the entity script server"</code>. The callback is not called once the script has
+     * stopped.</p>
      * @function Entities.queryPropertyMetadata
      * @param {Uuid} entityID - The ID of the entity to get the metadata for.
      * @param {string} property - The property name to get the metadata for.
@@ -1001,7 +1007,10 @@ public slots:
     /*@jsdoc
      * Gets metadata for certain entity properties such as <code>script</code> and <code>serverScripts</code>.
      * <p>The <code>serverScripts</code> property can be queried from Interface, client entity, avatar, and assignment client 
-     * (Agent) scripts, but not from server entity scripts.</p>
+     * (Agent) scripts, but not from server entity scripts. The entity script server does not reply for an entity it does
+     * not run server scripts for: if there is no reply within 5 seconds, the callback is called with an error whose
+     * message is <code>"no reply from the entity script server"</code>. The callback is not called once the script has
+     * stopped.</p>
      * @function Entities.queryPropertyMetadata
      * @param {Uuid} entityID - The ID of the entity to get the metadata for.
      * @param {string} property - The property name to get the metadata for.

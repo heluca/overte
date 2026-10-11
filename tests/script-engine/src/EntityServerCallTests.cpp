@@ -14,6 +14,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QSemaphore>
 #include <QtCore/QThread>
+#include <QtNetwork/QUdpSocket>
 
 #include "AccountManager.h"
 #include "AddressManager.h"
@@ -169,4 +170,80 @@ void EntityServerCallTests::testClientDestroyedBeforeQueuedStart() {
     // node, so the error information is what tells the guarded path apart
     QCOMPARE(run.printed, QStringList({ "client destroyed",
                                         "status callback false false error_loading_script [entity script client unavailable]" }));
+}
+
+void EntityServerCallTests::testStatusWithoutReplyFails() {
+    // An entity script server that never replies, as the real one does for an entity without serverScripts (#42)
+    QUdpSocket silentServer;
+    QVERIFY(silentServer.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    SockAddr address(SocketType::UDP, QHostAddress::LocalHost, silentServer.localPort());
+    auto nodeList = DependencyManager::get<NodeList>();
+    auto server = nodeList->addOrUpdateNode(QUuid::createUuid(), NodeType::EntityScriptServer, address, address);
+    server->activatePublicSocket();
+    QThread clientThread;
+    clientThread.start();
+    auto client = DependencyManager::set<EntityScriptClient>();
+    client->moveToThread(&clientThread);
+
+    auto run = runWithEntities(
+        "Entities.getServerScriptStatus('{0f6c1fa8-55a3-4a63-9b7b-2f8f9b0e4c11}', function(success, isRunning, status, errorInfo) {\n"
+        "    print('status callback ' + success + ' ' + isRunning + ' ' + status + ' [' + errorInfo + ']');\n"
+        "    Script.stop(true);\n"
+        "});\n");
+
+    QMetaObject::invokeMethod(client.data(), [raw = client.data()] { raw->moveToThread(QCoreApplication::instance()->thread()); },
+                              Qt::BlockingQueuedConnection);
+    client.clear();
+    DependencyManager::destroy<EntityScriptClient>();
+    // Deleted now, so removing the node below cannot fail a pending request into the finished script
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    clientThread.quit();
+    clientThread.wait();
+    nodeList->killNodeWithUUID(server->getUUID());
+
+    // A send was attempted, so the request was pending rather than failed at once for want of a server. The socket only
+    // sees connection handshakes: the request itself waits for a handshake reply that never comes.
+    QVERIFY(silentServer.hasPendingDatagrams());
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "status callback false false error_loading_script [no reply from the entity script server]" }));
+}
+
+void EntityServerCallTests::testFailureAfterScriptFinished() {
+    // As in an Agent whose script has stopped: the domain disconnect removes the entity script server node after run(),
+    // which holds the isolate, has returned, and the failed requests reach the manager before it is deleted
+    QUdpSocket silentServer;
+    QVERIFY(silentServer.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    SockAddr address(SocketType::UDP, QHostAddress::LocalHost, silentServer.localPort());
+    auto nodeList = DependencyManager::get<NodeList>();
+    auto server = nodeList->addOrUpdateNode(QUuid::createUuid(), NodeType::EntityScriptServer, address, address);
+    server->activatePublicSocket();
+    QThread clientThread;
+    clientThread.start();
+    auto client = DependencyManager::set<EntityScriptClient>();
+    client->moveToThread(&clientThread);
+
+    auto run = runWithEntities(
+        "var ID = '{0f6c1fa8-55a3-4a63-9b7b-2f8f9b0e4c11}';\n"
+        "Entities.getServerScriptStatus(ID, function() { print('status callback'); });\n"
+        "Entities.queryPropertyMetadata(ID, 'serverScripts', function() { print('metadata callback'); });\n"
+        "Script.stop(true);\n");
+
+    // The manager's deletion is posted; the requests fail on the client's thread and post their results here
+    nodeList->killNodeWithUUID(server->getUUID());
+    QMetaObject::invokeMethod(client.data(), [] {}, Qt::BlockingQueuedConnection);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+
+    QMetaObject::invokeMethod(client.data(), [raw = client.data()] { raw->moveToThread(QCoreApplication::instance()->thread()); },
+                              Qt::BlockingQueuedConnection);
+    client.clear();
+    DependencyManager::destroy<EntityScriptClient>();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    clientThread.quit();
+    clientThread.wait();
+
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    // The script has finished, so neither callback runs
+    QCOMPARE(run.printed, QStringList());
 }

@@ -291,9 +291,14 @@ ScriptEngineV8::~ScriptEngineV8() {
     _undefinedValue = ScriptValue();
     _customPrototypes.clear();
     {
-        QMutexLocker guard(&_qobjectWrapperMapProtect);
-        _qobjectWrapperMap.clear();
-        _qobjectWrapperMapV8.clear();
+        // The wrappers are released after the lock: releasing one can delete its script-owned QObject, whose destroyed
+        // handler locks _qobjectWrapperMapProtect on this thread
+        QMap<QObject*, QSharedPointer<ScriptObjectV8Proxy>> wrappers;
+        {
+            QMutexLocker guard(&_qobjectWrapperMapProtect);
+            _qobjectWrapperMap.clear();
+            wrappers.swap(_qobjectWrapperMapV8);
+        }
     }
     // Events need to be processed one more time for processing any remaining deleteLater calls:
     {

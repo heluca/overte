@@ -1615,6 +1615,14 @@ bool EntityPropertyMetadataRequest::serverScripts(EntityItemID entityID, const S
             qCDebug(entities) << __FUNCTION__ << " -- engine destroyed while inflight" << entityID;
             return;
         }
+        // A request can fail after run(), which holds the isolate otherwise, has returned: when the entity script
+        // server node is removed as the domain disconnects
+        auto scopeGuard = manager->engine()->getScopeGuard();
+        if (manager->isFinished()) {
+            request->deleteLater();
+            handler = ScriptValue();
+            return;
+        }
         QVariantMap details;
         details["success"] = request->getResponseReceived();
         details["isRunning"] = request->getIsRunning();
@@ -1714,9 +1722,14 @@ bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, Scri
         // V8TODO: I think this was fixed? Should be tested
         Q_ASSERT(QThread::currentThread() == engine->thread());
         Q_ASSERT(QThread::currentThread() == engine->manager()->thread());
-        QString statusString = EntityScriptStatus_::valueToKey(request->getStatus());
-        ScriptValueList args { engine->newValue(request->getResponseReceived()), engine->newValue(request->getIsRunning()), engine->newValue(statusString.toLower()), engine->newValue(request->getErrorInfo()) };
-        callback.call(ScriptValue(), args);
+        // A request can fail after run(), which holds the isolate otherwise, has returned: when the entity script server
+        // node is removed as the domain disconnects
+        auto scopeGuard = engine->getScopeGuard();
+        if (!engine->manager()->isFinished()) {
+            QString statusString = EntityScriptStatus_::valueToKey(request->getStatus());
+            ScriptValueList args { engine->newValue(request->getResponseReceived()), engine->newValue(request->getIsRunning()), engine->newValue(statusString.toLower()), engine->newValue(request->getErrorInfo()) };
+            callback.call(ScriptValue(), args);
+        }
         request->deleteLater();
         // This causes ScriptValueProxy to be released, and thus its destructor is called on script engine thread and not main thread
         callback = ScriptValue();
