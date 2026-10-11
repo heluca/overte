@@ -544,8 +544,8 @@ public:
 
     /**
      * @brief The environment of the ES module code that is running, see ScriptEnvironment; in classic script code a
-     * classic one (ScriptEnvironment::classic) for an entity or sandbox, else null. Promise continuations run in the environment that was current where they were created (<code>then</code>,
-     * <code>await</code>).
+     * classic one (ScriptEnvironment::classic) for an entity or sandbox, else null. Promise continuations run in the
+     * environment that was current where they were created (<code>then</code>, <code>await</code>).
      */
     virtual ScriptEnvironmentPointer currentEnvironment() = 0;
 
