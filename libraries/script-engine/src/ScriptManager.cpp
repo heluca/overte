@@ -48,6 +48,9 @@
 #include "ScriptContext.h"
 #include "XMLHttpRequestClass.h"
 #include "WebSocketClass.h"
+#include "WebSocketServerClass.h"
+#include "FetchClass.h"
+#include "WebGlobalsClass.h"
 #include "ScriptEngine.h"
 #include "ScriptEngineCast.h"
 #include "ScriptEngineLogging.h"
@@ -58,6 +61,7 @@
 #include "ScriptValueIterator.h"
 #include "ScriptValueUtils.h"
 #include "ScriptManagerScriptingInterface.h"
+#include "ScriptModuleResolver.h"
 
 #include <Profile.h>
 
@@ -76,7 +80,6 @@ const QString ScriptManager::_SETTINGS_ENABLE_EXTENDED_EXCEPTIONS {
 const QString ScriptManager::SCRIPT_EXCEPTION_FORMAT{ "[%0] %1 in %2:%3" };
 const QString ScriptManager::SCRIPT_BACKTRACE_SEP{ "\n    " };
 
-static const int MAX_MODULE_ID_LENGTH { 4096 };
 static const int MAX_DEBUG_VALUE_LENGTH { 80 };
 
 static const ScriptValue::PropertyFlags READONLY_PROP_FLAGS{ ScriptValue::ReadOnly | ScriptValue::Undeletable };
@@ -202,6 +205,45 @@ static ScriptValue debugPrint(ScriptContext* context, ScriptEngine* engine) {
     }
 
     return ScriptValue();
+}
+
+static ScriptValue throwTypeError(ScriptContext* context, ScriptEngine* engine, const QString& message) {
+    return context->throwValue(engine->makeError(engine->newValue(message), "TypeError"));
+}
+
+// setTimeout(callback, delay = 0, ...args) on top of the ScriptManager timers that Script.setTimeout uses
+static ScriptValue startTimerFromGlobal(ScriptContext* context, ScriptEngine* engine, bool isSingleShot) {
+    ScriptValue callback = context->argument(0);
+    if (!callback.isFunction()) {
+        return throwTypeError(context, engine, QString(isSingleShot ? "setTimeout" : "setInterval") + ": callback is not a function");
+    }
+    int delayMS = std::max(0, context->argument(1).toInt32());
+    if (context->argumentCount() > 2) {
+        ScriptValueList bindArguments { engine->undefinedValue() };
+        for (int i = 2; i < context->argumentCount(); i++) {
+            bindArguments.append(context->argument(i));
+        }
+        callback = callback.property("bind").call(callback, bindArguments);
+    }
+    auto manager = engine->manager();
+    return engine->newValue(isSingleShot ? manager->setTimeout(callback, delayMS) : manager->setInterval(callback, delayMS));
+}
+
+// clearTimeout and clearInterval share one handle space, and ignore anything that isn't a handle
+static ScriptValue clearTimerFromGlobal(ScriptContext* context, ScriptEngine* engine) {
+    if (context->argument(0).isNumber()) {
+        engine->manager()->clearTimeout(context->argument(0).toInt32());
+    }
+    return engine->undefinedValue();
+}
+
+static ScriptValue queueMicrotaskFromGlobal(ScriptContext* context, ScriptEngine* engine) {
+    ScriptValue callback = context->argument(0);
+    if (!callback.isFunction()) {
+        return throwTypeError(context, engine, "queueMicrotask: callback is not a function");
+    }
+    engine->queueMicrotask(callback);
+    return engine->undefinedValue();
 }
 
 // FIXME Come up with a way to properly encode entity IDs in filename
@@ -632,8 +674,8 @@ void ScriptManager::loadURL(const QUrl& scriptURL, bool reload) {
 void ScriptManager::scriptErrorMessage(const QString& message, const QString& fileName, int lineNumber) {
     qCCritical(scriptengine, "[%s] %s", qUtf8Printable(getFilename()), qUtf8Printable(message));
     emit errorMessage(message, getFilename());
-    if (!currentEntityIdentifier.isInvalidID()) {
-        emit errorEntityMessage(message, fileName, lineNumber, currentEntityIdentifier, isEntityServerScript());
+    if (!currentEntityIdentifier().isInvalidID()) {
+        emit errorEntityMessage(message, fileName, lineNumber, currentEntityIdentifier(), isEntityServerScript());
     } else {
         if (isEntityServerScript()) {
             emit errorEntityMessage(message, fileName, lineNumber, EntityItemID(), isEntityServerScript());
@@ -644,8 +686,8 @@ void ScriptManager::scriptErrorMessage(const QString& message, const QString& fi
 void ScriptManager::scriptWarningMessage(const QString& message, const QString& fileName, int lineNumber) {
     qCWarning(scriptengine, "[%s] %s", qUtf8Printable(getFilename()), qUtf8Printable(message));
     emit warningMessage(message, getFilename());
-    if (!currentEntityIdentifier.isInvalidID()) {
-        emit warningEntityMessage(message, fileName, lineNumber, currentEntityIdentifier, isEntityServerScript());
+    if (!currentEntityIdentifier().isInvalidID()) {
+        emit warningEntityMessage(message, fileName, lineNumber, currentEntityIdentifier(), isEntityServerScript());
     } else {
         if (isEntityServerScript()) {
             emit warningEntityMessage(message, fileName, lineNumber, EntityItemID(), isEntityServerScript());
@@ -656,8 +698,8 @@ void ScriptManager::scriptWarningMessage(const QString& message, const QString& 
 void ScriptManager::scriptInfoMessage(const QString& message, const QString& fileName, int lineNumber) {
     qCInfo(scriptengine, "[%s] %s", qUtf8Printable(getFilename()), qUtf8Printable(message));
     emit infoMessage(message, getFilename());
-    if (!currentEntityIdentifier.isInvalidID()) {
-        emit infoEntityMessage(message, fileName, lineNumber, currentEntityIdentifier, isEntityServerScript());
+    if (!currentEntityIdentifier().isInvalidID()) {
+        emit infoEntityMessage(message, fileName, lineNumber, currentEntityIdentifier(), isEntityServerScript());
     } else {
         if (isEntityServerScript()) {
             emit infoEntityMessage(message, fileName, lineNumber, EntityItemID(), isEntityServerScript());
@@ -668,8 +710,8 @@ void ScriptManager::scriptInfoMessage(const QString& message, const QString& fil
 void ScriptManager::scriptPrintedMessage(const QString& message, const QString& fileName, int lineNumber) {
     qCDebug(scriptengine, "[%s] %s", qUtf8Printable(getFilename()), qUtf8Printable(message));
     emit printedMessage(message, getFilename());
-    if (!currentEntityIdentifier.isInvalidID()) {
-        emit printedEntityMessage(message, fileName, lineNumber, currentEntityIdentifier, isEntityServerScript());
+    if (!currentEntityIdentifier().isInvalidID()) {
+        emit printedEntityMessage(message, fileName, lineNumber, currentEntityIdentifier(), isEntityServerScript());
     } else {
         if (isEntityServerScript()) {
             // TODO: Some callbacks like for example websockets one right now
@@ -818,6 +860,17 @@ void ScriptManager::init() {
 
         ScriptValue webSocketConstructorValue = scriptEngine->newFunction(WebSocketClass::constructor);
         scriptEngine->globalObject().setProperty("WebSocket", webSocketConstructorValue);
+
+        // Same contexts as XMLHttpRequest, whose transport it shares. Local files only for the scripts the user or the
+        // operator installed: an entity script comes from whatever domain is visited, and could send them anywhere
+        registerFetchGlobals(scriptEngine, _context == CLIENT_SCRIPT || _context == AGENT_SCRIPT);
+    }
+
+    if (_context == ENTITY_SERVER_SCRIPT || _context == AGENT_SCRIPT) {
+        // Server-side scripts are the domain operator's own code; capabilities that must never reach a visitor's
+        // client scripts are registered here and nowhere else.
+        ScriptValue webSocketServerConstructorValue = scriptEngine->newFunction(WebSocketServerClass::constructor);
+        scriptEngine->globalObject().setProperty("WebSocketServer", webSocketServerConstructorValue);
     }
 
     /*@jsdoc
@@ -828,6 +881,46 @@ void ScriptManager::init() {
      * @param {...*} [message] - The message values to print.
      */
     scriptEngine->globalObject().setProperty("print", scriptEngine->newFunction(debugPrint));
+
+    /*@jsdoc
+     * Calls a function once, after a delay. The same timers as {@link Script.setTimeout}, with the standard signature.
+     * @function setTimeout
+     * @param {function} callback - The function to call.
+     * @param {number} [delay=0] - The delay, in ms.
+     * @param {...*} [args] - Arguments passed to the function.
+     * @returns {number} A handle for {@link clearTimeout}.
+     */
+    scriptEngine->globalObject().setProperty("setTimeout", scriptEngine->newFunction(
+        [](ScriptContext* context, ScriptEngine* engine) { return startTimerFromGlobal(context, engine, true); }, 2));
+    /*@jsdoc
+     * Calls a function repeatedly. The same timers as {@link Script.setInterval}, with the standard signature.
+     * @function setInterval
+     * @param {function} callback - The function to call.
+     * @param {number} [interval=0] - The interval, in ms.
+     * @param {...*} [args] - Arguments passed to the function.
+     * @returns {number} A handle for {@link clearInterval}.
+     */
+    scriptEngine->globalObject().setProperty("setInterval", scriptEngine->newFunction(
+        [](ScriptContext* context, ScriptEngine* engine) { return startTimerFromGlobal(context, engine, false); }, 2));
+    /*@jsdoc
+     * Stops a timer set by {@link setTimeout} or {@link Script.setTimeout}. Anything other than a handle is ignored.
+     * @function clearTimeout
+     * @param {number} handle - The timer to stop.
+     */
+    scriptEngine->globalObject().setProperty("clearTimeout", scriptEngine->newFunction(clearTimerFromGlobal, 1));
+    /*@jsdoc
+     * Stops a timer set by {@link setInterval} or {@link Script.setInterval}. Anything other than a handle is ignored.
+     * @function clearInterval
+     * @param {number} handle - The timer to stop.
+     */
+    scriptEngine->globalObject().setProperty("clearInterval", scriptEngine->newFunction(clearTimerFromGlobal, 1));
+    /*@jsdoc
+     * Queues a function to run once the current script call returns, before any timer or event.
+     * @function queueMicrotask
+     * @param {function} callback - The function to call.
+     */
+    scriptEngine->globalObject().setProperty("queueMicrotask", scriptEngine->newFunction(queueMicrotaskFromGlobal, 1));
+    registerWebGlobals(scriptEngine);
 
     // NOTE: You do not want to end up creating new instances of singletons here. They will be on the ScriptManager thread
     // and are likely to be unusable if we "reset" the ScriptManager by creating a new one (on a whole new thread).
@@ -960,7 +1053,7 @@ void ScriptManager::addEventHandler(const EntityItemID& entityID, const QString&
         _registeredHandlers[entityID] = RegisteredEventHandlers();
     }
     CallbackList& handlersForEvent = _registeredHandlers[entityID][eventName];
-    CallbackData handlerData = { handler, currentEntityIdentifier, currentSandboxURL };
+    CallbackData handlerData = { handler, currentEntityIdentifier(), currentSandboxURL(), _engine->currentEnvironment() };
     handlersForEvent << handlerData; // Note that the same handler can be added many times. See removeEntityEventHandler().
 }
 
@@ -1003,7 +1096,18 @@ void ScriptManager::run() {
     _isRunning = true;
     emit runningStateChanged();
 
-    {
+    if (isModuleURL(QUrl(_fileNameString))) {
+        // Evaluated from the loop below once the import graph has loaded. A graph that fails to load or link stops the
+        // script, as nothing of it ran; a module body that throws is treated like a classic script that throws.
+        QUrl url(_fileNameString);
+        _engine->loadModule({ url, _scriptContents, url, 0, _isReloading, ScriptEnvironmentPointer() },
+            [this](const ScriptValue&, std::shared_ptr<ScriptException> error) {
+                if (error && (_abortOnUncaughtException || std::dynamic_pointer_cast<ScriptEngineException>(error))) {
+                    qCWarning(scriptengine) << "Module failed, stopping";
+                    stop();
+                }
+            });
+    } else {
         PROFILE_RANGE(script, _fileNameString);
         _returnValue = _engine->evaluate(_scriptContents, _fileNameString);
 
@@ -1114,6 +1218,9 @@ void ScriptManager::run() {
             _engine->processEvents();
         }
 
+        // Promise jobs queued outside a script call, e.g. by a V8 platform task run in processEvents()
+        _engine->performMicrotaskCheckpoint();
+
         if (_isFinished) {
             break;
         }
@@ -1148,6 +1255,7 @@ void ScriptManager::run() {
             _engine->clearExceptions();
         }
     }
+    _engine->reportStalledTopLevelAwaits();
     scriptInfoMessage("Script Engine stopping:" + getFilename(), getFilename(), -1);
 
     stopAllTimers(); // make sure all our timers are stopped if the script is ending
@@ -1246,7 +1354,8 @@ void ScriptManager::timerFired(int handle) {
     if (data.function.isValid()) {
         PROFILE_RANGE(script, __FUNCTION__);
         auto preTimer = p_high_resolution_clock::now();
-        callWithEnvironment(data.definingEntityIdentifier, data.definingSandboxURL, data.function, data.function, ScriptValueList());
+        callWithEnvironment(data.definingEntityIdentifier, data.definingSandboxURL, data.function, data.function, ScriptValueList(),
+                            data.definingEnvironment);
         auto postTimer = p_high_resolution_clock::now();
         auto elapsed = (postTimer - preTimer);
         _totalTimerExecution += std::chrono::duration_cast<std::chrono::microseconds>(elapsed);
@@ -1263,7 +1372,7 @@ int ScriptManager::setupTimerWithInterval(const ScriptValue& function, int inter
     int handle = _timerHandleCounter++;
 
     // create the timer, add it to the map, and start it
-    CallbackData timerData = { function, currentEntityIdentifier, currentSandboxURL };
+    CallbackData timerData = { function, currentEntityIdentifier(), currentSandboxURL(), _engine->currentEnvironment() };
     auto& newTimer =
         _timerFunctionMap.emplace(handle, std::make_pair(std::make_unique<QTimer>(), timerData)).first->second.first;
     newTimer->setSingleShot(isSingleShot);
@@ -1414,22 +1523,16 @@ QString ScriptManager::_requireResolve(const QString& moduleId, const QString& r
     };
 
     // de-fuzz the input a little by restricting to rational sizes
-    auto idLength = url.toString().length();
-    if (idLength < 1 || idLength > MAX_MODULE_ID_LENGTH) {
-        auto details = QString("rejecting invalid module id size (%1 chars [1,%2])")
-            .arg(idLength).arg(MAX_MODULE_ID_LENGTH);
-        return throwResolveError(details, "RangeError");
+    QString lengthError = checkModuleSpecifierLength(url.toString());
+    if (!lengthError.isEmpty()) {
+        return throwResolveError(lengthError, "RangeError");
     }
-
-    // this regex matches: absolute, dotted or path-like URLs
-    // (ie: the kind of stuff ScriptManager::resolvePath already handles)
-    QRegularExpression qualified ("^\\w+:|^/|^[.]{1,2}(/|$)");
 
     // this is for module.require (which is a bound version of require that's always relative to the module path)
     if (!relativeTo.isEmpty()) {
         url = QUrl(relativeTo).resolved(moduleId);
         url = resolvePath(url.toString());
-    } else if (qualified.match(moduleId).hasMatch()) {
+    } else if (isAnchoredModuleSpecifier(moduleId)) {
         url = resolvePath(moduleId);
     } else {
         // check if the moduleId refers to a "system" module
@@ -1458,26 +1561,9 @@ QString ScriptManager::_requireResolve(const QString& moduleId, const QString& r
 
     // if it looks like a local file, verify that it's an allowed path and really a file
     if (url.isLocalFile()) {
-        QFileInfo file(url.toLocalFile());
-        QUrl canonical = url;
-        if (file.exists()) {
-            canonical.setPath(file.canonicalFilePath());
-        }
-
-        bool disallowOutsideFiles = !PathUtils::defaultScriptsLocation().isParentOf(canonical) && !currentSandboxURL.isLocalFile();
-        if (disallowOutsideFiles && !PathUtils::isDescendantOf(canonical, currentSandboxURL)) {
-            return throwResolveError(message.arg(
-                QString("path '%1' outside of origin script '%2' '%3'")
-                    .arg(PathUtils::stripFilename(url))
-                    .arg(PathUtils::stripFilename(currentSandboxURL))
-                    .arg(canonical.toString())
-            ));
-        }
-        if (!file.exists()) {
-            return throwResolveError(message.arg("path does not exist: " + url.toLocalFile()));
-        }
-        if (!file.isFile()) {
-            return throwResolveError(message.arg("path is not a file: " + url.toLocalFile()));
+        QString fileError = checkLocalModuleFile(url, currentSandboxURL());
+        if (!fileError.isEmpty()) {
+            return throwResolveError(message.arg(fileError));
         }
     }
 
@@ -1620,6 +1706,7 @@ ScriptValue ScriptManager::instantiateModule(const ScriptValue& module, const QS
     ScriptValue result;
     auto modulePath = module.property("filename").toString();
     auto closure = module.property("__closure__");
+    noteClassicLoad(QUrl(modulePath), _engine->currentEnvironment());
 
     qCDebug(scriptengine_module) << QString("require.instantiateModule: %1 / %2 bytes")
         .arg(QUrl(modulePath).fileName()).arg(sourceCode.length());
@@ -1667,6 +1754,12 @@ ScriptValue ScriptManager::require(const QString& moduleId) {
     QString modulePath = _requireResolve(moduleId);
     if (modulePath.isNull() || _engine->hasUncaughtException()) {
         // the resolver already threw an exception -- bail early
+        return _engine->nullValue();
+    }
+    if (isModuleURL(QUrl(modulePath))) {
+        // As Node's ERR_REQUIRE_ESM: require() is synchronous, and a module graph may wait in a top-level await
+        throwTypeError(_engine->currentContext(), _engine.get(),
+                       "Script.require cannot load an ES module (" + modulePath + "); use import()");
         return _engine->nullValue();
     }
 
@@ -1788,18 +1881,23 @@ void ScriptManager::include(const QStringList& includeFiles, const ScriptValue& 
         } else {
             thisURL = resolvePath(file);
         }
+        if (isModuleURL(thisURL)) {
+            throwTypeError(_engine->currentContext(), _engine.get(),
+                           "Script.include cannot load an ES module (" + thisURL.toString() + "); use import()");
+            return;
+        }
 
-        bool disallowOutsideFiles = thisURL.isLocalFile() && !isStandardLibrary && !currentSandboxURL.isLocalFile();
-        if (disallowOutsideFiles && !PathUtils::isDescendantOf(thisURL, currentSandboxURL)) {
+        bool disallowOutsideFiles = thisURL.isLocalFile() && !isStandardLibrary && !currentSandboxURL().isLocalFile();
+        if (disallowOutsideFiles && !PathUtils::isDescendantOf(thisURL, currentSandboxURL())) {
             int lineNumber = -1;
-            QString fileName = currentSandboxURL.toString();
+            QString fileName = currentSandboxURL().toString();
             auto context = _engine->currentContext();
             if (context) {
                 lineNumber = context->currentLineNumber();
                 fileName = context->currentFileName();
             }
             scriptWarningMessage("Script.include() ignoring file path" + thisURL.toString()
-                                + "outside of original entity script" + currentSandboxURL.toString(), fileName, lineNumber);
+                                + "outside of original entity script" + currentSandboxURL().toString(), fileName, lineNumber);
         } else {
             // We could also check here for CORS, but we don't yet.
             // It turns out that QUrl.resolve will not change hosts and copy authority, so we don't need to check that here.
@@ -1813,8 +1911,10 @@ void ScriptManager::include(const QStringList& includeFiles, const ScriptValue& 
     }
 
     BatchLoader* loader = new BatchLoader(urls);
-    EntityItemID capturedEntityIdentifier = currentEntityIdentifier;
-    QUrl capturedSandboxURL = currentSandboxURL;
+    EntityItemID capturedEntityIdentifier = currentEntityIdentifier();
+    QUrl capturedSandboxURL = currentSandboxURL();
+    // Only for the callback: the included files themselves run as classic code (design question Q3 of #10)
+    ScriptEnvironmentPointer capturedEnvironment = _engine->currentEnvironment();
 
     auto evaluateScripts = [=, this](const QMap<QUrl, QString>& data, const QMap<QUrl, QString>& status) {
         auto parentURL = _parentURL;
@@ -1839,6 +1939,7 @@ void ScriptManager::include(const QStringList& includeFiles, const ScriptValue& 
                     auto operation = [&]() {
                         _engine->evaluate(contents, url.toString());
                     };
+                    noteClassicLoad(url, capturedEnvironment);
 
                     doWithEnvironment(capturedEntityIdentifier, capturedSandboxURL, operation);
                     if(_engine->hasUncaughtException()) {
@@ -1862,7 +1963,8 @@ void ScriptManager::include(const QStringList& includeFiles, const ScriptValue& 
         _parentURL = parentURL;
 
         if (callback.isFunction()) {
-            callWithEnvironment(capturedEntityIdentifier, capturedSandboxURL, callback, ScriptValue(), ScriptValueList());
+            callWithEnvironment(capturedEntityIdentifier, capturedSandboxURL, callback, ScriptValue(), ScriptValueList(),
+                                capturedEnvironment);
         }
 
         loader->deleteLater();
@@ -1885,7 +1987,7 @@ void ScriptManager::include(const QStringList& includeFiles, const ScriptValue& 
 void ScriptManager::include(const QString& includeFile, const ScriptValue& callback) {
     if (isStopped()) {
         int lineNumber = -1;
-        QString fileName = currentSandboxURL.toString();
+        QString fileName = currentSandboxURL().toString();
         auto context = _engine->currentContext();
         if (context) {
             lineNumber = context->currentLineNumber();
@@ -1920,9 +2022,9 @@ void ScriptManager::load(const QString& loadFile) {
                 + loadFile + "parent script:" + getFilename(), fileName, lineNumber);
         return; // bail early
     }
-    if (!currentEntityIdentifier.isInvalidID()) {
+    if (!currentEntityIdentifier().isInvalidID()) {
         scriptWarningMessage("Script.load() from entity script is ignored...  loadFile:"
-                + loadFile + "parent script:" + getFilename() + "entity: " + currentEntityIdentifier.toString(), fileName, lineNumber);
+                + loadFile + "parent script:" + getFilename() + "entity: " + currentEntityIdentifier().toString(), fileName, lineNumber);
         return; // bail early
     }
 
@@ -1957,7 +2059,8 @@ void ScriptManager::forwardHandlerCall(const EntityItemID& entityID, const QStri
             // and the entity scripts may be for entities other than the one this is a handler for.
             // Fortunately, the definingEntityIdentifier captured the entity script id (if any) when the handler was added.
             CallbackData& handler = handlersForEvent[i];
-            callWithEnvironment(handler.definingEntityIdentifier, handler.definingSandboxURL, handler.function, ScriptValue(), eventHandlerArgs);
+            callWithEnvironment(handler.definingEntityIdentifier, handler.definingSandboxURL, handler.function, ScriptValue(), eventHandlerArgs,
+                                handler.definingEnvironment);
         }
     }
 }
@@ -2004,25 +2107,16 @@ QVariant ScriptManager::cloneEntityScriptDetails(const EntityItemID& entityID, c
 #ifdef DEBUG_ENTITY_STATES
         qCDebug(scriptengine) << "cloneEntityScriptDetails" << entityID << QThread::currentThread();
 #endif
-        EntityScriptDetails scriptDetails;
-        if (getEntityScriptDetails(entityID, scriptURL, scriptDetails)) {
+        EntityScriptStatus status { EntityScriptStatus::PENDING };
+        QString errorInfo;
+        if (getEntityScriptStatus(entityID, scriptURL, status, errorInfo)) {
 #ifdef DEBUG_ENTITY_STATES
-            qCDebug(scriptengine) << "gotEntityScriptDetails" << scriptDetails.status << QThread::currentThread();
+            qCDebug(scriptengine) << "gotEntityScriptDetails" << status << QThread::currentThread();
 #endif
             map["isRunning"] = isEntityScriptRunning(entityID, scriptURL);
-            map["status"] = EntityScriptStatus_::valueToKey(scriptDetails.status).toLower();
-            map["errorInfo"] = scriptDetails.errorInfo;
+            map["status"] = EntityScriptStatus_::valueToKey(status).toLower();
+            map["errorInfo"] = errorInfo;
             map["entityID"] = entityID.toString();
-#ifdef DEBUG_ENTITY_STATES
-            {
-                auto debug = QVariantMap();
-                debug["script"] = scriptDetails.scriptText;
-                debug["scriptObject"] = scriptDetails.scriptObject.toVariant();
-                debug["lastModified"] = (qlonglong)scriptDetails.lastModified;
-                debug["sandboxURL"] = scriptDetails.definingSandboxURL;
-                map["debug"] = debug;
-            }
-#endif
         } else {
 #ifdef DEBUG_ENTITY_STATES
             qCDebug(scriptengine) << "!gotEntityScriptDetails" <<  QThread::currentThread();
@@ -2076,7 +2170,7 @@ void ScriptManager::loadEntityScript(const EntityItemID& entityID, const QString
     if (isStopping() || !scriptEngines || scriptEngines->isStopped()) {
         qCDebug(scriptengine) << "loadEntityScript.start " << entityID.toString()
                                      << " but isStopping==" << isStopping()
-                                     << " || engines->isStopped==" << scriptEngines->isStopped();
+                                     << " || engines->isStopped==" << (scriptEngines && scriptEngines->isStopped());
         return;
     }
 
@@ -2098,7 +2192,8 @@ void ScriptManager::loadEntityScript(const EntityItemID& entityID, const QString
     EntityScriptDetails newDetails;
     newDetails.scriptText = entityScript;
     newDetails.status = EntityScriptStatus::LOADING;
-    newDetails.definingSandboxURL = currentSandboxURL;
+    newDetails.definingSandboxURL = currentSandboxURL();
+    newDetails.moduleEpoch = entityModuleEpoch(entityScript, forceRedownload);
     setEntityScriptDetails(entityID, entityScript, newDetails);
 
     auto scriptCache = DependencyManager::get<ScriptCache>();
@@ -2130,6 +2225,8 @@ void ScriptManager::loadEntityScript(const EntityItemID& entityID, const QString
                 }
             });
     }, forceRedownload);
+    // The details just replaced may have been the last to name an epoch
+    releaseUnusedEntityModuleEpochs();
 }
 
 // The JSDoc is for the callEntityScriptMethod() call in this method.
@@ -2174,6 +2271,7 @@ void ScriptManager::entityScriptContentAvailable(const EntityItemID& entityID, c
         newDetails.errorInfo = errorInfo;
         newDetails.status = status;
         setEntityScriptDetails(entityID, scriptOrURL, newDetails);
+        releaseUnusedEntityModuleEpochs();
     };
 
     // NETWORK / FILESYSTEM ERRORS
@@ -2183,10 +2281,12 @@ void ScriptManager::entityScriptContentAvailable(const EntityItemID& entityID, c
     }
 
     // SYNTAX ERRORS
+    // Not for an ES module: checkSyntax compiles a classic script, which rejects import and export
+    bool isModule = isURL && isModuleURL(QUrl(scriptOrURL));
     //auto syntaxError = _engine->lintScript(contents, fileName);
     auto program = _engine->newProgram( contents, fileName );
-    auto syntaxCheck = program->checkSyntax();
-    if (syntaxCheck->state() != ScriptSyntaxCheckResult::Valid) {
+    auto syntaxCheck = isModule ? ScriptSyntaxCheckResultPointer() : program->checkSyntax();
+    if (syntaxCheck && syntaxCheck->state() != ScriptSyntaxCheckResult::Valid) {
         auto message = syntaxCheck->errorMessage();
         //syntaxError.property("formatted").toString();
         //if (message.isEmpty()) {
@@ -2430,9 +2530,14 @@ void ScriptManager::entityScriptContentAvailable(const EntityItemID& entityID, c
         lastModified = (quint64)QFileInfo(file).lastModified().toMSecsSinceEpoch();
     }
 
+    if (isModule) {
+        loadEntityModule(entityID, scriptOrURL, contents, status, lastModified);
+        return;
+    }
+
     // THE ACTUAL EVALUATION AND CONSTRUCTION
     ScriptValue entityScriptConstructor, entityScriptObject;
-    QUrl sandboxURL = currentSandboxURL.isEmpty() ? scriptOrURL : currentSandboxURL;
+    QUrl sandboxURL = currentSandboxURL().isEmpty() ? scriptOrURL : currentSandboxURL();
     auto initialization = [&]{
         entityScriptConstructor = _engine->evaluate(contents, fileName);
         //V8TODO: check if entityScriptConstructor is a function or not
@@ -2535,6 +2640,8 @@ void ScriptManager::unloadEntityScript(const EntityItemID& entityID, const QStri
         }
 
         stopAllTimersForEntityScript(entityID);
+        _classicEnvironments.remove(entityID);
+        releaseUnusedEntityModuleEpochs();
     }
 }
 
@@ -2596,7 +2703,9 @@ void ScriptManager::unloadAllEntityScriptsForEntity(const EntityItemID& entityID
         }
 
         stopAllTimersForEntityScript(entityID);
+        _classicEnvironments.remove(entityID);
     }
+    releaseUnusedEntityModuleEpochs();
 }
 
 QList<EntityItemID> ScriptManager::getListOfEntityScriptIDs() {
@@ -2635,6 +2744,7 @@ void ScriptManager::unloadAllEntityScripts(bool blockingCall) {
         QWriteLocker locker{ &_entityScriptsLock };
         _entityScripts.clear();
     }
+    releaseUnusedEntityModuleEpochs();
     emit entityScriptDetailsUpdated();
 
 #ifdef DEBUG_ENGINE_STATE
@@ -2672,35 +2782,6 @@ void ScriptManager::refreshFileScript(const EntityItemID& entityID, const QStrin
         }
     }
     _refreshRecurseGuard = false;
-}
-
-// Execute operation in the appropriate context for (the possibly empty) entityID.
-// Even if entityID is supplied as currentEntityIdentifier, this still documents the source
-// of the code being executed (e.g., if we ever sandbox different entity scripts, or provide different
-// global values for different entity scripts).
-void ScriptManager::doWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, std::function<void()> operation) {
-    EntityItemID oldIdentifier = currentEntityIdentifier;
-    QUrl oldSandboxURL = currentSandboxURL;
-    currentEntityIdentifier = entityID;
-    currentSandboxURL = sandboxURL;
-
-#if DEBUG_CURRENT_ENTITY
-    ScriptValue oldData = this->globalObject().property("debugEntityID");
-    this->globalObject().setProperty("debugEntityID", entityID.toScriptValue(this)); // Make the entityID available to javascript as a global.
-    operation();
-    this->globalObject().setProperty("debugEntityID", oldData);
-#else
-    operation();
-#endif
-    currentEntityIdentifier = oldIdentifier;
-    currentSandboxURL = oldSandboxURL;
-}
-
-void ScriptManager::callWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, const ScriptValue& function, const ScriptValue& thisObject, const ScriptValueList& args) {
-    auto operation = [&]() {
-        function.call(thisObject, args);
-    };
-    doWithEnvironment(entityID, sandboxURL, operation);
 }
 
 void ScriptManager::callEntityScriptMethod(const EntityItemID& entityID, const QString& methodName, const QStringList& params, const QUuid& remoteCallerID) {
@@ -2770,8 +2851,7 @@ void ScriptManager::callEntityScriptMethod(const EntityItemID& entityID, const Q
                     .property("Script")
                     .setProperty("remoteCallerID",
                                  remoteCallerID.toString());  // Make the remoteCallerID available to javascript as a global.
-                callWithEnvironment(entityID, details.definingSandboxURL, entityScript.property(methodName), entityScript,
-                                    args);
+                callEntityScriptFunction(entityID, details, methodName, entityScript, args);
                 scriptEngine->globalObject().property("Script").setProperty("remoteCallerID", oldData);
             }
         }
@@ -2846,8 +2926,7 @@ void ScriptManager::callEntityScriptMethodForScript(const EntityItemID& entityID
                 .property("Script")
                 .setProperty("remoteCallerID",
                                 remoteCallerID.toString());  // Make the remoteCallerID available to javascript as a global.
-            callWithEnvironment(entityID, details.definingSandboxURL, entityScript.property(methodName), entityScript,
-                                args);
+            callEntityScriptFunction(entityID, details, methodName, entityScript, args);
             scriptEngine->globalObject().property("Script").setProperty("remoteCallerID", oldData);
         }
     }
@@ -2890,8 +2969,7 @@ void ScriptManager::callEntityScriptMethodForScript(const EntityItemID& entityID
             ScriptValueList args;
             args << EntityItemIDtoScriptValue(scriptEngine, entityID);
             args << scriptValueFromValue(scriptEngine, param);
-            callWithEnvironment(entityID, details.definingSandboxURL, entityScript.property(methodName), entityScript,
-                                args);
+            callEntityScriptFunction(entityID, details, methodName, entityScript, args);
         }
     }
 }
@@ -2933,7 +3011,7 @@ void ScriptManager::callEntityScriptMethod(const EntityItemID& entityID, const Q
                 ScriptValueList args;
                 args << EntityItemIDtoScriptValue(scriptEngine, entityID);
                 args << event.toScriptValue(scriptEngine);
-                callWithEnvironment(entityID, details.definingSandboxURL, entityScript.property(methodName), entityScript, args);
+                callEntityScriptFunction(entityID, details, methodName, entityScript, args);
             }
         }
     }
@@ -2977,8 +3055,7 @@ void ScriptManager::callEntityScriptMethod(const EntityItemID& entityID, const Q
                 args << EntityItemIDtoScriptValue(scriptEngine, entityID);
                 args << EntityItemIDtoScriptValue(scriptEngine, otherID);
                 args << collisionToScriptValue(scriptEngine, collision);
-                callWithEnvironment(entityID, details.definingSandboxURL, entityScript.property(methodName), entityScript,
-                                    args);
+                callEntityScriptFunction(entityID, details, methodName, entityScript, args);
             }
         }
     }

@@ -1,0 +1,94 @@
+//
+//  ScriptModuleMapV8.h
+//  libraries/script-engine/src/v8
+//
+//  Copyright 2026 Overte e.V.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//  SPDX-License-Identifier: Apache-2.0
+//
+
+/// @addtogroup ScriptEngine
+/// @{
+
+#ifndef overte_ScriptModuleMapV8_h
+#define overte_ScriptModuleMapV8_h
+
+#include <functional>
+#include <map>
+#include <memory>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <QtCore/QHash>
+#include <QtCore/QString>
+#include <QtCore/QUrl>
+
+#include "v8.h"
+
+#include "../ScriptModuleResolver.h"
+
+/// [V8] One ES module of an engine's module map.
+struct ScriptModuleRecordV8 {
+    enum class State { Fetching, Compiled, Failed };
+
+    State state { State::Fetching };
+    /// From the URL's extension. CommonJS and JSON files are synthetic modules with a single default export.
+    ScriptModuleKind kind { ScriptModuleKind::SourceText };
+    /// Resolved URL as imported: the map key, the ScriptOrigin resource name and import.meta.url
+    QUrl url;
+    int epoch { 0 };
+    /// Dropped from the map with its epoch; a fetch still in flight for it is discarded
+    bool released { false };
+    v8::Global<v8::Module> module;
+    /// A CommonJS file's source, from its fetch until its evaluation
+    QString commonJsSource;
+    /// A JSON file's value, parsed when it is fetched, until its evaluation
+    v8::Global<v8::Value> jsonValue;
+    /// The Script.require.cache entry this CommonJS record's evaluation made, removed again with its epoch
+    v8::Global<v8::Value> commonJsModule;
+    /// What a CommonJS file's evaluation failed with, when it is not an Error; errorFileName and errorLine say where
+    v8::Global<v8::Value> commonJsError;
+    /// Specifier -> resolved URL for each static import, filled when a loader walks the record
+    QHash<QString, QUrl> resolvedImports;
+
+    /// Why the record is Failed. A fetch failure is reported at each importer's line, a compile failure at its own.
+    QString error;
+    bool fetchFailed { false };
+    QString errorFileName;
+    int errorLine { -1 };
+
+    /// Called once the record leaves Fetching, so that loaders share a fetch that is in flight
+    std::vector<std::function<void()>> waiters;
+};
+
+using ScriptModuleRecordV8Pointer = std::shared_ptr<ScriptModuleRecordV8>;
+
+/// [V8] Per-isolate map of ES modules, keyed by (epoch, resolved URL). Records live until their epoch is released or the
+/// engine is destroyed.
+class ScriptModuleMapV8 {
+public:
+    ScriptModuleRecordV8Pointer find(int epoch, const QUrl& url) const;
+    /// Finds the record of a compiled module, as V8 hands it to the resolve and import.meta callbacks
+    ScriptModuleRecordV8Pointer find(v8::Isolate* isolate, v8::Local<v8::Module> module) const;
+    /// Adds a Fetching record; there must not be one for (epoch, url) yet
+    ScriptModuleRecordV8Pointer insert(int epoch, const QUrl& url);
+    /// Stores the compiled module in the record and makes it findable by module
+    void setCompiled(v8::Isolate* isolate, const ScriptModuleRecordV8Pointer& record, v8::Local<v8::Module> module);
+    /// Every record, in key order
+    std::vector<ScriptModuleRecordV8Pointer> records() const;
+    /// Removes the epoch's records from the map and returns them
+    std::vector<ScriptModuleRecordV8Pointer> releaseEpoch(int epoch);
+    size_t size() const { return _records.size(); }
+
+private:
+    using Key = std::pair<int, QString>;
+    std::map<Key, ScriptModuleRecordV8Pointer> _records;
+    std::unordered_multimap<int, ScriptModuleRecordV8Pointer> _byIdentityHash;
+};
+
+#endif  // overte_ScriptModuleMapV8_h
+
+/// @}

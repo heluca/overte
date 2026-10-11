@@ -20,6 +20,7 @@
 #include <QtCore/QSharedPointer>
 
 #include "../ScriptEngineLogging.h"
+#include "../ScriptEnvironment.h"
 
 #include "ScriptContextV8Wrapper.h"
 #include "ScriptValueV8Wrapper.h"
@@ -1300,6 +1301,8 @@ int ScriptSignalV8Proxy::qt_metacall(QMetaObject::Call call, int id, void** argu
                     v8This = functionContext->Global();
                 }
 
+                MicrotaskCheckpointScopeV8 microtaskCheckpointScope(_engine);
+                ScriptEnvironmentScope environmentScope(_engine, conn.environment);
                 v8::TryCatch tryCatch(isolate);
                 auto maybeResult = callback->Call(functionContext, v8This, numArgs, args);
                 Q_UNUSED(maybeResult); // Signals don't have return values
@@ -1462,7 +1465,7 @@ void ScriptSignalV8Proxy::connect(ScriptValue arg0, ScriptValue arg1) {
     }
 
     // add this to our internal list of connections
-    Connection newConnection(callbackThis, callback);
+    Connection newConnection(callbackThis, callback, _engine->currentEnvironment());
 
     withWriteLock([&]{
         _connections.append(newConnection);
