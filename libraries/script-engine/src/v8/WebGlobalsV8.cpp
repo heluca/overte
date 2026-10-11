@@ -14,6 +14,7 @@
 #include <climits>
 
 #include <QByteArray>
+#include <QCryptographicHash>
 #include <vector>
 
 #include "../ScriptContext.h"
@@ -151,6 +152,42 @@ ScriptValue webGlobalsBase64Decode(ScriptContext* context, ScriptEngine* engine)
         return context->throwValue(engine->makeError(engine->newValue("atob: the text is too long"), "RangeError"));
     }
     return wrap(engineV8, text);
+}
+
+ScriptValue webGlobalsDigest(ScriptContext* context, ScriptEngine* engine) {
+    auto engineV8 = static_cast<ScriptEngineV8*>(engine);
+    auto isolate = engineV8->getIsolate();
+    v8::HandleScope handleScope(isolate);
+    v8::Context::Scope contextScope(engineV8->getContext());
+
+    const QString name = context->argument(0).isString() ? context->argument(0).toString() : QString();
+    QCryptographicHash::Algorithm algorithm;
+    if (name == "SHA-1") {
+        algorithm = QCryptographicHash::Sha1;
+    } else if (name == "SHA-256") {
+        algorithm = QCryptographicHash::Sha256;
+    } else if (name == "SHA-384") {
+        algorithm = QCryptographicHash::Sha384;
+    } else if (name == "SHA-512") {
+        algorithm = QCryptographicHash::Sha512;
+    } else {
+        return throwTypeError(context, engine, "digest: expected SHA-1, SHA-256, SHA-384 or SHA-512");
+    }
+    v8::Local<v8::Value> input = argument(context, 1);
+    if (!input->IsArrayBuffer()) {
+        return throwTypeError(context, engine, "digest: expected an ArrayBuffer");
+    }
+    auto buffer = input.As<v8::ArrayBuffer>();
+    const size_t length = buffer->ByteLength();
+    if (length > MAX_DIGEST_BYTES) {
+        return context->throwValue(engine->makeError(
+            engine->newValue("crypto.subtle.digest: the data is over the limit of 256 MiB"), "RangeError"));
+    }
+    QCryptographicHash hash(algorithm);
+    hash.addData(static_cast<const char*>(buffer->Data()), (int)length);
+    ScriptPromise promise = engine->newPromise();
+    promise.resolver->resolve(engine->newArrayBuffer(hash.result()));
+    return promise.promise;
 }
 
 ScriptValue webGlobalsDecodeUtf8(ScriptContext* context, ScriptEngine* engine) {

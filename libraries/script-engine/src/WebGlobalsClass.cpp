@@ -14,7 +14,6 @@
 #include <chrono>
 #include <cmath>
 
-#include <QCryptographicHash>
 #include <QRandomGenerator>
 #include <QUrl>
 #include <QUuid>
@@ -23,7 +22,6 @@
 #include "ScriptContext.h"
 #include "ScriptEngineLogging.h"
 #include "ScriptValue.h"
-#include "v8/FastScriptValueUtils.h"
 #include "v8/WebGlobalsV8.h"
 
 static ScriptValue throwTypeError(ScriptContext* context, ScriptEngine* engine, const QString& message) {
@@ -47,30 +45,6 @@ static ScriptValue randomBytes(ScriptContext* context, ScriptEngine* engine) {
 
 static ScriptValue randomUUID(ScriptContext* context, ScriptEngine* engine) {
     return engine->newValue(QUuid::createUuid().toString(QUuid::WithoutBraces));
-}
-
-// digest(name, arrayBuffer), with the name one of the four below as the prelude normalises it
-static ScriptValue digest(ScriptContext* context, ScriptEngine* engine) {
-    const QString name = context->argument(0).isString() ? context->argument(0).toString() : QString();
-    QByteArray bytes;
-    if (!qBytearrayFromScriptValue(context->argument(1), bytes)) {
-        return throwTypeError(context, engine, "digest: expected an ArrayBuffer");
-    }
-    QCryptographicHash::Algorithm algorithm;
-    if (name == "SHA-1") {
-        algorithm = QCryptographicHash::Sha1;
-    } else if (name == "SHA-256") {
-        algorithm = QCryptographicHash::Sha256;
-    } else if (name == "SHA-384") {
-        algorithm = QCryptographicHash::Sha384;
-    } else if (name == "SHA-512") {
-        algorithm = QCryptographicHash::Sha512;
-    } else {
-        return throwTypeError(context, engine, "digest: expected SHA-1, SHA-256, SHA-384 or SHA-512");
-    }
-    ScriptPromise promise = engine->newPromise();
-    promise.resolver->resolve(engine->newArrayBuffer(QCryptographicHash::hash(bytes, algorithm)));
-    return promise.promise;
 }
 
 static ScriptValue monotonicMs(ScriptContext* context, ScriptEngine* engine) {
@@ -245,7 +219,7 @@ void registerWebGlobals(ScriptEngine* engine) {
     natives.setProperty("base64Decode", engine->newFunction(webGlobalsBase64Decode, 1));
     natives.setProperty("randomBytes", engine->newFunction(randomBytes, 1));
     natives.setProperty("randomUUID", engine->newFunction(randomUUID, 0));
-    natives.setProperty("digest", engine->newFunction(digest, 2));
+    natives.setProperty("digest", engine->newFunction(webGlobalsDigest, 2));
     natives.setProperty("monotonicMs", engine->newFunction(monotonicMs, 0));
     natives.setProperty("parseUrl", engine->newFunction(parseUrlNative, 2));
     natives.setProperty("clone", engine->newFunction(webGlobalsClone, 2));

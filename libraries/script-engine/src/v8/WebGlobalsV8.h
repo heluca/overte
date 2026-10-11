@@ -34,6 +34,12 @@ ScriptValue webGlobalsBase64Encode(ScriptContext* context, ScriptEngine* engine)
 /// base64Decode(base64) -> binary string, for base64 the prelude has checked and stripped of padding and whitespace
 ScriptValue webGlobalsBase64Decode(ScriptContext* context, ScriptEngine* engine);
 
+/// The most crypto.subtle.digest hashes in one call
+static constexpr size_t MAX_DIGEST_BYTES = 256 * 1024 * 1024;
+
+/// digest(name, arrayBuffer) -> Promise of the hash as an ArrayBuffer; name is SHA-1, SHA-256, SHA-384 or SHA-512
+ScriptValue webGlobalsDigest(ScriptContext* context, ScriptEngine* engine);
+
 /// decodeUtf8(view, fatal, stream) -> [text, pendingByteCount], or null if fatal is set and the bytes are not valid
 /// UTF-8. With stream, a valid but incomplete sequence at the end is not decoded; its length is the pending count.
 ScriptValue webGlobalsDecodeUtf8(ScriptContext* context, ScriptEngine* engine);
