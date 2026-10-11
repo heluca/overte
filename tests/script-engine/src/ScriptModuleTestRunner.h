@@ -69,6 +69,8 @@ struct ModuleTestOptions {
     QStringList cachedFiles;
     // Called with the manager just before it runs, e.g. to add globals
     std::function<void(ScriptManager*)> beforeRun;
+    // Called with the manager after run() has returned and waitAfterRunMs has passed, while it is still alive
+    std::function<void(ScriptManager*)> afterRun;
 };
 
 inline QString urlOf(const QTemporaryDir& dir, const QString& path) {
@@ -134,6 +136,9 @@ inline ModuleTestRun runScript(const QTemporaryDir& dir, const QList<QPair<QStri
     sm->run();
     if (options.waitAfterRunMs > 0) {
         QTest::qWait(options.waitAfterRunMs);
+    }
+    if (options.afterRun) {
+        options.afterRun(sm.get());
     }
     run.uncaughtException = sm->getUncaughtException();
     return run;
