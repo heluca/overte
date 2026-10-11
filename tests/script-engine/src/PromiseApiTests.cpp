@@ -22,6 +22,7 @@
 #include "ResourceCache.h"
 #include "ScriptEnvironment.h"
 #include "ScriptModuleTestRunner.h"
+#include "ScriptValueUtils.h"
 #include <recording/ClipCache.h>
 #include <recording/RecordingScriptingInterface.h>
 
@@ -72,6 +73,8 @@ int PromiseApiProbe::pendingResolvers() const {
 static Options withGlobals(std::unique_ptr<PromiseApiProbe>& probe, Options options = Options()) {
     options.beforeRun = [&probe](ScriptManager* manager) {
         auto engine = manager->engine();
+        // The QByteArray conversions, which an entities library initializer registers outside these tests
+        registerMetaTypes(engine.get());
         probe = std::make_unique<PromiseApiProbe>(manager);
         engine->globalObject().setProperty("Probe", engine->newQObject(probe.get()));
         // A NETWORKLESS_TEST_SCRIPT manager registers no Assets. Parented to the manager, as its own would be.
@@ -104,8 +107,6 @@ void PromiseApiTests::initTestCase() {
 void PromiseApiTests::testCallbackForms() {
     // Regression: each converted method, given a callback, calls it with the arguments and this it always did, and
     // returns undefined. The overload taken follows the argument count, as moc clones each defaulted parameter.
-    // decompressData is not checked for content: binary data does not survive the trip through script in either form
-    // (compressData's data arrives as a string), which predates the promise forms.
     std::unique_ptr<PromiseApiProbe> probe;
     QTemporaryDir dir;
     auto run = runScript(dir, {
@@ -113,8 +114,8 @@ void PromiseApiTests::testCallbackForms() {
 var scope = { done: function(error, result) { print('compress scoped ' + (this === scope) + ' ' + error + ' ' + result.compressed); } };
 print('returns ' + typeof Assets.compressData('hello', scope, 'done'));
 Assets.compressData({ data: 'hello hello hello', level: 9 }, function(error, compressed) {
-    print('compress ' + error + ' ' + compressed.compressed + ' ' + (compressed.byteLength > 0));
-    Assets.decompressData({ data: compressed.data }, function(error, result) { print('decompress ' + error + ' ' + result.responseType); });
+    print('compress ' + error + ' ' + compressed.compressed + ' ' + (compressed.data instanceof ArrayBuffer));
+    Assets.decompressData({ data: compressed.data }, function(error, result) { print('decompress ' + error + ' ' + result.response); });
 });
 Assets.resolveAsset('atp:' + HASH, function(error, result) { print('resolve ' + error + ' ' + (result.hash === HASH)); });
 Assets.getMapping('/a.txt', function(error, hash) { print('getMapping ' + (this === Assets) + ' ' + error + ' [' + hash + ']'); });
@@ -131,7 +132,7 @@ Script.setTimeout(function() { Script.stop(true); }, 10);
         "returns undefined",
         "compress scoped true null true",
         "compress null true true",
-        "decompress null text",
+        "decompress null hello hello hello",
         "resolve null true",
         "getMapping true " + NO_SERVER + " []",
         "setMapping true " + NO_SERVER + " number",
@@ -159,7 +160,7 @@ const compressedCallback = await viaCallback(cb => Assets.compressData({ data: '
 print('compress ' + compressed.compressed + ' same shape ' + (shape(compressed) === shape(compressedCallback.result)));
 const decompressed = await Assets.decompressData({ data: compressed.data }, undefined, undefined);
 const decompressedCallback = await viaCallback(cb => Assets.decompressData({ data: compressed.data }, cb));
-print('decompress ' + decompressed.responseType + ' same shape ' + (shape(decompressed) === shape(decompressedCallback.result)));
+print('decompress ' + decompressed.response + ' same shape ' + (shape(decompressed) === shape(decompressedCallback.result)));
 const resolved = await Assets.resolveAsset({ url: 'atp:' + HASH }, undefined);
 const resolvedCallback = await viaCallback(cb => Assets.resolveAsset({ url: 'atp:' + HASH }, cb));
 print('resolve ' + (resolved.hash === HASH) + ' same shape ' + (shape(resolved) === shape(resolvedCallback.result)));
@@ -187,7 +188,7 @@ Script.stop(true);
     QCOMPARE(run.printed, QStringList({
         "compress returns a promise true",
         "compress true same shape true",
-        "decompress text same shape true",
+        "decompress hello hello hello same shape true",
         "resolve true same shape true",
         "getMapping Error: " + NO_SERVER + " same message true same details true",
         "getMapping null Error: " + NO_SERVER + " same message true same details true",
