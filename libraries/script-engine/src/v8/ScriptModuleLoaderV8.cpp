@@ -473,6 +473,10 @@ void ScriptModuleLoaderV8::report(const QString& message, const QString& fileNam
     } else {
         qCWarning(scriptengine_v8) << message;
     }
-    _engine->setUncaughtException(exception);
+    // Not for an entity script: the entity's status carries it, and a pending uncaught exception would fail the next
+    // classic entity script constructed before the event loop clears it
+    if (_request.environment->entityID.isNull()) {
+        _engine->setUncaughtException(exception);
+    }
     finish(_engine->undefinedValue(), exception);
 }
