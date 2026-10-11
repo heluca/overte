@@ -163,7 +163,8 @@ public:  // ScriptEngine implementation
     virtual ScriptValue callReportingRejection(const ScriptValue& function, const ScriptValue& thisObject,
         const ScriptValueList& args,
         std::function<void(const QString& reason, const QString& fileName, int lineNumber)> onRejected) override;
-    virtual ScriptValue constructCatching(const ScriptValue& constructor, std::shared_ptr<ScriptException>* thrown) override;
+    virtual ScriptValue constructCatching(const ScriptValue& constructor, std::shared_ptr<ScriptException>* thrown,
+                                          QString* thrownFileName) override;
     virtual ScriptEnvironmentPointer currentEnvironment() override;
     virtual ScriptEnvironmentPointer swapCurrentEnvironment(const ScriptEnvironmentPointer& environment) override;
     virtual void compileTest() override;

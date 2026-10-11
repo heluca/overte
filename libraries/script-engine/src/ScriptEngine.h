@@ -427,9 +427,11 @@ public:
 
     /**
      * @brief Calls the function as a constructor with no arguments. If it throws, returns undefined and sets thrown to
-     * what it threw, with its stack, instead of reporting it. Script thread only.
+     * what it threw, with its stack, and thrownFileName to the file it was thrown in, instead of reporting it. Script
+     * thread only.
      */
-    virtual ScriptValue constructCatching(const ScriptValue& constructor, std::shared_ptr<ScriptException>* thrown) = 0;
+    virtual ScriptValue constructCatching(const ScriptValue& constructor, std::shared_ptr<ScriptException>* thrown,
+                                          QString* thrownFileName) = 0;
     virtual ScriptProgramPointer newProgram(const QString& sourceCode, const QString& fileName) = 0;
     virtual ScriptValue newQObject(QObject *object, ValueOwnership ownership = QtOwnership, const QObjectWrapOptions &options = QObjectWrapOptions()) = 0;
     virtual ScriptValue newValue(bool value) = 0;

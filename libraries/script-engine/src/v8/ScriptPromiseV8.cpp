@@ -234,7 +234,8 @@ void ScriptEngineV8::rejectionHandlerRejected(const v8::FunctionCallbackInfo<v8:
     handler(text, fileName, lineNumber);
 }
 
-ScriptValue ScriptEngineV8::constructCatching(const ScriptValue& constructor, std::shared_ptr<ScriptException>* thrown) {
+ScriptValue ScriptEngineV8::constructCatching(const ScriptValue& constructor, std::shared_ptr<ScriptException>* thrown,
+                                              QString* thrownFileName) {
     Q_ASSERT(QThread::currentThread() == thread());
     MicrotaskCheckpointScopeV8 microtaskCheckpointScope(this);
     v8::HandleScope handleScope(_v8Isolate);
@@ -249,8 +250,10 @@ ScriptValue ScriptEngineV8::constructCatching(const ScriptValue& constructor, st
 
     auto exception = std::make_shared<ScriptRuntimeException>();
     exception->additionalInfo = "constructor";
-    if (!tryCatch.HasCaught()) {
-        exception->errorMessage = function->IsFunction() ? "Constructor was terminated" : "Not a constructor";
+    if (tryCatch.HasTerminated()) {
+        exception->errorMessage = "Constructor was terminated";
+    } else if (!tryCatch.HasCaught()) {
+        exception->errorMessage = "Not a constructor";
     } else {
         exception->errorMessage = QString(*v8::String::Utf8Value(_v8Isolate, tryCatch.Exception()));
         exception->thrownValue = ScriptValue(new ScriptValueV8Wrapper(this, V8ScriptValue(this, tryCatch.Exception())));
@@ -258,6 +261,9 @@ ScriptValue ScriptEngineV8::constructCatching(const ScriptValue& constructor, st
         if (!message.IsEmpty()) {
             exception->errorLine = message->GetLineNumber(context).FromMaybe(-1);
             exception->errorColumn = message->GetStartColumn(context).FromMaybe(0);
+            if (message->GetScriptResourceName()->IsString()) {
+                *thrownFileName = QString(*v8::String::Utf8Value(_v8Isolate, message->GetScriptResourceName()));
+            }
         }
         v8::Local<v8::Value> stack;
         if (tryCatch.StackTrace(context).ToLocal(&stack) && stack->IsString()) {

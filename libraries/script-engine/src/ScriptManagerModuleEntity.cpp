@@ -129,14 +129,16 @@ void ScriptManager::entityModuleEvaluated(const EntityItemID& entityID, const QS
 
     ScriptValue entityScriptObject;
     std::shared_ptr<ScriptException> thrown;
+    // The constructor may be in a module the entry re-exports it from
+    QString thrownFileName = scriptURL;
     doWithEnvironment(entityID, environment->sandboxURL, [&] {
-        entityScriptObject = _engine->constructCatching(constructor, &thrown);
+        entityScriptObject = _engine->constructCatching(constructor, &thrown, &thrownFileName);
     }, environment);
     if (thrown) {
         QString errorInfo = thrown->backtrace.isEmpty() ? thrown->errorMessage : thrown->backtrace.join("\n");
         QString message = QString("Error in the constructor of %1: %2").arg(scriptURL, errorInfo);
         doWithEnvironment(entityID, environment->sandboxURL,
-                          [&] { scriptErrorMessage(message, scriptURL, thrown->errorLine); }, environment);
+                          [&] { scriptErrorMessage(message, thrownFileName, thrown->errorLine); }, environment);
         setError(errorInfo);
         return;
     }
