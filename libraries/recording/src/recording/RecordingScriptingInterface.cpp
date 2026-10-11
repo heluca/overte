@@ -28,10 +28,12 @@
 #include "Frame.h"
 #include "ClipCache.h"
 
+#include <ScriptCompletion.h>
 #include <ScriptEngine.h>
 #include <ScriptEngineLogging.h>
 #include <ScriptManager.h>
 #include <ScriptValue.h>
+#include <Scriptable.h>
 
 using namespace recording;
 
@@ -63,26 +65,55 @@ float RecordingScriptingInterface::playerLength() const {
     return _player->length();
 }
 
-void RecordingScriptingInterface::playClip(NetworkClipLoaderPointer clipLoader, const QString& url, const ScriptValue& callback) {
+void RecordingScriptingInterface::playClip(NetworkClipLoaderPointer clipLoader, const QString& url,
+                                           const ScriptCompletion& completion) {
     {
         Locker lock(_mutex);
         _player->queueClip(clipLoader->getClip());
     }
 
-    if (callback.isFunction()) {
-        auto engine = callback.engine();
-        ScriptValueList args{ engine->newValue(true), engine->newValue(url) };
-        callback.call(ScriptValue(), args);
+    if (auto engine = completion.engine()) {
+        completion.resolve(engine->newValue(url), { engine->newValue(true), engine->newValue(url) });
     }
 }
 
-void RecordingScriptingInterface::loadRecording(const QString& url, const ScriptValue& callback) {
+static void rejectLoad(const ScriptCompletion& completion, const QString& url) {
+    if (auto engine = completion.engine()) {
+        completion.reject("Failed to load recording: " + url, { engine->newValue(false), engine->newValue(url) });
+    }
+}
+
+ScriptValue RecordingScriptingInterface::loadRecording(const QString& url, const ScriptValue& callback) {
+    auto engine = Scriptable::engine();
+    if (!engine) {
+        // Interface also exposes Recording to QML, which has no script engine to settle a promise in
+        qCWarning(scriptengine) << "Recording.loadRecording called outside a script";
+        return ScriptValue();
+    }
+    ScriptCompletion completion(engine, callback);
+    if (!completion.verify(true, QString())) {
+        return completion.takeReturnValue();
+    }
+
     auto clipLoader = DependencyManager::get<recording::ClipCache>()->getClipLoader(url);
 
     if (clipLoader->isLoaded()) {
         qCDebug(scriptengine) << "Recording already loaded from" << url;
-        playClip(clipLoader, url, callback);
-        return;
+        playClip(clipLoader, url, completion);
+        return completion.takeReturnValue();
+    }
+    // The cache keeps a clip that failed to load, and it never signals again
+    if (clipLoader->isFailed()) {
+        qCDebug(scriptengine) << "Recording already failed to load from" << url;
+        rejectLoad(completion, url);
+        return completion.takeReturnValue();
+    }
+
+    auto manager = engine->manager();
+    if (!manager) {
+        qWarning() << "This script does not belong to a ScriptManager";
+        rejectLoad(completion, url);
+        return completion.takeReturnValue();
     }
 
     Locker lock(_mutex);
@@ -92,20 +123,14 @@ void RecordingScriptingInterface::loadRecording(const QString& url, const Script
 
     auto weakClipLoader = clipLoader.toWeakRef();
 
-    auto manager = callback.engine()->manager();
-    if (!manager) {
-        qWarning() << "This script does not belong to a ScriptManager";
-        return;
-    }
-
     // when clip loaded, call the callback with the URL and success boolean
     connect(clipLoader.data(), &recording::NetworkClipLoader::clipLoaded, manager,
-            [this, weakClipLoader, url, callback]() mutable {
+            [this, weakClipLoader, url, completion]() {
 
         if (auto clipLoader = weakClipLoader.toStrongRef()) {
             qCDebug(scriptengine) << "Loaded recording from" << url;
 
-            playClip(clipLoader, url, callback);
+            playClip(clipLoader, url, completion);
 
             // drop our strong pointer to this clip so it is cleaned up
             _clipLoaders.remove(clipLoader);
@@ -114,20 +139,17 @@ void RecordingScriptingInterface::loadRecording(const QString& url, const Script
 
     // when clip load fails, call the callback with the URL and failure boolean
     connect(clipLoader.data(), &recording::NetworkClipLoader::failed, manager,
-            [this, weakClipLoader, url, callback](QNetworkReply::NetworkError error) mutable {
+            [this, weakClipLoader, url, completion](QNetworkReply::NetworkError error) {
         qCDebug(scriptengine) << "Failed to load recording from\"" << url << '"';
 
-        if (callback.isFunction()) {
-            auto engine = callback.engine();
-            ScriptValueList args{ engine->newValue(false), engine->newValue(url) };
-            callback.call(ScriptValue(), args);
-        }
+        rejectLoad(completion, url);
 
         if (auto clipLoader = weakClipLoader.toStrongRef()) {
             // drop out strong pointer to this clip so it is cleaned up
             _clipLoaders.remove(clipLoader);
         }
     });
+    return completion.takeReturnValue();
 }
 
 void RecordingScriptingInterface::startPlaying() {

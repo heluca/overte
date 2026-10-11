@@ -39,6 +39,15 @@ async function hashText(text: string): Promise<number> {
 }
 hashText("abc").catch((error: DOMException) => print(error.name, String(error.code)));
 
+// Assets without a callback returns a promise; with one, the callback gets the result.
+async function readSaved(): Promise<string> {
+    const saved = await Assets.getAsset({ url: "/games/saved.json", responseType: "text" });
+    const hash: string = await Assets.getMapping("/games/saved.json");
+    return String(saved.response) + hash;
+}
+readSaved().then(print, (error: Error) => print(error.message));
+Assets.getAsset("/games/saved.json", (error, result) => print(error === null ? String(result.response) : error));
+
 // Script.remoteCallerID is a Uuid string while a remotely callable method runs, undefined otherwise.
 function remotelyCallable(): void {
     const caller: string | undefined = Script.remoteCallerID;
