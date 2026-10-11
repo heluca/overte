@@ -11,11 +11,14 @@
 //
 //      GT.Col<n>   a column target: a click asks the referee to move into column n
 //      GT.Seat<n>  a seat button: a click joins seat n, or leaves it when already seated there
+//                  (during a game, which resigns it, only on a second click within 5 s)
 //      (other)     the board itself: listens on the board's channel, announces what concerns
 //                  this user, and highlights the legal columns while it is their turn
 //
 //  The client holds no game state of its own: it reads the board's userData and the channel,
-//  never writes either, and edits only the local entities it creates for the highlights.
+//  never writes either, and edits only the local entities it creates for the highlights. Channel
+//  messages are self-asserted (any client can send one), so they only drive what this user is
+//  shown; every action goes to the referee, which checks the caller.
 //
 
 import { SEAT_NAMES, channelFor } from "./referee-core.mjs";
@@ -26,6 +29,9 @@ const HIGHLIGHT_PREFIX = "GT.Highlight ";
 const HIGHLIGHT_GROW = 1.15;
 const HIGHLIGHT_COLOR = { red: 60, green: 220, blue: 90 };
 const HIGHLIGHT_ALPHA = 0.45;
+const HIGHLIGHT_RETRY_MS = 1000;
+const RESIGN_CONFIRM_MS = 5000;
+const RESIGN_CONFIRM_TEXT = "Click your seat again within 5 s to resign the game";
 const NOT_SEATED_TEXT = "You are not seated at the game table";
 const OFFLINE_TEXT = "Game table: the referee is not running";
 /** @type {Record<string, string>} */
@@ -98,7 +104,11 @@ export default class GameTableClient {
     /** @type {((channel: string, message: string) => void) | null} */ onMessage = null;
     shown = "";
     seated = false;
-    /** @type {Map<number, Uuid>} column -> local highlight entity */ highlights = new Map();
+    /** @type {Map<number, { id: Uuid, target: Uuid }>} column -> local highlight and its target */
+    highlights = new Map();
+    /** @type {number[]} */ wanted = [];
+    /** @type {number | null} */ retryTimer = null;
+    resignUntil = 0;
 
     /** @param {Uuid} entityID */
     preload(entityID) {
@@ -124,7 +134,11 @@ export default class GameTableClient {
             Messages.unsubscribe(this.channel);
             this.onMessage = null;
         }
-        this.highlights.forEach(id => Entities.deleteEntity(id));
+        if (this.retryTimer !== null) {
+            Script.clearTimeout(this.retryTimer);
+            this.retryTimer = null;
+        }
+        this.highlights.forEach(shown => Entities.deleteEntity(shown.id));
         this.highlights.clear();
     }
 
@@ -148,12 +162,17 @@ export default class GameTableClient {
         if (this.role === "column") {
             Entities.callEntityServerMethod(this.boardID, "move", [String(this.index)]);
         } else if (this.role === "seat") {
-            const seats = this.boardState()?.seats;
-            const holder = Array.isArray(seats) ? seats[this.index] : null;
-            if (holder && sameSession(holder.session, MyAvatar.sessionUUID)) {
-                Entities.callEntityServerMethod(this.boardID, "leave", []);
+            const state = this.boardState();
+            const holder = state && Array.isArray(state.seats) ? state.seats[this.index] : null;
+            if (!holder || !sameSession(holder.session, MyAvatar.sessionUUID)) {
+                Entities.callEntityServerMethod(this.boardID, "join",
+                    [MyAvatar.sessionDisplayName || MyAvatar.displayName, String(this.index)]);
+            } else if (state && state.phase === "playing" && Date.now() > this.resignUntil) {
+                this.resignUntil = Date.now() + RESIGN_CONFIRM_MS;
+                Window.displayAnnouncement(RESIGN_CONFIRM_TEXT);
             } else {
-                Entities.callEntityServerMethod(this.boardID, "join", [MyAvatar.sessionDisplayName || MyAvatar.displayName]);
+                this.resignUntil = 0;
+                Entities.callEntityServerMethod(this.boardID, "leave", []);
             }
         }
     }
@@ -166,7 +185,9 @@ export default class GameTableClient {
 
     /**
      * Subscribes to the board's channel. The referee writes its name into userData; a board it
-     * cannot write (locked, or never refereed yet) uses the same name, and asks for the state.
+     * cannot write (locked, or never refereed yet) uses the same name. The state is asked for
+     * once when userData has none, or one that looks stale: offline, or a turn already past its
+     * deadline (the referee may have restarted on a board it cannot write).
      */
     listen() {
         const state = this.boardState();
@@ -180,7 +201,10 @@ export default class GameTableClient {
         Messages.subscribe(this.channel);
         if (state) {
             this.update(state);
-        } else {
+        }
+        const overdue = state && state.phase === "playing" && typeof state.turnDeadline === "number"
+            && state.turnDeadline < Date.now();
+        if (!state || state.phase === "offline" || overdue) {
             Entities.callEntityServerMethod(this.boardID, "state", []);
         }
     }
@@ -220,17 +244,34 @@ export default class GameTableClient {
      * @param {number[]} columns
      */
     highlight(columns) {
+        this.wanted = columns;
         const wanted = new Set(columns);
-        this.highlights.forEach((id, col) => {
-            if (!wanted.has(col)) {
-                Entities.deleteEntity(id);
+        this.highlights.forEach((shown, col) => {
+            // A target the referee deleted (a duplicate it swept) takes the highlight's anchor with it
+            const targetGone = !Entities.getEntityProperties(shown.target, ["name"]).name;
+            if (!wanted.has(col) || targetGone) {
+                Entities.deleteEntity(shown.id);
                 this.highlights.delete(col);
             }
         });
-        if (columns.every(col => this.highlights.has(col))) {
-            return;
+        if (!columns.every(col => this.highlights.has(col))) {
+            this.addHighlights(wanted);
         }
-        // Looked up each time: the targets may reach this client after the board does
+        if (this.retryTimer !== null) {
+            Script.clearTimeout(this.retryTimer);
+            this.retryTimer = null;
+        }
+        // The column targets can reach this client after the board's state does: look again
+        if (!columns.every(col => this.highlights.has(col))) {
+            this.retryTimer = Script.setTimeout(() => {
+                this.retryTimer = null;
+                this.highlight(this.wanted);
+            }, HIGHLIGHT_RETRY_MS);
+        }
+    }
+
+    /** @param {Set<number>} wanted */
+    addHighlights(wanted) {
         Entities.getChildrenIDs(this.boardID).forEach(id => {
             const target = /** @type {Partial<Entities.EntityProperties_Box>} */ (
                 Entities.getEntityProperties(id, ["name", "dimensions"]));
@@ -240,7 +281,7 @@ export default class GameTableClient {
                 return;
             }
             const size = /** @type {Vec3} */ (target.dimensions);
-            this.highlights.set(col, Entities.addEntity({
+            this.highlights.set(col, { target: id, id: Entities.addEntity({
                 type: "Box",
                 name: HIGHLIGHT_PREFIX + col,
                 parentID: id,
@@ -252,7 +293,7 @@ export default class GameTableClient {
                 // The click must reach the column target inside, not the highlight
                 ignorePickIntersection: true,
                 grab: { grabbable: false }
-            }, "local"));
+            }, "local") });
         });
     }
 }

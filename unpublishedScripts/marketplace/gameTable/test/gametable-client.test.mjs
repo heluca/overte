@@ -41,7 +41,7 @@ function fakeEngine(gameTable = projection()) {
         announced: [],
         subscribed: new Set(),
         handlers: [],
-        domainEdits: 0,
+        timers: new Map(),
         Entities: {
             addEntity(properties, hostType) {
                 const id = `{00000000-0000-4000-8000-${String(nextId++).padStart(12, "0")}}`;
@@ -49,9 +49,8 @@ function fakeEngine(gameTable = projection()) {
                 return id;
             },
             editEntity(id, properties) {
-                if (entities.get(id).hostType !== "local") {
-                    engine.domainEdits++;
-                }
+                // The client must never write the board or any other domain entity
+                assert.equal(entities.get(id)?.hostType, "local", "editEntity on a domain entity " + id);
                 Object.assign(entities.get(id), properties);
                 return id;
             },
@@ -77,7 +76,10 @@ function fakeEngine(gameTable = projection()) {
         },
         Window: { displayAnnouncement(message) { engine.announced.push(message); } },
         MyAvatar: { sessionUUID: ME, sessionDisplayName: "Me", displayName: "me-account" },
-        Script: {},
+        Script: {
+            setTimeout(callback) { engine.timers.set(nextId, callback); return nextId++; },
+            clearTimeout(id) { engine.timers.delete(id); }
+        },
         // What the referee's child sweep leaves on the board
         child(name) {
             return engine.Entities.addEntity({ name, parentID: BOARD, dimensions: { x: 0.08, y: 0.05, z: 0.04 } });
@@ -86,6 +88,11 @@ function fakeEngine(gameTable = projection()) {
         deliver(channel, message) {
             const text = typeof message === "string" ? message : JSON.stringify(message);
             engine.handlers.forEach(handler => handler(channel, text, BOB, false));
+        },
+        runTimers() {
+            const due = [...engine.timers];
+            engine.timers.clear();
+            due.forEach(([, callback]) => callback());
         },
         highlights() {
             return [...entities.values()].filter(entity => (entity.name || "").startsWith("GT.Highlight "));
@@ -137,17 +144,38 @@ test("a seat button joins with the display name, and leaves when the user holds 
     load(red).clickDownOnEntity(red, PRIMARY);
     load(black).clickDownOnEntity(black, PRIMARY);
     assert.deepEqual(engine.calls, [
-        { entityID: BOARD, method: "join", params: ["Me"] },
-        { entityID: BOARD, method: "join", params: ["Me"] }
+        { entityID: BOARD, method: "join", params: ["Me", "0"] },
+        { entityID: BOARD, method: "join", params: ["Me", "1"] }
     ]);
-    engine.entities.get(BOARD).userData = JSON.stringify({ gameTable: projection({ seats: SEATED }) });
+    engine.entities.get(BOARD).userData = JSON.stringify({ gameTable: projection({ phase: "over", seats: SEATED }) });
     engine.MyAvatar.sessionDisplayName = "";
     load(red).startFarTrigger();
     load(black).startFarTrigger();
     assert.deepEqual(engine.calls.slice(2), [
         { entityID: BOARD, method: "leave", params: [] },
-        { entityID: BOARD, method: "join", params: ["me-account"] }
+        { entityID: BOARD, method: "join", params: ["me-account", "1"] }
     ]);
+});
+
+test("during a game the seat button resigns only on a second click within 5 s", t => {
+    const engine = fakeEngine(projection({ phase: "playing", seats: SEATED, toMove: 1 }));
+    let now = 1_760_000_000_000;
+    t.mock.method(Date, "now", () => now);
+    const red = engine.child("GT.Seat0");
+    const seat = load(red);
+    seat.clickDownOnEntity(red, PRIMARY);
+    assert.deepEqual(engine.calls, []);
+    assert.deepEqual(engine.announced, ["Click your seat again within 5 s to resign the game"]);
+    now += 6000;
+    seat.clickDownOnEntity(red, PRIMARY);
+    assert.deepEqual(engine.calls, [], "too late: asks again");
+    assert.equal(engine.announced.length, 2);
+    now += 4000;
+    seat.clickDownOnEntity(red, PRIMARY);
+    assert.deepEqual(engine.calls, [{ entityID: BOARD, method: "leave", params: [] }]);
+    // The confirmation is spent: the next click asks again
+    seat.clickDownOnEntity(red, PRIMARY);
+    assert.equal(engine.calls.length, 1);
 });
 
 test("the board subscribes to the channel named in userData and shows the state it finds", () => {
@@ -191,8 +219,6 @@ test("a state message announces the turn and highlights the legal columns on loc
         phase: "over", seats: SEATED, result: { winner: 1, reason: "four", line: [[5, 0], [5, 1], [5, 2], [5, 3]] }
     }) });
     assert.equal(engine.announced.at(-1), "You lose (four in a row)");
-    // The client never edits a domain entity, so it never writes the board's userData
-    assert.equal(engine.domainEdits, 0);
 });
 
 test("refusals addressed to this user are announced, others' are not", () => {
@@ -236,6 +262,51 @@ test("a board without the state in userData listens on its own channel and asks 
     assert.deepEqual(engine.calls, [{ entityID: BOARD, method: "state", params: [] }]);
 });
 
+test("a stale state in userData is shown, and the referee asked once for a fresh one", () => {
+    const past = Date.now() - 1000;
+    const future = Date.now() + 60_000;
+    [
+        [projection({ phase: "offline" }), 1],
+        [projection({ phase: "playing", seats: SEATED, toMove: 1, turnDeadline: past }), 1],
+        [projection({ phase: "playing", seats: SEATED, toMove: 1, turnDeadline: future }), 0],
+        [projection(), 0]
+    ].forEach(([gameTable, asks]) => {
+        const engine = fakeEngine(gameTable);
+        load(BOARD);
+        assert.equal(engine.calls.filter(call => call.method === "state").length, asks, gameTable.phase);
+    });
+});
+
+test("column targets that arrive after the state get their highlights on a retry", () => {
+    const engine = fakeEngine();
+    const board = load(BOARD);
+    engine.deliver(CHANNEL, { type: "state", ...projection({ phase: "playing", seats: SEATED, toMove: 0, legal: [1, 4] }) });
+    assert.equal(engine.highlights().length, 0);
+    assert.equal(engine.timers.size, 1);
+    engine.runTimers();
+    assert.equal(engine.timers.size, 1, "still looking");
+    columns(engine);
+    engine.runTimers();
+    assert.deepEqual(engine.highlights().map(h => h.name).sort(), ["GT.Highlight 1", "GT.Highlight 4"]);
+    assert.equal(engine.timers.size, 0, "all found: no more retries");
+    board.unload();
+});
+
+test("a highlight whose target was deleted as a duplicate moves to the surviving target", () => {
+    const engine = fakeEngine();
+    const duplicate = engine.child("GT.Col2");
+    load(BOARD);
+    const state = { type: "state", ...projection({ phase: "playing", seats: SEATED, toMove: 0, legal: [2] }) };
+    engine.deliver(CHANNEL, state);
+    assert.equal(engine.highlights()[0].parentID, duplicate);
+    const survivor = engine.child("GT.Col2");
+    engine.Entities.deleteEntity(duplicate);
+    engine.deliver(CHANNEL, state);
+    const shown = engine.highlights();
+    assert.equal(shown.length, 1);
+    assert.equal(shown[0].parentID, survivor);
+});
+
 test("unload unsubscribes, disconnects and removes the highlights", () => {
     const engine = fakeEngine();
     columns(engine);
@@ -246,6 +317,7 @@ test("unload unsubscribes, disconnects and removes the highlights", () => {
     assert.equal(engine.subscribed.size, 0);
     assert.equal(engine.handlers.length, 0);
     assert.equal(engine.highlights().length, 0);
+    assert.equal(engine.timers.size, 0);
     // A column target's unload has nothing to undo
     load(engine.child("GT.Col2")).unload();
     assert.equal(engine.handlers.length, 0);
