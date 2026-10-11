@@ -50,6 +50,7 @@
 #include "WebSocketClass.h"
 #include "WebSocketServerClass.h"
 #include "FetchClass.h"
+#include "WebGlobalsClass.h"
 #include "ScriptEngine.h"
 #include "ScriptEngineCast.h"
 #include "ScriptEngineLogging.h"
@@ -919,6 +920,7 @@ void ScriptManager::init() {
      * @param {function} callback - The function to call.
      */
     scriptEngine->globalObject().setProperty("queueMicrotask", scriptEngine->newFunction(queueMicrotaskFromGlobal, 1));
+    registerWebGlobals(scriptEngine);
 
     // NOTE: You do not want to end up creating new instances of singletons here. They will be on the ScriptManager thread
     // and are likely to be unusable if we "reset" the ScriptManager by creating a new one (on a whole new thread).
