@@ -60,15 +60,18 @@ The children are found by name, so a reload does not duplicate them:
 - `GT.Col0` to `GT.Col6`: column targets, a strip of small boxes just above the board's top edge,
   one over each column, between the board and `GT.Status`.
 - `GT.Seat0` and `GT.Seat1`: seat buttons, Text entities reading "Play Red" and "Play Black" to
-  the left and right of the board's bottom corners.
+  the left and right of the board's bottom corners. They are labelled buttons rather than the old
+  table's chair models by decision: a label says what a click does.
 
 The column targets and seat buttons run `gametable-client.mjs` (their `script` is set to the copy
 next to the referee) and are triggerable, so hand controllers can press them too.
 
 When the referee loads, it sweeps the board's children for a few seconds while the entity server
 delivers them. It adopts `GT.Status`, the column targets and the seat buttons, and deletes any
-duplicate of them and any disc it did not create. Whichever of the first three it has not found
-by the end of the sweep, it creates.
+duplicate of them and any disc it did not create. An adopted child gets its position, dimensions
+and (for the clickables) `script` set again from the current layout, so a resized board or a moved
+asset host leaves nothing stale. Whichever of the first three it has not found by the end of the
+sweep, it creates.
 
 On unload the referee abandons a game in progress (an `over` message with reason `abandoned`). It
 then writes the table to `userData` as `offline`, deletes its discs, and shows "Referee not running"
@@ -85,7 +88,7 @@ so one player cannot act for another.
 
 | Method | Params | Accepted when |
 | --- | --- | --- |
-| `join` | `[name]` | The table is `waiting` and has a free seat; the first joiner is Red (seat 0). Idempotent for a seated caller. The second join starts the game. `name` is cosmetic, at most 32 characters |
+| `join` | `[name, seat?]` | The table is `waiting` and the seat is free. `seat` is `"0"` (Red) or `"1"` (Black); absent or `""` takes the first free seat. Idempotent for a seated caller, whatever seat it asks for. The second join starts the game. `name` is cosmetic, at most 32 characters |
 | `move` | `[column]` | The game is `playing`, the caller holds the seat to move, and `column` is exactly one digit `0`-`6` whose column has room |
 | `leave` | `[]` | The caller is seated. In a game in progress the caller resigns and the opponent wins. The seat is freed and the table waits for a new opponent |
 | `state` | `[]` | Always: sends the current state on the channel (call it after subscribing). It stores nothing, so it cannot be used to flood the board with edits; nor does a repeated `join` |
@@ -158,8 +161,9 @@ sender ID is whatever the sending client wrote.
 | `over` | A game ended, or was abandoned by an unload or a crash (`result.reason` `"abandoned"`) | `gameId`, `result`, `seats` as they played |
 | `expired` | A lone player's seat timed out | `seat`, `session`, `name` |
 
-`reason` for `rejected` is one of: `no caller id`, `table full`, `game not started`, `game over`,
-`game not over`, `not seated`, `not your turn`, `column must be one digit 0-6`, `column full`.
+`reason` for `rejected` is one of: `no caller id`, `table full`, `seat taken`, `seat must be 0 or 1`,
+`game not started`, `game over`, `game not over`, `not seated`, `not your turn`,
+`column must be one digit 0-6`, `column full`.
 
 ### Playing as a human
 
@@ -167,11 +171,14 @@ sender ID is whatever the sending client wrote.
    client). Within a few seconds the status display, the seven column targets and the two seat
    buttons appear.
 2. Click "Play Red" or "Play Black" (or point a hand controller at it and pull the trigger). The
-   referee seats you under your display name. When both seats are taken the game starts.
+   referee seats you in that seat under your display name, unless someone already holds it. When
+   both seats are taken the game starts.
 3. On your turn an announcement says "Your turn" and the columns you can play light up green. Click
    the target above a column to drop a disc there.
 
-Click your own seat button again to leave; in a game in progress that resigns. Anything the
+Click your own seat button again to leave. In a game in progress leaving resigns, so the first
+click only announces "Click your seat again within 5 s to resign the game", and a second click
+within 5 seconds resigns. Anything the
 referee refuses ("not your turn", "column full", "table full") comes back as an announcement. There
 is no rematch button yet: for a rematch one player leaves and rejoins, which starts the next game.
 The table also resets on its own 300 seconds after a game ends.
@@ -180,18 +187,23 @@ The client is the same module on every one of those entities, with a role taken 
 name:
 
 - A column target calls `Entities.callEntityServerMethod(board, "move", [String(column)])`.
-- A seat button calls `join` with `MyAvatar.sessionDisplayName`, or `leave` when the board's
-  `userData` shows the user in that seat.
+- A seat button calls `join` with `MyAvatar.sessionDisplayName` and its own seat, or `leave` when
+  the board's `userData` shows the user in that seat (confirmed by a second click during a game).
 - The board's own instance subscribes to the channel named in `userData` (or `gametable:<board
-  id>` if there is no state there yet, in which case it calls `state`). It announces what concerns
+  id>` if there is no state there yet). It calls `state` once if `userData` has no state, or one
+  that looks stale (`offline`, or `playing` past its `turnDeadline`). It announces what concerns
   the user with `Window.displayAnnouncement`: whose turn it is, waiting for an opponent, the result,
   losing the seat, the referee going offline, and refusals addressed to the user's session ID.
-  Spectators get no announcement for every move. While it is the user's turn it puts a green box around each
-  legal column target. These boxes are local entities: the user sees them, nobody else does, and
-  they need no edit rights. They ignore picks, so the click goes through to the target.
+  Spectators get no announcement for every move. While it is the user's turn it puts a green box
+  around each legal column target. These boxes are local entities: the user sees them, nobody else
+  does, and they need no edit rights. They ignore picks, so the click goes through to the target.
+  A target that has not reached the client yet is looked for again every second; a highlight whose
+  target is deleted moves to the one that replaces it.
 
 The client keeps no game state and writes nothing to the board: the referee decides everything,
-and the client only asks. On unload the board's instance unsubscribes and deletes its highlights.
+and the client only asks. Channel messages are self-asserted (any client can send one on the
+channel), so the client treats them as cosmetic: they change only what the user is shown, never
+what is sent to the referee, which checks every caller itself. There is no tap sound on a click. On unload the board's instance unsubscribes and deletes its highlights.
 Messages subscriptions belong to the whole Interface session (one `MessagesClient`), so any other
 script of yours listening on the same channel stops receiving it too.
 
