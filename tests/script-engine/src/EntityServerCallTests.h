@@ -39,6 +39,7 @@ private slots:
     void testWithoutClientEachCallThrows();
     void testWithClientAndNoServer();
     void testClientDestroyedBeforeQueuedStart();
+    void testStatusWithoutReplyFails();
 };
 
 #endif // overte_EntityServerCallTests_h

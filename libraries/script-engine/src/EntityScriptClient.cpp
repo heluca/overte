@@ -13,8 +13,13 @@
 #include "EntityScriptUtils.h"
 
 #include <QThread>
+#include <QTimer>
 
 MessageID EntityScriptClient::_currentID = 0;
+
+// The entity script server does not reply for an entity it does not hold, which is any entity without serverScripts, so a
+// status request fails after this long without a reply
+static const int SCRIPT_STATUS_REPLY_TIMEOUT_MS = 5000;
 
 GetScriptStatusRequest::GetScriptStatusRequest(QUuid entityID) : _entityID(entityID) {
 }
@@ -34,7 +39,13 @@ void GetScriptStatusRequest::start() {
         emit finished(this);
         return;
     }
-    client->getEntityServerScriptStatus(_entityID, [this](bool responseReceived, bool isRunning, EntityScriptStatus status, QString errorInfo) {
+    // Started first, because the client calls back at once when it cannot send the request
+    _replyTimer = new QTimer(this);
+    _replyTimer->setSingleShot(true);
+    connect(_replyTimer, &QTimer::timeout, this, &GetScriptStatusRequest::handleNoReply);
+    _replyTimer->start(SCRIPT_STATUS_REPLY_TIMEOUT_MS);
+    _messageID = client->getEntityServerScriptStatus(_entityID, [this](bool responseReceived, bool isRunning, EntityScriptStatus status, QString errorInfo) {
+        _replyTimer->stop();
         _responseReceived = responseReceived;
         _isRunning = isRunning;
         _status = status;
@@ -42,6 +53,19 @@ void GetScriptStatusRequest::start() {
 
         emit finished(this);
     });
+}
+
+void GetScriptStatusRequest::handleNoReply() {
+    // A late reply would otherwise call back this request after it finished, and possibly after it was deleted
+    auto client = DependencyManager::get<EntityScriptClient>();
+    if (client) {
+        client->dropEntityServerScriptStatusRequest(_messageID);
+    }
+    _responseReceived = false;
+    _isRunning = false;
+    _status = EntityScriptStatus::ERROR_LOADING_SCRIPT;
+    _errorInfo = "no reply from the entity script server";
+    emit finished(this);
 }
 
 EntityScriptClient::EntityScriptClient() {
@@ -155,6 +179,12 @@ MessageID EntityScriptClient::getEntityServerScriptStatus(QUuid entityID, GetScr
 
     callback(false, false, EntityScriptStatus::ERROR_LOADING_SCRIPT, "");
     return INVALID_MESSAGE_ID;
+}
+
+void EntityScriptClient::dropEntityServerScriptStatusRequest(MessageID messageID) {
+    for (auto& pending : _pendingEntityScriptStatusRequests) {
+        pending.second.erase(messageID);
+    }
 }
 
 void EntityScriptClient::handleGetScriptStatusReply(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode) {
