@@ -57,3 +57,6 @@ crypto.subtle.digest("SHA-256", "x");
 
 // @ts-expect-error canParse is static, not a member of a URL.
 new URL("http://example.com/").canParse("x");
+
+// @ts-expect-error Given a callback, getAsset returns nothing to await on.
+Assets.getAsset("/games/saved.json", () => {}).then(print);
