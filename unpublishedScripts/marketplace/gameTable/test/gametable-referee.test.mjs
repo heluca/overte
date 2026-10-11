@@ -267,3 +267,48 @@ test("unload stops the clock, removes the discs and marks the display offline", 
     loaded(engine);
     assert.equal(engine.sent.filter(sent => sent.message.type === "over").length, abandoned);
 });
+
+test("the referee creates seven column targets and two seat buttons that run the client script", () => {
+    const engine = fakeEngine();
+    loaded(engine);
+    const targets = Array.from({ length: 7 }, (_, col) => engine.named("GT.Col" + col));
+    const seats = [engine.named("GT.Seat0"), engine.named("GT.Seat1")];
+    [...targets, ...seats].forEach(found => {
+        assert.equal(found.length, 1);
+        const [child] = found;
+        assert.equal(child.parentID, BOARD);
+        assert.match(child.script, /\/gametable-client\.mjs$/);
+        assert.equal(child.collisionless, true);
+        assert.deepEqual(child.grab, { grabbable: false, triggerable: true });
+    });
+    // Left to right over the board, in a strip above it and under the status display
+    const xs = targets.map(([child]) => child.localPosition.x);
+    assert.deepEqual(xs, xs.slice().sort((a, b) => a - b));
+    assert.ok(Math.abs(xs[3]) < 1e-9);
+    const top = targets[0][0].localPosition.y + targets[0][0].dimensions.y / 2;
+    const status = engine.named("GT.Status")[0];
+    assert.ok(targets[0][0].localPosition.y - targets[0][0].dimensions.y / 2 > 0.3);
+    assert.ok(status.localPosition.y - status.dimensions.y / 2 > top);
+    // Seats beside the board: Red to the left, Black to the right
+    assert.ok(seats[0][0].localPosition.x < -0.35 && seats[1][0].localPosition.x > 0.35);
+    assert.equal(seats[0][0].type, "Text");
+    assert.match(seats[0][0].text, /Red/);
+    assert.match(seats[1][0].text, /Black/);
+});
+
+test("a reload adopts the column targets and seats, and deletes duplicates that arrive late", () => {
+    const engine = fakeEngine();
+    loaded(engine);
+    const before = engine.entities.size;
+    const kept = engine.named("GT.Col3")[0];
+    const second = new GameTableReferee();
+    second.preload(BOARD);
+    const duplicates = [engine.arrive("GT.Col3"), engine.arrive("GT.Seat1")];
+    engine.runTimer(second.searchTimer);
+    duplicates.forEach(id => assert.equal(engine.entities.has(id), false));
+    engine.Script.clearTimeout(second.searchTimer);
+    second.findChildren(0);
+    assert.equal(engine.entities.size, before);
+    assert.equal(engine.named("GT.Col3")[0], kept);
+    assert.equal(engine.named("GT.Seat1").length, 1);
+});

@@ -9,7 +9,8 @@
 //  The Game Table referee, run by the entity script server as the board's `serverScripts`.
 //  Players call the remotely callable methods with Entities.callEntityServerMethod; the
 //  referee publishes the game in the board's userData, on a Text child and on the Messages
-//  channel "gametable:<board id>", and drops disc models on the board.
+//  channel "gametable:<board id>", and drops disc models on the board. It also creates the
+//  column targets and seat buttons that humans click, which run gametable-client.mjs.
 //
 //  The engine shares one module instance per URL between every board that uses it, so all
 //  state lives on the class instance; module scope holds constants only.
@@ -23,7 +24,12 @@ const DISC_MODELS = {
     R: HERE + "assets/checkers/red_checker.fbx",
     B: HERE + "assets/checkers/black_checker.fbx"
 };
+const CLIENT_URL = HERE + "gametable-client.mjs";
 const STATUS_NAME = "GT.Status";
+const SEAT_NAMES = ["GT.Seat0", "GT.Seat1"];
+const COLUMN_NAMES = Array.from({ length: COLUMNS }, (_, col) => "GT.Col" + col);
+// The children there is exactly one of, created by the referee if none turns up.
+const FIXED_NAMES = [STATUS_NAME, ...COLUMN_NAMES, ...SEAT_NAMES];
 const DISC_PREFIX = "GT.Disc ";
 const TICK_MS = 1000;
 const CHILD_SEARCH_MS = 3000;
@@ -37,6 +43,17 @@ const DISC_ROTATION = { x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 };
 const STATUS_SIZE = { x: 1.0, y: 0.4, z: 0.01 };
 const STATUS_GAP = 0.05;
 const STATUS_LINE_HEIGHT = 0.03;
+// Column targets: a strip of slots just above the board, under the status display.
+const SLOT_GAP = 0.01;
+const SLOT_FILL = 0.8;
+const SLOT_HEIGHT = 0.5;
+const SEAT_SIZE = { x: 0.16, y: 0.06, z: 0.01 };
+const SEAT_GAP = 0.03;
+const SEAT_LINE_HEIGHT = 0.03;
+const SEAT_LOOK = [
+    { text: "Play Red", backgroundColor: { red: 190, green: 30, blue: 30 } },
+    { text: "Play Black", backgroundColor: { red: 15, green: 15, blue: 15 } }
+];
 const OFFLINE_TEXT = "Game table\nReferee not running";
 const LOCKED_TEXT = "BOARD LOCKED: the game is not saved in userData. Unlock the board and reload its script.";
 
@@ -63,11 +80,16 @@ export default class GameTableReferee {
     /** @type {RefereeCore} */ core;
     /** @type {number} */ timer;
     /** @type {number | null} */ searchTimer = null;
-    /** @type {Uuid | null} */ statusID = null;
+    /** @type {Map<string, Uuid>} child name -> the one child of that name */ fixed = new Map();
     /** @type {Map<string, { id: Uuid, look: string }>} cell "r<row>c<col>" -> disc */ discs = new Map();
     /** @type {{ text: string, board: string[], line: number[][] | null } | null} */ view = null;
     shownText = "";
     locked = false;
+
+    /** @returns {Uuid | null} the status Text child, once found or created */
+    get statusID() {
+        return this.fixed.get(STATUS_NAME) ?? null;
+    }
 
     /** @param {Uuid} entityID */
     preload(entityID) {
@@ -161,8 +183,9 @@ export default class GameTableReferee {
     /**
      * Children persist with the board, and the entity server may still be sending them when
      * preload runs, so sweep them for a while (as Shortbow does): adopt the status display,
-     * delete any duplicate of it and any disc this instance did not create (left by one that
-     * died without unloading). The status display is created only if none turned up.
+     * the column targets and the seat buttons, delete any duplicate of them and any disc this
+     * instance did not create (left by one that died without unloading). Each of them is
+     * created only if none turned up.
      * @param {number} deadline
      */
     findChildren(deadline) {
@@ -170,33 +193,94 @@ export default class GameTableReferee {
         const ours = new Set([...this.discs.values()].map(disc => disc.id));
         Entities.getChildrenIDs(this.entityID).forEach(id => {
             const name = Entities.getEntityProperties(id, ["name"]).name || "";
-            if (name === STATUS_NAME && (this.statusID === null || this.statusID === id)) {
-                this.statusID = id;
-            } else if (name === STATUS_NAME || (name.startsWith(DISC_PREFIX) && !ours.has(id))) {
+            if (FIXED_NAMES.includes(name)) {
+                const adopted = this.fixed.get(name);
+                if (adopted === undefined || adopted === id) {
+                    this.fixed.set(name, id);
+                } else {
+                    Entities.deleteEntity(id);
+                }
+            } else if (name.startsWith(DISC_PREFIX) && !ours.has(id)) {
                 Entities.deleteEntity(id);
             }
         });
         if (Date.now() < deadline) {
             this.searchTimer = Script.setTimeout(() => this.findChildren(deadline), CHILD_POLL_MS);
-        } else if (this.statusID === null) {
-            this.statusID = Entities.addEntity({
-                type: "Text",
-                name: STATUS_NAME,
-                parentID: this.entityID,
-                localPosition: { x: 0, y: this.dimensions.y / 2 + STATUS_GAP + STATUS_SIZE.y / 2, z: 0 },
-                dimensions: STATUS_SIZE,
-                font: "Inconsolata",
-                lineHeight: STATUS_LINE_HEIGHT,
-                textColor: { red: 240, green: 240, blue: 240 },
-                backgroundColor: { red: 20, green: 24, blue: 32 },
-                backgroundAlpha: 0.85,
-                unlit: true,
-                billboardMode: "yaw",
-                collisionless: true,
-                grab: { grabbable: false }
+        } else {
+            FIXED_NAMES.forEach(name => {
+                if (!this.fixed.has(name)) {
+                    this.fixed.set(name, Entities.addEntity(this.fixedProperties(name)));
+                }
             });
         }
         this.draw();
+    }
+
+    /**
+     * @param {string} name one of FIXED_NAMES
+     * @returns {Entities.EntityProperties} the child to create
+     */
+    fixedProperties(name) {
+        const { x: width, y: height, z: depth } = this.dimensions;
+        const pitch = width / COLUMNS;
+        const slotHeight = SLOT_HEIGHT * pitch;
+        const column = COLUMN_NAMES.indexOf(name);
+        const seat = SEAT_NAMES.indexOf(name);
+        // Humans click these: each runs the client script, which knows its role by its name
+        const clickable = {
+            name,
+            parentID: this.entityID,
+            script: CLIENT_URL,
+            collisionless: true,
+            grab: { grabbable: false, triggerable: true }
+        };
+        if (column >= 0) {
+            return {
+                ...clickable,
+                type: "Box",
+                localPosition: { x: (column - (COLUMNS - 1) / 2) * pitch, y: height / 2 + SLOT_GAP + slotHeight / 2, z: 0 },
+                dimensions: { x: SLOT_FILL * pitch, y: slotHeight, z: depth },
+                color: { red: 200, green: 200, blue: 210 },
+                alpha: 0.6
+            };
+        }
+        if (seat >= 0) {
+            return {
+                ...clickable,
+                type: "Text",
+                localPosition: {
+                    x: (seat === 0 ? -1 : 1) * (width / 2 + SEAT_GAP + SEAT_SIZE.x / 2),
+                    y: SEAT_SIZE.y / 2 - height / 2,
+                    z: 0
+                },
+                dimensions: SEAT_SIZE,
+                lineHeight: SEAT_LINE_HEIGHT,
+                textColor: { red: 240, green: 240, blue: 240 },
+                backgroundAlpha: 1,
+                unlit: true,
+                ...SEAT_LOOK[seat]
+            };
+        }
+        return {
+            type: "Text",
+            name: STATUS_NAME,
+            parentID: this.entityID,
+            localPosition: {
+                x: 0,
+                y: height / 2 + SLOT_GAP + slotHeight + STATUS_GAP + STATUS_SIZE.y / 2,
+                z: 0
+            },
+            dimensions: STATUS_SIZE,
+            font: "Inconsolata",
+            lineHeight: STATUS_LINE_HEIGHT,
+            textColor: { red: 240, green: 240, blue: 240 },
+            backgroundColor: { red: 20, green: 24, blue: 32 },
+            backgroundAlpha: 0.85,
+            unlit: true,
+            billboardMode: "yaw",
+            collisionless: true,
+            grab: { grabbable: false }
+        };
     }
 
     /** Brings the Text child and the disc entities in line with the latest view. */
