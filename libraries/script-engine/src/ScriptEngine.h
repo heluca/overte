@@ -65,7 +65,8 @@ struct ScriptModuleRequest {
     QUrl sandboxURL;
     /// Module map generation; records are shared within one epoch only
     int epoch { 0 };
-    /// Bypass ScriptCache for every module of the graph, not only the entry
+    /// Bypass ScriptCache for every module of the graph, not only the entry. In an epoch other than 0, also for every
+    /// later load and import() under the epoch: each module is fetched once per epoch, and all of them as freshly.
     bool forceDownload { false };
     /// Environment the graph is evaluated in, and that its URLs are recorded in; null for a new one made from
     /// sandboxURL and epoch, with no entity
@@ -87,6 +88,8 @@ public:
     size_t usedGlobalHandlesSize;
     // Promises made by newPromise() whose resolver has neither settled nor been released yet
     size_t pendingPromiseResolvers;
+    // ES module records in the engine's module map, across all epochs
+    size_t moduleRecords;
 #ifdef OVERTE_V8_MEMORY_DEBUG
     size_t scriptValueCount;
     size_t scriptValueProxyCount;
@@ -412,6 +415,15 @@ public:
      * Must be called on the script thread. The resolver can be kept and used from any thread, see ScriptPromiseResolver.
      */
     virtual ScriptPromise newPromise() = 0;
+
+    /**
+     * @brief Calls the function as ScriptValue::call does. If it returns a promise that rejects later, onRejected is
+     * called with the reason (its stack, if it has one) and where it was thrown when known, and the rejection is not
+     * reported as unhandled. Script thread only.
+     */
+    virtual ScriptValue callReportingRejection(const ScriptValue& function, const ScriptValue& thisObject,
+        const ScriptValueList& args,
+        std::function<void(const QString& reason, const QString& fileName, int lineNumber)> onRejected) = 0;
     virtual ScriptProgramPointer newProgram(const QString& sourceCode, const QString& fileName) = 0;
     virtual ScriptValue newQObject(QObject *object, ValueOwnership ownership = QtOwnership, const QObjectWrapOptions &options = QObjectWrapOptions()) = 0;
     virtual ScriptValue newValue(bool value) = 0;
@@ -509,6 +521,20 @@ public:
      * Reports nothing if every module evaluation has settled.
      */
     virtual void reportStalledTopLevelAwaits() = 0;
+
+    /**
+     * @brief A new module map generation, see ScriptModuleRequest::epoch. Graphs loaded under it share no module with
+     * graphs loaded under other epochs.
+     */
+    virtual int newModuleEpoch() = 0;
+
+    /**
+     * @brief Drops an epoch's modules from the module map, once no code that uses them is still loaded.
+     * Reports any of them still suspended in a top-level await, abandons the epoch's loads in flight, and removes the
+     * Script.require.cache entries its CommonJS imports made. JavaScript objects that still reference the modules keep
+     * them alive, but nothing loads them again.
+     */
+    virtual void releaseModuleEpoch(int epoch) = 0;
 
     /**
      * @brief Queues a function on the engine's microtask queue, as the JavaScript <code>queueMicrotask</code> does.

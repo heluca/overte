@@ -1704,6 +1704,7 @@ ScriptEngineMemoryStatistics ScriptEngineV8::getMemoryUsageStatistics() {
     statistics.totalGlobalHandlesSize = heapStatistics.total_global_handles_size();
     statistics.usedGlobalHandlesSize = heapStatistics.used_global_handles_size();
     statistics.pendingPromiseResolvers = _promiseBridge->resolverCount();
+    statistics.moduleRecords = _modules->size();
 #ifdef OVERTE_V8_MEMORY_DEBUG
     statistics.scriptValueCount = scriptValueCount;
     statistics.scriptValueProxyCount = scriptValueProxyCount;

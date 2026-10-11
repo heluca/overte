@@ -162,3 +162,73 @@ void ScriptPromiseResolverV8::reject(const QString& message) {
         return v8::Exception::Error(v8::String::NewFromUtf8(isolate, message.toStdString().c_str()).ToLocalChecked());
     });
 }
+
+ScriptValue ScriptEngineV8::callReportingRejection(const ScriptValue& function, const ScriptValue& thisObject,
+                                                   const ScriptValueList& args, RejectionHandler onRejected) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    // One scope around the call and the handler: the call's own checkpoint would otherwise report a promise rejected
+    // before its first await as unhandled before the handler is attached
+    MicrotaskCheckpointScopeV8 microtaskCheckpointScope(this);
+    ScriptValue result = function.call(thisObject, args);
+    v8::HandleScope handleScope(_v8Isolate);
+    v8::Local<v8::Context> context = getContext();
+    v8::Context::Scope contextScope(context);
+    v8::Local<v8::Value> value = ScriptValueV8Wrapper::fullUnwrap(this, result).get();
+    if (!value->IsPromise()) {
+        return result;
+    }
+    quint64 id = ++_lastRejectionHandler;
+    v8::Local<v8::Value> data = v8::Number::New(_v8Isolate, static_cast<double>(id));
+    v8::Local<v8::Function> fulfilled;
+    v8::Local<v8::Function> rejected;
+    if (v8::Function::New(context, rejectionHandlerFulfilled, data).ToLocal(&fulfilled)
+        && v8::Function::New(context, rejectionHandlerRejected, data).ToLocal(&rejected)) {
+        _rejectionHandlers.emplace(id, std::move(onRejected));
+        auto reactions = value.As<v8::Promise>()->Then(context, fulfilled, rejected);
+        Q_UNUSED(reactions);
+    }
+    return result;
+}
+
+void ScriptEngineV8::rejectionHandlerFulfilled(const v8::FunctionCallbackInfo<v8::Value>& info) {
+    auto engine = static_cast<ScriptEngineV8*>(info.GetIsolate()->GetData(ENGINE_ISOLATE_DATA_SLOT));
+    engine->_rejectionHandlers.erase(static_cast<quint64>(info.Data().As<v8::Number>()->Value()));
+}
+
+void ScriptEngineV8::rejectionHandlerRejected(const v8::FunctionCallbackInfo<v8::Value>& info) {
+    v8::Isolate* isolate = info.GetIsolate();
+    auto engine = static_cast<ScriptEngineV8*>(isolate->GetData(ENGINE_ISOLATE_DATA_SLOT));
+    auto found = engine->_rejectionHandlers.find(static_cast<quint64>(info.Data().As<v8::Number>()->Value()));
+    if (found == engine->_rejectionHandlers.end()) {
+        return;
+    }
+    RejectionHandler handler = std::move(found->second);
+    engine->_rejectionHandlers.erase(found);
+
+    v8::HandleScope handleScope(isolate);
+    v8::Local<v8::Context> context = isolate->GetCurrentContext();
+    // The reason's own conversions may run script that throws
+    v8::TryCatch tryCatch(isolate);
+    v8::Local<v8::Value> reason = info[0];
+    QString text;
+    QString fileName;
+    int lineNumber = -1;
+    v8::Local<v8::Value> stack;
+    if (reason->IsNativeError()
+        && reason.As<v8::Object>()->Get(context, v8::String::NewFromUtf8Literal(isolate, "stack")).ToLocal(&stack)
+        && stack->IsString()) {
+        text = QString(*v8::String::Utf8Value(isolate, stack));
+        // Only an Error says where it was thrown; for anything else this would be the reaction's own location
+        v8::Local<v8::Message> location = v8::Exception::CreateMessage(isolate, reason);
+        if (!location.IsEmpty() && location->GetScriptResourceName()->IsString()) {
+            fileName = QString(*v8::String::Utf8Value(isolate, location->GetScriptResourceName()));
+            lineNumber = location->GetLineNumber(context).FromMaybe(-1);
+        }
+    } else {
+        v8::Local<v8::String> detail;
+        if (reason->ToDetailString(context).ToLocal(&detail)) {
+            text = QString(*v8::String::Utf8Value(isolate, detail));
+        }
+    }
+    handler(text, fileName, lineNumber);
+}

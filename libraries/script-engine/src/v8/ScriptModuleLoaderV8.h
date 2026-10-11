@@ -85,6 +85,9 @@ public:
     /// "url:line", or the URL alone without a line
     static QString siteText(const QString& url, int line);
 
+    /// For ScriptEngineV8::releaseModuleEpoch: abandons the epoch's loaders and drops its records
+    static void releaseEpoch(ScriptEngineV8* engine, int epoch);
+
 private:
     /// Where a module is imported, for error messages: an empty importer is the entry of a ScriptEngine::loadModule
     struct ImportSite {
@@ -136,6 +139,8 @@ private:
     void finish(const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error);
     /// True, and the loader is done without calling back, if the script is stopping
     bool abandonIfStopping();
+    /// The loader is done: it neither reports nor calls back
+    void abandon();
 
     ScriptEngineV8* _engine;
     ScriptModuleRequest _request;

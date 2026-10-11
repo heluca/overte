@@ -52,3 +52,13 @@ std::vector<ScriptModuleRecordV8Pointer> ScriptModuleMapV8::records() const {
     }
     return records;
 }
+
+std::vector<ScriptModuleRecordV8Pointer> ScriptModuleMapV8::releaseEpoch(int epoch) {
+    std::vector<ScriptModuleRecordV8Pointer> released;
+    for (auto it = _records.lower_bound(Key(epoch, QString())); it != _records.end() && it->first.first == epoch;) {
+        released.push_back(it->second);
+        it = _records.erase(it);
+    }
+    std::erase_if(_byIdentityHash, [epoch](const auto& entry) { return entry.second->epoch == epoch; });
+    return released;
+}

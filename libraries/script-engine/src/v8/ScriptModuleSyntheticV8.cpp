@@ -140,10 +140,10 @@ v8::MaybeLocal<v8::Value> ScriptModuleLoaderV8::evaluateCommonJs(ScriptEngineV8*
 
     ScriptValue jsRequire = engine->globalObject().property("Script").property("require");
     ScriptValue cache = jsRequire.property("cache");
-    // Slice 5 (#11): the epoch reload must also clear this entry, or the reloaded graph gets the old exports
     ScriptValue module = cache.property(modulePath);
-    // The test Script.require makes for a cached module
-    if (!module.property("exports").isObject()) {
+    // The test Script.require makes for a cached module. A reload's epoch evaluates the file it fetched anew instead,
+    // replacing the entry for every later Script.require too.
+    if (record.forceDownload || !module.property("exports").isObject()) {
         module = manager->newModule(modulePath);
         // Before evaluation, as in Script.require, so that a cyclic require() finds it
         cache.setProperty(modulePath, module);
@@ -158,6 +158,7 @@ v8::MaybeLocal<v8::Value> ScriptModuleLoaderV8::evaluateCommonJs(ScriptEngineV8*
             throwCommonJsFailure(engine, record, failure);
             return v8::MaybeLocal<v8::Value>();
         }
+        record.commonJsModule.Reset(isolate, ScriptValueV8Wrapper::fullUnwrap(engine, module).get());
         module.setProperty("loaded", true, ScriptValue::ReadOnly | ScriptValue::Undeletable);
         // Script.require's reference point for telling a deleted cache key from one never set
         jsRequire.data().setProperty(modulePath, module);

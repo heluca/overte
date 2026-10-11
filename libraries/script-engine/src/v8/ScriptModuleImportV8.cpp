@@ -9,14 +9,12 @@
 //  SPDX-License-Identifier: Apache-2.0
 //
 
-// Import resolution, dynamic import(), the stalled top-level await report, and deferring module evaluation out of
-// nested event loops
+// Import resolution, dynamic import(), and deferring module evaluation out of nested event loops
 
 #include "ScriptModuleLoaderV8.h"
 
 #include <utility>
 
-#include <QtCore/QStringList>
 #include <QtCore/QThread>
 
 #include "../ScriptEnvironment.h"
@@ -125,62 +123,12 @@ v8::MaybeLocal<v8::Promise> ScriptModuleLoaderV8::importModuleDynamically(v8::Lo
     } else {
         // The start is queued so that nothing is evaluated inside this callback, even when the whole graph is loaded
         // already.
-        auto loader = new ScriptModuleLoaderV8(engine, { url, QString(), sandboxURL, environment->epoch, false, environment },
-                                               promise.resolver, site);
+        ScriptModuleRequest request { url, QString(), sandboxURL, environment->epoch, false, environment };
+        engine->applyModuleEpochDownload(request);
+        auto loader = new ScriptModuleLoaderV8(engine, request, promise.resolver, site);
         QMetaObject::invokeMethod(loader, "start", Qt::QueuedConnection);
     }
     return ScriptValueV8Wrapper::fullUnwrap(engine, promise.promise).get().As<v8::Promise>();
-}
-
-void ScriptEngineV8::reportStalledTopLevelAwaits() {
-    Q_ASSERT(QThread::currentThread() == thread());
-    auto scopeGuard = getScopeGuard();
-    v8::HandleScope handleScope(_v8Isolate);
-    v8::Local<v8::Context> context = _contexts.first()->toV8Value();
-    v8::Context::Scope contextScope(context);
-
-    // Every evaluated graph is searched, not only the entry's: import() starts graphs of its own
-    QStringList sites;
-    QString fileName;
-    int line = -1;
-    for (const auto& record : _modules->records()) {
-        if (record->state != ScriptModuleRecordV8::State::Compiled) {
-            continue;
-        }
-        v8::Local<v8::Module> module = record->module.Get(_v8Isolate);
-        // The search walks the requested modules, which are only filled in once the graph is instantiated
-        v8::Module::Status status = module->GetStatus();
-        if (!module->IsSourceTextModule() || (status != v8::Module::kEvaluating && status != v8::Module::kEvaluated)
-            || !module->IsGraphAsync()) {
-            continue;
-        }
-        auto stalled = module->GetStalledTopLevelAwaitMessages(_v8Isolate);
-        for (size_t i = 0; i < stalled.second.size(); i++) {
-            v8::Local<v8::Message> message = stalled.second[i];
-            QString stalledFileName = ScriptModuleLoaderV8::toQString(_v8Isolate, message->GetScriptResourceName());
-            int stalledLine = message->GetLineNumber(context).FromMaybe(-1);
-            QString site = ScriptModuleLoaderV8::siteText(stalledFileName, stalledLine);
-            if (sites.contains(site)) {
-                continue;
-            }
-            if (sites.isEmpty()) {
-                fileName = stalledFileName;
-                line = stalledLine;
-            }
-            sites.append(site);
-        }
-    }
-    if (sites.isEmpty()) {
-        return;
-    }
-
-    // A warning: stopping mid-await (a reload, or a user stop during an await on the network) is routine
-    QString message = "Script stopped while a top-level await was still pending at " + sites.join(", ");
-    if (_manager) {
-        _manager->scriptWarningMessage(message, fileName, line);
-    } else {
-        qCWarning(scriptengine_v8) << message;
-    }
 }
 
 void ScriptEngineV8::deferUntilScriptReturns(std::function<void()> task) {
