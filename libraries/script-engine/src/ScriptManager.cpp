@@ -2168,7 +2168,7 @@ void ScriptManager::loadEntityScript(const EntityItemID& entityID, const QString
     if (isStopping() || !scriptEngines || scriptEngines->isStopped()) {
         qCDebug(scriptengine) << "loadEntityScript.start " << entityID.toString()
                                      << " but isStopping==" << isStopping()
-                                     << " || engines->isStopped==" << scriptEngines->isStopped();
+                                     << " || engines->isStopped==" << (scriptEngines && scriptEngines->isStopped());
         return;
     }
 
