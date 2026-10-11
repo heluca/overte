@@ -18,10 +18,12 @@
 #ifndef hifi_ScriptEngine_h
 #define hifi_ScriptEngine_h
 
+#include <functional>
 #include <memory>
 
 #include <QtCore/QFlags>
 #include <QtCore/QObject>
+#include <QtCore/QUrl>
 
 #include "ScriptValue.h"
 #include "ScriptException.h"
@@ -36,9 +38,11 @@ class QThread;
 class QVariant;
 class ScriptContext;
 class ScriptEngine;
+class ScriptEnvironment;
 class ScriptManager;
 class ScriptProgram;
 using ScriptEnginePointer = std::shared_ptr<ScriptEngine>;
+using ScriptEnvironmentPointer = std::shared_ptr<ScriptEnvironment>;
 using ScriptProgramPointer = std::shared_ptr<ScriptProgram>;
 
 Q_DECLARE_METATYPE(ScriptEnginePointer);
@@ -51,6 +55,30 @@ scriptValueFromValue(ScriptEngine* engine, const T& t);
 template <typename T>
 inline T scriptvalue_cast(const ScriptValue& value);
 
+/// What ScriptEngine::loadModule loads: an ES module and its static import graph.
+struct ScriptModuleRequest {
+    /// Resolved URL of the entry module: its module map key and its import.meta.url
+    QUrl url;
+    /// The entry's source when the caller has fetched it already; null to fetch it
+    QString source;
+    /// Top-level URL of the script; imports of local files outside its directory are refused unless it is local
+    QUrl sandboxURL;
+    /// Module map generation; records are shared within one epoch only
+    int epoch { 0 };
+    /// Bypass ScriptCache for every module of the graph, not only the entry. In an epoch other than 0, also for every
+    /// later load and import() under the epoch: each module is fetched once per epoch, and all of them as freshly.
+    bool forceDownload { false };
+    /// Environment the graph is evaluated in, and that its URLs are recorded in; null for a new one made from
+    /// sandboxURL and epoch, with no entity
+    ScriptEnvironmentPointer environment;
+};
+
+/// Called once per ScriptEngine::loadModule, on the engine's thread, when the graph's evaluation has settled: after
+/// any top-level await. If the script stops first it is not called and nothing more is reported. On failure the
+/// error has already been reported to the script manager: a ScriptEngineException means the graph did not load or
+/// link and no module body ran, a ScriptRuntimeException means a module body threw or its top-level await rejected.
+using ScriptModuleCallback = std::function<void(const ScriptValue& moduleNamespace, std::shared_ptr<ScriptException> error)>;
+
 class ScriptEngineMemoryStatistics {
 public:
     size_t totalHeapSize;
@@ -58,12 +86,59 @@ public:
     size_t totalAvailableSize;
     size_t totalGlobalHandlesSize;
     size_t usedGlobalHandlesSize;
+    // Promises made by newPromise() whose resolver has neither settled nor been released yet
+    size_t pendingPromiseResolvers;
+    // ES module records in the engine's module map, across all epochs
+    size_t moduleRecords;
 #ifdef OVERTE_V8_MEMORY_DEBUG
     size_t scriptValueCount;
     size_t scriptValueProxyCount;
     size_t qObjectCount;
     //size_t qVariantProxyCount;
 #endif
+};
+
+/**
+ * @brief Settles a promise made by ScriptEngine::newPromise()
+ *
+ * Every method may be called from any thread. On the script thread the promise is settled at once; from any other
+ * thread the settlement is queued to the script thread. Either way, promise reactions run in the microtask checkpoint
+ * that follows the settlement.
+ *
+ * Only the first settlement counts, later ones do nothing. A settlement arriving once the script has stopped, or after
+ * the engine was destroyed, does nothing. Dropping the last reference to an unsettled resolver leaves the promise
+ * pending forever.
+ *
+ * The ScriptValue overloads follow the usual ScriptValue rules: a ScriptValue may only be copied or destroyed on a thread
+ * that holds the engine. Off the script thread, use the QVariant and QString overloads, with a QVariant that does not
+ * itself wrap a ScriptValue: resolving with one copies that ScriptValue on the calling thread.
+ */
+class ScriptPromiseResolver {
+public:
+    virtual ~ScriptPromiseResolver() = default;
+
+    virtual void resolve(const ScriptValue& value) = 0;
+
+    /**
+     * @brief Resolves with a value converted from a variant on the script thread
+     */
+    virtual void resolve(const QVariant& value) = 0;
+
+    virtual void reject(const ScriptValue& reason) = 0;
+
+    /**
+     * @brief Rejects with a new <code>Error</code> carrying the message, made on the script thread
+     */
+    virtual void reject(const QString& message) = 0;
+};
+using ScriptPromiseResolverPointer = std::shared_ptr<ScriptPromiseResolver>;
+
+/**
+ * @brief A native JavaScript Promise and the resolver that settles it, see ScriptEngine::newPromise()
+ */
+struct ScriptPromise {
+    ScriptValue promise;
+    ScriptPromiseResolverPointer resolver;
 };
 
 /**
@@ -333,6 +408,30 @@ public:
         return ScriptValue();
     }
     virtual ScriptValue newObject() = 0;
+
+    /**
+     * @brief Makes a native JavaScript Promise that C++ settles later through the returned resolver
+     *
+     * Must be called on the script thread. The resolver can be kept and used from any thread, see ScriptPromiseResolver.
+     */
+    virtual ScriptPromise newPromise() = 0;
+
+    /**
+     * @brief Calls the function as ScriptValue::call does. If it returns a promise that rejects later, onRejected is
+     * called with the reason (its stack, if it has one) and where it was thrown when known, and the rejection is not
+     * reported as unhandled. Script thread only.
+     */
+    virtual ScriptValue callReportingRejection(const ScriptValue& function, const ScriptValue& thisObject,
+        const ScriptValueList& args,
+        std::function<void(const QString& reason, const QString& fileName, int lineNumber)> onRejected) = 0;
+
+    /**
+     * @brief Calls the function as a constructor with no arguments. If it throws, returns undefined and sets thrown to
+     * what it threw, with its stack, and thrownFileName to the file it was thrown in, instead of reporting it. Script
+     * thread only.
+     */
+    virtual ScriptValue constructCatching(const ScriptValue& constructor, std::shared_ptr<ScriptException>* thrown,
+                                          QString* thrownFileName) = 0;
     virtual ScriptProgramPointer newProgram(const QString& sourceCode, const QString& fileName) = 0;
     virtual ScriptValue newQObject(QObject *object, ValueOwnership ownership = QtOwnership, const QObjectWrapOptions &options = QObjectWrapOptions()) = 0;
     virtual ScriptValue newValue(bool value) = 0;
@@ -413,6 +512,58 @@ public:
     virtual void processEvents() = 0;
 
     /**
+     * @brief Runs queued microtasks (promise reactions) and reports promises still rejected without a handler.
+     * Does nothing while script code is on the stack; the outermost call into the engine performs the checkpoint itself.
+     */
+    virtual void performMicrotaskCheckpoint() = 0;
+
+    /**
+     * @brief Loads an ES module graph and evaluates it in the engine's main context.
+     * Every module is fetched through ScriptCache without blocking the calling thread; linking and evaluation run
+     * from the engine thread's event loop once the whole static graph is compiled, never inside this call.
+     */
+    virtual void loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) = 0;
+
+    /**
+     * @brief Reports, as one error, the ES modules still suspended in a top-level await; for a script that is stopping.
+     * Reports nothing if every module evaluation has settled.
+     */
+    virtual void reportStalledTopLevelAwaits() = 0;
+
+    /**
+     * @brief A new module map generation, see ScriptModuleRequest::epoch. Graphs loaded under it share no module with
+     * graphs loaded under other epochs. An epoch for a reload fetches every module anew, also for later import()s, and
+     * evaluates the CommonJS files it imports again rather than taking Script.require.cache's exports.
+     */
+    virtual int newModuleEpoch(bool reload) = 0;
+
+    /**
+     * @brief Drops an epoch's modules from the module map, once no code that uses them is still loaded.
+     * Reports any of them still suspended in a top-level await, abandons the epoch's loads in flight, and removes the
+     * Script.require.cache entries its CommonJS imports made. JavaScript objects that still reference the modules keep
+     * them alive, but nothing loads them again.
+     */
+    virtual void releaseModuleEpoch(int epoch) = 0;
+
+    /**
+     * @brief Queues a function on the engine's microtask queue, as the JavaScript <code>queueMicrotask</code> does.
+     * An exception thrown by the function is reported to the script manager rather than propagated.
+     */
+    virtual void queueMicrotask(const ScriptValue& callback) = 0;
+
+    /**
+     * @brief The environment of the ES module code that is running, see ScriptEnvironment; in classic script code a
+     * classic one (ScriptEnvironment::classic) for an entity or sandbox, else null. Promise continuations run in the
+     * environment that was current where they were created (<code>then</code>, <code>await</code>).
+     */
+    virtual ScriptEnvironmentPointer currentEnvironment() = 0;
+
+    /**
+     * @brief Makes an environment current, or none for null, and returns the one that was. See ScriptEnvironmentScope.
+     */
+    virtual ScriptEnvironmentPointer swapCurrentEnvironment(const ScriptEnvironmentPointer& environment) = 0;
+
+    /**
      * @brief Test the underlying scripting engine
      *
      * This compiles, executes and verifies the execution of a trivial test program
@@ -486,7 +637,10 @@ public: // not for public use, but I don't like how Qt strings this along with p
     virtual ScriptValue create(int type, const void* ptr) = 0;
     virtual QVariant convert(const ScriptValue& value, int type) = 0;
     virtual void registerCustomType(int type, MarshalFunction mf, DemarshalFunction df) = 0;
-    virtual QStringList getCurrentScriptURLs() const = 0;
+    /// Names the scripts on the stack were compiled with (not sourceURL directives), innermost first; empty for a
+    /// frame without one. Empty when native code was called with no script frame on the stack. Frames of other contexts
+    /// (Script.require modules run in contexts of their own) are hidden by V8 unless includeOtherContexts is set.
+    virtual QStringList getCurrentScriptURLs(bool includeOtherContexts = false) const = 0;
     virtual void perManagerLoopIterationCleanup() = 0;
 
 signals:

@@ -20,6 +20,7 @@
 #include <QObject>
 #include <QWebSocket>
 
+#include "ScriptEngine.h"
 #include "ScriptValue.h"
 
 class ScriptContext;
@@ -172,16 +173,16 @@ public:
         }
     }
 
-    void setOnClose(const ScriptValue& eventFunction) { _onCloseEvent = eventFunction; }
+    void setOnClose(const ScriptValue& eventFunction);
     ScriptValue getOnClose() { return _onCloseEvent; }
 
-    void setOnError(const ScriptValue& eventFunction) { _onErrorEvent = eventFunction; }
+    void setOnError(const ScriptValue& eventFunction);
     ScriptValue getOnError() { return _onErrorEvent; }
 
-    void setOnMessage(const ScriptValue& eventFunction) { _onMessageEvent = eventFunction; }
+    void setOnMessage(const ScriptValue& eventFunction);
     ScriptValue getOnMessage() { return _onMessageEvent; }
 
-    void setOnOpen(const ScriptValue& eventFunction) { _onOpenEvent = eventFunction; }
+    void setOnOpen(const ScriptValue& eventFunction);
     ScriptValue getOnOpen() { return _onOpenEvent; }
 
 public slots:
@@ -235,6 +236,11 @@ private:
     ScriptValue _onErrorEvent;
     ScriptValue _onMessageEvent;
     ScriptValue _onOpenEvent;
+    // The script environment each handler was assigned in, which it runs in, as a timer runs in the one it was set in
+    ScriptEnvironmentPointer _onCloseEnvironment;
+    ScriptEnvironmentPointer _onErrorEnvironment;
+    ScriptEnvironmentPointer _onMessageEnvironment;
+    ScriptEnvironmentPointer _onOpenEnvironment;
 
     QString _binaryType;
 

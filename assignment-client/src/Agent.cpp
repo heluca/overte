@@ -27,6 +27,7 @@
 #include <AudioInjectorManager.h>
 #include <AssetClient.h>
 #include <DebugDraw.h>
+#include <EntityScriptClient.h>
 #include <EntityScriptingInterface.h>
 #include <LocationScriptingInterface.h>
 #include <AudioScriptingInterface.h>
@@ -54,7 +55,6 @@
 #include <plugins/CodecPlugin.h>
 #include <plugins/PluginManager.h>
 
-#include <WebSocketServerClass.h>
 #include <EntityScriptingInterface.h> // TODO: consider moving to scriptengine.h
 
 #include <hfm/ModelFormatRegistry.h>
@@ -81,6 +81,7 @@ Agent::Agent(ReceivedMessage& message) :
     DependencyManager::set<AnimationCache>();
     DependencyManager::set<AnimationCacheScriptingInterface>();
     DependencyManager::set<EntityScriptingInterface>(false);
+    DependencyManager::set<EntityScriptClient>();
 
     DependencyManager::set<ResourceScriptingInterface>();
     DependencyManager::set<UserActivityLoggerScriptingInterface>();
@@ -510,11 +511,6 @@ void Agent::executeScript() {
         scriptEngine->registerGlobalObject(sgp, "AnimationCache", DependencyManager::get<AnimationCacheScriptingInterface>().data());
         scriptEngine->registerGlobalObject(sgp, "SoundCache", DependencyManager::get<SoundCacheScriptingInterface>().data());
 
-        {
-            ScriptValue webSocketServerConstructorValue = scriptEngine->newFunction(WebSocketServerClass::constructor);
-            scriptEngine->globalObject().setProperty("WebSocketServer", webSocketServerConstructorValue);
-        }
-
         auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
 
         scriptEngine->registerGlobalObject(sgp, "EntityViewer", &_entityViewer);
@@ -866,6 +862,7 @@ void Agent::aboutToFinish() {
     DependencyManager::destroy<RecordingScriptingInterface>();
     DependencyManager::destroy<AnimationCacheScriptingInterface>();
     DependencyManager::destroy<EntityScriptingInterface>();
+    DependencyManager::destroy<EntityScriptClient>();
     DependencyManager::destroy<ResourceScriptingInterface>();
     DependencyManager::destroy<UserActivityLoggerScriptingInterface>();
 

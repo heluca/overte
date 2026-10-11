@@ -33,7 +33,6 @@
 #include <ScriptEngines.h>
 #include <SoundCacheScriptingInterface.h>
 #include <UUID.h>
-#include <WebSocketServerClass.h>
 
 #include <EntityScriptClient.h> // for EntityScriptServerServices
 
@@ -141,11 +140,12 @@ void EntityScriptServer::handleEntityScriptGetStatusPacket(QSharedPointer<Receiv
             return;
         }
 
-        EntityScriptDetails details;
-        if (_entitiesScriptManager->getEntityScriptDetails(entityID, entity->getServerScripts(), details)) {
+        EntityScriptStatus status { EntityScriptStatus::PENDING };
+        QString errorInfo;
+        if (_entitiesScriptManager->getEntityScriptStatus(entityID, entity->getServerScripts(), status, errorInfo)) {
             replyPacketList->writePrimitive(true);
-            replyPacketList->writePrimitive(details.status);
-            replyPacketList->writeString(details.errorInfo);
+            replyPacketList->writePrimitive(status);
+            replyPacketList->writeString(errorInfo);
         } else {
             replyPacketList->writePrimitive(false);
         }
@@ -478,11 +478,6 @@ void EntityScriptServer::resetEntitiesScriptEngine() {
 
     {
         auto guard = newEngine->getScopeGuard();
-        {
-            auto webSocketServerConstructorValue = newEngine->newFunction(WebSocketServerClass::constructor);
-            newEngine->globalObject().setProperty("WebSocketServer", webSocketServerConstructorValue);
-        }
-
         newEngine->registerGlobalObject(guard.get(), "SoundCache", DependencyManager::get<SoundCacheScriptingInterface>().data());
         newEngine->registerGlobalObject(guard.get(), "AvatarList", DependencyManager::get<AvatarHashMap>().data());
 
@@ -610,8 +605,8 @@ void EntityScriptServer::checkAndCallPreload(const EntityItemID& entityID, const
             return;
         }
 
-        EntityScriptDetails details;
-        bool isRunning = _entitiesScriptManager->getEntityScriptDetails(entityID, oldScriptURL, details);
+        // Not getEntityScriptDetails(): copying the details copies the script object, which only the script thread may do
+        bool isRunning = _entitiesScriptManager->hasEntityScriptDetails(entityID, oldScriptURL);
         bool reload = oldScriptURL == newScriptURL;
 
         // TODO: Check if this is running on script engine thread, otherwise lambda capturing script engine pointer is needed

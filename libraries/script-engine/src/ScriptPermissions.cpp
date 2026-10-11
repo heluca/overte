@@ -15,6 +15,7 @@
 #include <QJsonArray>
 
 #include "ScriptEngine.h"
+#include "ScriptEnvironment.h"
 #include "ScriptManager.h"
 #include "Scriptable.h"
 
@@ -56,60 +57,8 @@ extern const std::array<bool, static_cast<int>(ScriptPermissions::Permission::SC
     true,
 };
 
-bool ScriptPermissions::isCurrentScriptAllowed(ScriptPermissions::Permission permission) {
-    if (permission >= ScriptPermissions::Permission::SCRIPT_PERMISSIONS_SIZE) {
-        return false;
-    }
-    int permissionIndex = static_cast<int>(permission);
-    // Check if the permission checking is active
-    Setting::Handle<bool> isCheckingEnabled(scriptPermissionSettingEnableKeyNames[permissionIndex], scriptPermissionSettingEnableDefaultValues[permissionIndex]);
-    if (!isCheckingEnabled.get()) {
-        return true;
-    }
-    // Get the script manager:
-    auto engine = Scriptable::engine();
-    if (!engine) {
-        // When this happens it means that function was called from QML or C++ and should always be allowed
-        if (PERMISSIONS_DEBUG_ENABLED) {
-            qDebug() << "ScriptPermissions::isCurrentScriptAllowed called outside script engine for permission: "
-                     << scriptPermissionNames[permissionIndex];
-        }
-        return true;
-    }
-    auto manager = engine->manager();
-    if (!manager) {
-        qDebug() << "ScriptPermissions::isCurrentScriptAllowed called from script engine with no script manager for permission: " << scriptPermissionNames[permissionIndex];
-        return false;
-    }
-    std::vector<QString> urlsToCheck;
-    QString scriptURL = manager->getAbsoluteFilename();
-
-    // If this is an entity script manager, we need to find the file name of the current script instead
-    if (!scriptURL.startsWith("about:Entities")) {
-        urlsToCheck.push_back(scriptURL);
-    }
-
-    auto currentURL = Scriptable::context()->currentFileName();
-    if (!currentURL.isEmpty() && currentURL != scriptURL) {
-        urlsToCheck.push_back(currentURL);
-    }
-
-    if (PERMISSIONS_DEBUG_ENABLED) {
-        qDebug() << "ScriptPermissions::isCurrentScriptAllowed: filename: " << scriptURL;
-    }
-    auto parentContext = Scriptable::context()->parentContext();
-    while (parentContext) {
-        QString parentFilename = parentContext->currentFileName();
-        if (!parentFilename.isEmpty()) {
-            urlsToCheck.push_back(parentContext->currentFileName());
-            if (PERMISSIONS_DEBUG_ENABLED) {
-                qDebug() << "ScriptPermissions::isCurrentScriptAllowed: parent filename: " << parentContext->currentFileName();
-            }
-        }
-        parentContext = parentContext->parentContext();
-    }
-
-    // Check if the script is allowed:
+// True if every URL starts with a safe prefix: the built-in ones or the user's allowlist for the permission
+static bool areURLsAllowed(int permissionIndex, const std::vector<QString>& urlsToCheck) {
     QList<QString> safeURLPrefixes = { "file:///", "qrc:/", NetworkingConstants::OVERTE_COMMUNITY_APPLICATIONS,
                                        NetworkingConstants::OVERTE_TUTORIAL_SCRIPTS, "about:console"};
     Setting::Handle<QString> allowedURLsSetting(scriptPermissionSettingKeyNames[permissionIndex]);
@@ -141,4 +90,89 @@ bool ScriptPermissions::isCurrentScriptAllowed(ScriptPermissions::Permission per
     }
 
     return true;
+}
+
+// ES module code: an environment is only as trusted as every URL it loaded, whatever frames an await has left on the
+// stack. Design question Q3 of #10 would bring classic scripts here too; their classic environments do not.
+static bool isEnvironmentAllowed(int permissionIndex, ScriptEngine* engine, const ScriptEnvironment& environment,
+                                 const QString& scriptURL) {
+    // Frames of Script.require modules too, which run in contexts of their own
+    QStringList stack = engine->getCurrentScriptURLs(true);
+    if (stack.isEmpty()) {
+        // A native function called with no script frame, e.g. passed straight to then() or Script.setTimeout(): the
+        // environment says whose continuation it is, but not which of its URLs chose the function, so fail closed
+        if (PERMISSIONS_DEBUG_ENABLED) {
+            qDebug() << "ScriptPermissions::isCurrentScriptAllowed: " << scriptPermissionNames[permissionIndex]
+                     << " rejected for a native call without script frames in module environment " << environment.sandboxURL;
+        }
+        return false;
+    }
+
+    std::vector<QString> urlsToCheck;
+    if (!scriptURL.startsWith("about:Entities")) {
+        urlsToCheck.push_back(scriptURL);
+    }
+    for (const QString& url : environment.loadedURLs()) {
+        urlsToCheck.push_back(url);
+    }
+    // A frame without a name is checked as the empty string, which no prefix allows
+    for (const QString& url : stack) {
+        urlsToCheck.push_back(url);
+    }
+    return areURLsAllowed(permissionIndex, urlsToCheck);
+}
+
+bool ScriptPermissions::isCurrentScriptAllowed(ScriptPermissions::Permission permission) {
+    if (permission >= ScriptPermissions::Permission::SCRIPT_PERMISSIONS_SIZE) {
+        return false;
+    }
+    int permissionIndex = static_cast<int>(permission);
+    // Check if the permission checking is active
+    Setting::Handle<bool> isCheckingEnabled(scriptPermissionSettingEnableKeyNames[permissionIndex], scriptPermissionSettingEnableDefaultValues[permissionIndex]);
+    if (!isCheckingEnabled.get()) {
+        return true;
+    }
+    // Get the script manager:
+    auto engine = Scriptable::engine();
+    if (!engine) {
+        // When this happens it means that function was called from QML or C++ and should always be allowed
+        if (PERMISSIONS_DEBUG_ENABLED) {
+            qDebug() << "ScriptPermissions::isCurrentScriptAllowed called outside script engine for permission: "
+                     << scriptPermissionNames[permissionIndex];
+        }
+        return true;
+    }
+    auto manager = engine->manager();
+    if (!manager) {
+        qDebug() << "ScriptPermissions::isCurrentScriptAllowed called from script engine with no script manager for permission: " << scriptPermissionNames[permissionIndex];
+        return false;
+    }
+    QString scriptURL = manager->getAbsoluteFilename();
+    // A classic environment carries classic code's entity and sandbox only; the frame rule below applies to it
+    auto environment = engine->currentEnvironment();
+    if (environment && !environment->classic) {
+        return isEnvironmentAllowed(permissionIndex, engine.get(), *environment, scriptURL);
+    }
+
+    std::vector<QString> urlsToCheck;
+
+    // If this is an entity script manager, we need to find the file name of the current script instead
+    if (!scriptURL.startsWith("about:Entities")) {
+        urlsToCheck.push_back(scriptURL);
+    }
+
+    // The topmost script frame (every ScriptContext in the chain reports the same one), by the name it was compiled
+    // with: ScriptContext::currentFileName() follows sourceURL directives and is for messages. A frame without a name
+    // is checked as the empty string, which no prefix allows; with no frame at all only the manager URL counts.
+    QStringList frames = engine->getCurrentScriptURLs();
+    if (!frames.isEmpty() && frames.first() != scriptURL) {
+        urlsToCheck.push_back(frames.first());
+    }
+
+    if (PERMISSIONS_DEBUG_ENABLED) {
+        qDebug() << "ScriptPermissions::isCurrentScriptAllowed: filename: " << scriptURL << " topmost frame: " << frames.value(0);
+    }
+
+    // Check if the script is allowed:
+    return areURLsAllowed(permissionIndex, urlsToCheck);
 }
