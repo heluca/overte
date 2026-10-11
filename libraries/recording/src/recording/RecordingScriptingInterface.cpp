@@ -77,6 +77,12 @@ void RecordingScriptingInterface::playClip(NetworkClipLoaderPointer clipLoader, 
     }
 }
 
+static void rejectLoad(const ScriptCompletion& completion, const QString& url) {
+    if (auto engine = completion.engine()) {
+        completion.reject("Failed to load recording: " + url, { engine->newValue(false), engine->newValue(url) });
+    }
+}
+
 ScriptValue RecordingScriptingInterface::loadRecording(const QString& url, const ScriptValue& callback) {
     auto engine = Scriptable::engine();
     if (!engine) {
@@ -96,6 +102,19 @@ ScriptValue RecordingScriptingInterface::loadRecording(const QString& url, const
         playClip(clipLoader, url, completion);
         return completion.takeReturnValue();
     }
+    // The cache keeps a clip that failed to load, and it never signals again
+    if (clipLoader->isFailed()) {
+        qCDebug(scriptengine) << "Recording already failed to load from" << url;
+        rejectLoad(completion, url);
+        return completion.takeReturnValue();
+    }
+
+    auto manager = engine->manager();
+    if (!manager) {
+        qWarning() << "This script does not belong to a ScriptManager";
+        rejectLoad(completion, url);
+        return completion.takeReturnValue();
+    }
 
     Locker lock(_mutex);
 
@@ -103,12 +122,6 @@ ScriptValue RecordingScriptingInterface::loadRecording(const QString& url, const
     _clipLoaders.insert(clipLoader);
 
     auto weakClipLoader = clipLoader.toWeakRef();
-
-    auto manager = engine->manager();
-    if (!manager) {
-        qWarning() << "This script does not belong to a ScriptManager";
-        return completion.takeReturnValue();
-    }
 
     // when clip loaded, call the callback with the URL and success boolean
     connect(clipLoader.data(), &recording::NetworkClipLoader::clipLoaded, manager,
@@ -129,9 +142,7 @@ ScriptValue RecordingScriptingInterface::loadRecording(const QString& url, const
             [this, weakClipLoader, url, completion](QNetworkReply::NetworkError error) {
         qCDebug(scriptengine) << "Failed to load recording from\"" << url << '"';
 
-        if (auto engine = completion.engine()) {
-            completion.reject("Failed to load recording: " + url, { engine->newValue(false), engine->newValue(url) });
-        }
+        rejectLoad(completion, url);
 
         if (auto clipLoader = weakClipLoader.toStrongRef()) {
             // drop out strong pointer to this clip so it is cleaned up
