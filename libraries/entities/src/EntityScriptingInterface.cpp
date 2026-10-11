@@ -1604,9 +1604,9 @@ bool EntityPropertyMetadataRequest::serverScripts(EntityItemID entityID, const S
         return false;
     }
     auto request = client->createScriptStatusRequest(entityID);
+    // This EntityPropertyMetadataRequest lives on the caller's stack and is gone when the reply arrives
     QPointer<ScriptManager> manager = _scriptManager;
-    QObject::connect(request, &GetScriptStatusRequest::finished, _scriptManager, [=, this](GetScriptStatusRequest* request) mutable {
-        auto manager = _scriptManager;
+    QObject::connect(request, &GetScriptStatusRequest::finished, _scriptManager, [=, handler = handler](GetScriptStatusRequest* request) mutable {
         if (!manager) {
             qCDebug(entities) << __FUNCTION__ << " -- engine destroyed while inflight" << entityID;
             return;
@@ -1631,6 +1631,8 @@ bool EntityPropertyMetadataRequest::serverScripts(EntityItemID entityID, const S
         }
         callScopedHandlerObject(handler, err, result);
         request->deleteLater();
+        // Release the script value here, on the script thread, not with the connection on the client's thread
+        handler = ScriptValue();
     });
     // On the client's thread, which owns its pending requests
     QMetaObject::invokeMethod(request, "start");
