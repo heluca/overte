@@ -11,9 +11,10 @@
 //  under Node with a fake world and a fake clock:
 //
 //      now()             -> epoch milliseconds
-//      publish(state)    -> the projection changed or was asked for: write it where readers look
+//      publish(state)    -> the projection changed: store it where readers look and send it
 //      render(view)      -> { text, board, line }: redraw the status text and the discs
-//      announce(event)   -> { type: "rejected" | "over", ... }: tell the players something happened
+//      announce(event)   -> { type: "state" | "rejected" | "over" | "expired", ... }: send it to the
+//                           players only; nothing is stored
 //
 //  Callers are identified only by the `caller` argument, which the serverScripts entry takes
 //  from Script.remoteCallerID (stamped by the entity script server from the authenticated
@@ -88,9 +89,11 @@ function cleanName(name, caller) {
  * @typedef {{ winner: number | null, reason: "four" | "draw" | "timeout" | "resign" | "abandoned",
  *     line: number[][] | null }} Result
  * @typedef {{ seat: number, col: number, row: number }} Move
+ * @typedef {"waiting" | "playing" | "over" | "offline"} Phase
+ * @typedef {{ type: string } & Record<string, unknown>} Announcement
  * @typedef {{ now(): number, publish(state: object): void,
  *     render(view: { text: string, board: string[], line: number[][] | null }): void,
- *     announce(event: object): void }} World
+ *     announce(event: Announcement): void }} World
  */
 
 export class RefereeCore {
@@ -117,7 +120,7 @@ export class RefereeCore {
         this.waitTimeoutMs = seconds(options.waitTimeoutS, DEFAULT_TIMEOUTS.waitTimeoutS) * 1000;
         this.overIdleMs = seconds(options.overIdleS, DEFAULT_TIMEOUTS.overIdleS) * 1000;
 
-        /** @type {"waiting" | "playing" | "over"} */
+        /** @type {Phase} */
         this.phase = "waiting";
         /** @type {(Seat | null)[]} */
         this.seats = [null, null];
@@ -138,6 +141,14 @@ export class RefereeCore {
         this.idleDeadline = null;
     }
 
+    /** @private Empties the table: no seats, a clear board, and Red moves first in the next game. */
+    clearTable() {
+        this.seats = [null, null];
+        this.phase = "waiting";
+        this.firstSeat = 0;
+        this.resetTable();
+    }
+
     /**
      * First publication after the script (re)loads. `previous` is the projection found in the
      * board's userData, untrusted: a game it shows in progress died with the old instance.
@@ -156,16 +167,17 @@ export class RefereeCore {
     }
 
     /**
-     * @param {string} caller
+     * @param {string | undefined} caller
      * @param {string} [name] cosmetic; the entity script server cannot look display names up
      * @returns {boolean} whether the call was accepted
      */
     join(caller, name) {
+        this.expire();
         if (!isCaller(caller)) {
             return this.reject(caller, "join", "no caller id");
         }
         if (this.seatOf(caller) >= 0) {
-            this.world.publish(this.projection());
+            this.world.announce({ type: "state", ...this.projection() });
             return true;
         }
         if (this.phase !== "waiting") {
@@ -183,11 +195,12 @@ export class RefereeCore {
     }
 
     /**
-     * @param {string} caller
-     * @param {string} column one digit 0-6
+     * @param {string | undefined} caller
+     * @param {string | undefined} column one digit 0-6
      * @returns {boolean}
      */
     move(caller, column) {
+        this.expire();
         if (!isCaller(caller)) {
             return this.reject(caller, "move", "no caller id");
         }
@@ -228,10 +241,11 @@ export class RefereeCore {
     /**
      * Resigns a game in progress, then frees the caller's seat. The final board and result stay
      * on show while the table waits for a new opponent.
-     * @param {string} caller
+     * @param {string | undefined} caller
      * @returns {boolean}
      */
     leave(caller) {
+        this.expire();
         if (!isCaller(caller)) {
             return this.reject(caller, "leave", "no caller id");
         }
@@ -239,36 +253,41 @@ export class RefereeCore {
         if (seat < 0) {
             return this.reject(caller, "leave", "not seated");
         }
-        if (this.phase === "playing") {
-            this.end(1 - seat, "resign", null);
-        }
+        // One transition and one publication: the result is announced with the seats as played
+        const over = this.phase === "playing" ? this.finish(1 - seat, "resign", null) : null;
         this.seats[seat] = null;
-        this.phase = "waiting";
-        this.idleDeadline = null;
         if (this.seats.every(s => s === null)) {
-            this.resetTable();
+            this.clearTable();
         } else {
+            this.phase = "waiting";
+            this.idleDeadline = null;
             this.seatDeadline = this.world.now() + this.waitTimeoutMs;
         }
         this.changed();
+        if (over) {
+            this.world.announce(over);
+        }
         return true;
     }
 
     /**
-     * Republishes the current state, for a player that has just subscribed to the channel.
+     * Sends the current state on the channel, for a player that has just subscribed. Nothing is
+     * stored, so a caller cannot turn this into a stream of entity edits.
      * @returns {boolean}
      */
     state() {
-        this.world.publish(this.projection());
+        this.expire();
+        this.world.announce({ type: "state", ...this.projection() });
         return true;
     }
 
     /**
      * A rematch with the same seats; the first move alternates between games.
-     * @param {string} caller
+     * @param {string | undefined} caller
      * @returns {boolean}
      */
     newGame(caller) {
+        this.expire();
         if (!isCaller(caller)) {
             return this.reject(caller, "newGame", "no caller id");
         }
@@ -283,23 +302,51 @@ export class RefereeCore {
         return true;
     }
 
-    /** Called about once a second: turn timeouts, lone-seat expiry, idle reset, the countdown. */
+    /** Called about once a second: the deadlines, then the countdown. */
     tick() {
+        if (!this.expire() && this.statusText() !== this.lastText) {
+            this.draw();
+        }
+    }
+
+    /**
+     * The script is unloading. A game in progress is abandoned; the table is published as
+     * offline so readers do not take it for a live game.
+     */
+    stop() {
+        const over = this.phase === "playing" ? this.finish(null, "abandoned", null) : null;
+        this.phase = "offline";
+        this.world.publish(this.projection());
+        if (over) {
+            this.world.announce(over);
+        }
+    }
+
+    /**
+     * Applies a deadline that has passed. Every call runs this first, so a move that arrives
+     * after the deadline but before the next tick is refused.
+     * @private
+     * @returns {boolean} whether anything changed
+     */
+    expire() {
         const now = this.world.now();
         if (this.phase === "playing" && this.turnDeadline !== null && now >= this.turnDeadline) {
             this.end(1 - this.toMove, "timeout", null);
         } else if (this.phase === "waiting" && this.seatDeadline !== null && now >= this.seatDeadline) {
-            this.seats = [null, null];
-            this.resetTable();
+            const seat = this.seats.findIndex(Boolean);
+            const lone = this.seats[seat];
+            this.clearTable();
             this.changed();
+            if (lone) {
+                this.world.announce({ type: "expired", seat, session: lone.session, name: lone.name });
+            }
         } else if (this.phase === "over" && this.idleDeadline !== null && now >= this.idleDeadline) {
-            this.seats = [null, null];
-            this.phase = "waiting";
-            this.resetTable();
+            this.clearTable();
             this.changed();
-        } else if (this.statusText() !== this.lastText) {
-            this.draw();
+        } else {
+            return false;
         }
+        return true;
     }
 
     /** @returns {object} the state readers see, in userData and on the channel */
@@ -310,7 +357,7 @@ export class RefereeCore {
             game: GAME,
             gameId: this.gameId,
             phase: this.phase,
-            seats: this.seats.map(seat => seat && { session: seat.session, name: seat.name }),
+            seats: this.seatList(),
             toMove: playing ? this.toMove : null,
             moveNo: this.moveNo,
             rows: this.board.slice(),
@@ -377,23 +424,37 @@ export class RefereeCore {
     }
 
     /**
+     * Ends the game and publishes it.
      * @private
      * @param {number | null} winnerSeat
      * @param {Result["reason"]} reason
      * @param {number[][] | null} line
      */
     end(winnerSeat, reason, line) {
+        const over = this.finish(winnerSeat, reason, line);
+        this.changed();
+        this.world.announce(over);
+    }
+
+    /**
+     * Ends the game without publishing it.
+     * @private
+     * @param {number | null} winnerSeat
+     * @param {Result["reason"]} reason
+     * @param {number[][] | null} line
+     * @returns {Announcement} the "over" announcement, naming the seats as they played
+     */
+    finish(winnerSeat, reason, line) {
         this.phase = "over";
         this.result = { winner: winnerSeat, reason, line };
         this.turnDeadline = null;
         this.idleDeadline = this.world.now() + this.overIdleMs;
-        this.changed();
-        this.world.announce({
-            type: "over",
-            gameId: this.gameId,
-            result: copyResult(this.result),
-            seats: this.seats.map(seat => seat && { session: seat.session, name: seat.name })
-        });
+        return { type: "over", gameId: this.gameId, result: copyResult(this.result), seats: this.seatList() };
+    }
+
+    /** @private */
+    seatList() {
+        return this.seats.map(seat => seat && { session: seat.session, name: seat.name });
     }
 
     /**

@@ -111,8 +111,11 @@ test("join seats callers in order and the second join starts the game", () => {
 test("join is idempotent for a seated caller and refuses a third player", () => {
     const { world, core } = table();
     core.join(ALICE, "Alice");
+    const published = world.published.length;
     assert.equal(core.join(ALICE, "Alice again"), true);
-    assert.deepEqual(world.state.seats, [{ session: ALICE, name: "Alice" }, null]);
+    assert.equal(world.published.length, published, "a repeated join stores nothing");
+    assert.equal(world.event.type, "state");
+    assert.deepEqual(world.event.seats, [{ session: ALICE, name: "Alice" }, null]);
     core.join(BOB, "Bob");
     assert.equal(core.join(BOB), true);
     assert.equal(world.state.phase, "playing");
@@ -247,6 +250,7 @@ test("a lone seat expires after the wait timeout", () => {
     core.tick();
     assert.deepEqual(world.state.seats, [null, null]);
     assert.equal(world.state.phase, "waiting");
+    assert.deepEqual(world.event, { type: "expired", seat: 0, session: ALICE, name: "Alice" });
 });
 
 test("an idle finished game resets to an empty table", () => {
@@ -264,9 +268,17 @@ test("an idle finished game resets to an empty table", () => {
 test("leaving mid-game resigns, frees the seat and keeps the final board on show", () => {
     const { world, core } = seated();
     core.move(ALICE, "3");
+    const published = world.published.length;
+    const rendered = world.rendered.length;
     assert.equal(core.leave(BOB), true);
-    const over = world.announced.find(event => event.type === "over");
-    assert.deepEqual(over.result, { winner: 0, reason: "resign", line: null });
+    assert.equal(world.published.length, published + 1, "one transition, one publication");
+    assert.equal(world.rendered.length, rendered + 1);
+    assert.deepEqual(world.event, {
+        type: "over",
+        gameId: "{table}:" + T0,
+        result: { winner: 0, reason: "resign", line: null },
+        seats: [{ session: ALICE, name: "Alice" }, { session: BOB, name: "Bob" }]
+    });
     const state = world.state;
     assert.equal(state.phase, "waiting");
     assert.deepEqual(state.seats, [{ session: ALICE, name: "Alice" }, null]);
@@ -326,12 +338,69 @@ test("newGame resets the board, keeps the seats and swaps the first mover", () =
     assert.equal(core.move(BOB, "0"), true);
 });
 
-test("state republishes without changing anything", () => {
+test("state sends the projection on the channel and stores nothing", () => {
     const { world, core } = seated();
     const count = world.published.length;
     assert.equal(core.state(), true);
-    assert.equal(world.published.length, count + 1);
-    assert.deepEqual(world.published[count], world.published[count - 1]);
+    assert.equal(core.state(), true);
+    assert.equal(world.published.length, count);
+    assert.deepEqual(world.event, { type: "state", ...world.state });
+});
+
+test("a move after the deadline but before the next tick is refused", () => {
+    const { world, core } = seated({ turnTimeoutS: 60 });
+    world.advance(60);
+    assert.equal(core.move(ALICE, "3"), false);
+    assert.equal(world.event.reason, "game over");
+    assert.deepEqual(world.state.result, { winner: 1, reason: "timeout", line: null });
+    assert.equal(world.state.rows[5], ".......");
+});
+
+test("a join after a lone seat expired, before the next tick, takes a fresh table", () => {
+    const { world, core } = table({ waitTimeoutS: 30 });
+    core.join(ALICE, "Alice");
+    world.advance(30);
+    assert.equal(core.join(BOB, "Bob"), true);
+    assert.deepEqual(world.state.seats, [{ session: BOB, name: "Bob" }, null]);
+    assert.equal(world.state.phase, "waiting");
+    assert.ok(world.announced.some(event => event.type === "expired" && event.session === ALICE));
+});
+
+test("an emptied table starts the next game with Red", () => {
+    const { world, core } = seated();
+    playColumns(core, [0, 1, 0, 1, 0, 1, 0]);
+    // Black would move first in a rematch
+    core.leave(ALICE);
+    core.leave(BOB);
+    core.join(BOB, "Bob");
+    core.join(CAROL, "Carol");
+    assert.equal(world.state.toMove, 0);
+    assert.equal(world.state.seats[0].session, BOB);
+});
+
+test("stop abandons a game in progress and publishes the table offline", () => {
+    const { world, core } = seated();
+    core.move(ALICE, "3");
+    core.stop();
+    const state = world.state;
+    assert.equal(state.phase, "offline");
+    assert.equal(state.toMove, null);
+    assert.equal(state.turnDeadline, null);
+    assert.deepEqual(state.legal, []);
+    assert.deepEqual(world.event.result, { winner: null, reason: "abandoned", line: null });
+
+    // A reload that finds it offline has nothing to report
+    const next = fakeWorld();
+    new RefereeCore(next, {}).start(state);
+    assert.deepEqual(next.announced, []);
+});
+
+test("stop with no game in progress announces nothing", () => {
+    const { world, core } = table();
+    const announced = world.announced.length;
+    core.stop();
+    assert.equal(world.state.phase, "offline");
+    assert.equal(world.announced.length, announced);
 });
 
 test("the projection is a copy: mutating it does not reach the referee", () => {

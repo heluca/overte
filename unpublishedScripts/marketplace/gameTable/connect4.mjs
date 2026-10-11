@@ -80,7 +80,8 @@ export function applyMove(board, col, piece) {
 }
 
 /**
- * The first line of four found, scanning cells top-left to bottom-right.
+ * The first line of four found, scanning cells top-left to bottom-right. A move can complete
+ * two lines at once; only the first is returned, which is enough to show the win.
  * @param {string[]} board
  * @returns {{ piece: string, line: number[][] } | null} line is [row, col] pairs
  */
