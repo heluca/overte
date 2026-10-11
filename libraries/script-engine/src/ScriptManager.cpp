@@ -2644,6 +2644,7 @@ void ScriptManager::unloadEntityScript(const EntityItemID& entityID, const QStri
         }
 
         stopAllTimersForEntityScript(entityID);
+        _classicEnvironments.remove(entityID);
         releaseUnusedEntityModuleEpochs();
     }
 }
@@ -2706,6 +2707,7 @@ void ScriptManager::unloadAllEntityScriptsForEntity(const EntityItemID& entityID
         }
 
         stopAllTimersForEntityScript(entityID);
+        _classicEnvironments.remove(entityID);
     }
     releaseUnusedEntityModuleEpochs();
 }

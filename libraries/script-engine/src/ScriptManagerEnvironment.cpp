@@ -32,17 +32,23 @@ QUrl ScriptManager::currentSandboxURL() const {
 
 // Classic code run for an entity or sandbox gets an environment that carries them, so that a promise continuation that
 // resumes outside this call still has them: after awaiting a promise settled from the event loop (fetch()) or by
-// another script's handler. The current one is reused for nested calls with the same entity and sandbox.
-static ScriptEnvironmentPointer classicEnvironment(ScriptEngine* engine, const EntityItemID& entityID,
-                                                   const QUrl& sandboxURL) {
+// another script's handler. An entity keeps one until it unloads, and the current one is reused for nested calls.
+ScriptEnvironmentPointer ScriptManager::classicEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL) {
     if (entityID.isInvalidID() && sandboxURL.isEmpty()) {
         return ScriptEnvironmentPointer();
     }
-    ScriptEnvironmentPointer current = engine->currentEnvironment();
+    ScriptEnvironmentPointer current = _engine->currentEnvironment();
     if (current && current->classic && current->entityID == entityID && current->sandboxURL == sandboxURL) {
         return current;
     }
-    return std::make_shared<ScriptEnvironment>(entityID, sandboxURL, 0, true);
+    if (entityID.isInvalidID()) {
+        return std::make_shared<ScriptEnvironment>(entityID, sandboxURL, 0, true);
+    }
+    ScriptEnvironmentPointer& cached = _classicEnvironments[entityID];
+    if (!cached || cached->sandboxURL != sandboxURL) {
+        cached = std::make_shared<ScriptEnvironment>(entityID, sandboxURL, 0, true);
+    }
+    return cached;
 }
 
 // Execute operation in the appropriate context for (the possibly empty) entityID.
@@ -57,7 +63,7 @@ void ScriptManager::doWithEnvironment(const EntityItemID& entityID, const QUrl& 
     _currentSandboxURL = sandboxURL;
     ScriptEnvironmentPointer current = environment;
     if (!current) {
-        current = classicEnvironment(_engine.get(), entityID, sandboxURL);
+        current = classicEnvironment(entityID, sandboxURL);
     }
     ScriptEnvironmentScope environmentScope(_engine.get(), current);
 

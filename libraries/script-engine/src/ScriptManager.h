@@ -1654,6 +1654,8 @@ protected:
     // Classic script code's environment, see currentEntityIdentifier() and currentSandboxURL()
     EntityItemID _currentEntityIdentifier; // Contains the defining entity script entity id during execution, if any. Empty for interface script execution.
     QUrl _currentSandboxURL; // The toplevel url string for the entity script that loaded the code being executed, else empty.
+    // Classic entity script code's environment per loaded entity, made on first use and dropped at unload
+    QHash<EntityItemID, ScriptEnvironmentPointer> _classicEnvironments;
 
     /**
      * @brief Records a file loaded by Script.include or Script.require in the environment that loaded it
@@ -1664,6 +1666,9 @@ protected:
      * @param environment Environment of the code that loaded it; classic or null for classic script code
      */
     void noteClassicLoad(const QUrl& url, const ScriptEnvironmentPointer& environment);
+
+    // Classic code's environment for the entity and sandbox, see doWithEnvironment(); null when both are empty
+    ScriptEnvironmentPointer classicEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL);
 
     /**
      * @brief Execute operation in the appropriate context for (the possibly empty) entityID.
@@ -1678,7 +1683,8 @@ protected:
      * @param entityID Entity ID, may be null
      * @param sandboxURL Sandbox URL
      * @param operation Operation to call
-     * @param environment ES module environment, whose entity and sandbox are entityID and sandboxURL; null for classic code
+     * @param environment ES module environment, whose entity and sandbox are entityID and sandboxURL; null for classic
+     * code, which then runs in the entity's classic environment, see ScriptEnvironment::classic
      */
     void doWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, std::function<void()> operation,
                            const ScriptEnvironmentPointer& environment = ScriptEnvironmentPointer());
@@ -1702,7 +1708,7 @@ protected:
      * @param function  Function to call
      * @param thisObject "this" object to use for the call
      * @param args Arguments
-     * @param environment ES module environment, null for classic code
+     * @param environment ES module environment; null for classic code, as for doWithEnvironment()
      */
     void callWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, const ScriptValue& function, const ScriptValue& thisObject, const ScriptValueList& args,
                              const ScriptEnvironmentPointer& environment = ScriptEnvironmentPointer());
