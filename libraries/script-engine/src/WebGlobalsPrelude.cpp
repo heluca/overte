@@ -17,19 +17,59 @@
 static const char* const WEB_GLOBALS_PRELUDE_PARTS[] = {
 R"JS((function (native) {
     "use strict";
-    const toStringTag = value => Object.prototype.toString.call(value).slice(8, -1);
-    const HEX = Array.from({ length: 256 }, (_, i) => "%" + (i < 16 ? "0" : "") + i.toString(16).toUpperCase());
+    // The built-ins as they are when the engine starts: scripts may replace the globals and their members later, and
+    // what reaches the natives must not depend on that
+    const { Array, ArrayBuffer, DataView, Error, Object, Promise, RangeError, Reflect, String, Symbol, TypeError,
+        Uint8Array } = globalThis;
+    const apply = Reflect.apply;
+    const arrayFrom = Array.from;
+    const isView = ArrayBuffer.isView;
+    const getter = (prototype, name) => Object.getOwnPropertyDescriptor(prototype, name).get;
+    const TypedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+    const typedArrayName = getter(TypedArrayPrototype, Symbol.toStringTag);
+    const typedArraySet = TypedArrayPrototype.set;
+    const TYPED_ARRAY = { buffer: getter(TypedArrayPrototype, "buffer"), byteOffset: getter(TypedArrayPrototype, "byteOffset"),
+        byteLength: getter(TypedArrayPrototype, "byteLength") };
+    const DATA_VIEW = { buffer: getter(DataView.prototype, "buffer"), byteOffset: getter(DataView.prototype, "byteOffset"),
+        byteLength: getter(DataView.prototype, "byteLength") };
+    const BUFFER_BYTE_LENGTHS = [getter(ArrayBuffer.prototype, "byteLength")].concat(
+        typeof SharedArrayBuffer === "function" ? [getter(SharedArrayBuffer.prototype, "byteLength")] : []);
+    const HEX = arrayFrom({ length: 256 }, (_, i) => "%" + (i < 16 ? "0" : "") + i.toString(16).toUpperCase());
 
-    // Not instanceof: an entity script's buffers come from the realm of its own context
-    function bytesOf(source, what) {
-        if (ArrayBuffer.isView(source)) {
-            return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+    // "Uint8Array" and so on for a typed array, else undefined. Unlike instanceof it works on the arrays of a
+    // Script.require module, whose context is its own, and unlike Object.prototype.toString it cannot be faked.
+    const typedArrayKind = value => apply(typedArrayName, value, []);
+    const isArrayBufferView = value => apply(isView, ArrayBuffer, [value]);
+    const byteLengthOf = view => apply(TYPED_ARRAY.byteLength, view, []);
+    function isBuffer(value) {
+        for (const byteLength of BUFFER_BYTE_LENGTHS) {
+            try {
+                apply(byteLength, value, []);
+                return true;
+            } catch (error) {
+                // Not this kind of buffer
+            }
         }
-        const tag = toStringTag(source);
-        if (tag === "ArrayBuffer" || tag === "SharedArrayBuffer") {
+        return false;
+    }
+    function bytesOf(source, what) {
+        if (isArrayBufferView(source)) {
+            const parts = typedArrayKind(source) === undefined ? DATA_VIEW : TYPED_ARRAY;
+            return new Uint8Array(apply(parts.buffer, source, []), apply(parts.byteOffset, source, []),
+                apply(parts.byteLength, source, []));
+        }
+        if (isBuffer(source)) {
             return new Uint8Array(source);
         }
         throw new TypeError(what + ": expected an ArrayBuffer or an ArrayBufferView");
+    }
+    // A copy of bytes[start..], in a buffer of its own
+    function copyBytes(bytes, start) {
+        const length = byteLengthOf(bytes) - start;
+        const copy = new Uint8Array(length);
+        apply(typedArraySet, copy, [new Uint8Array(apply(TYPED_ARRAY.buffer, bytes, []),
+            apply(TYPED_ARRAY.byteOffset, bytes, []) + start, length)]);
+        return copy;
     }
     function utf8Bytes(text) {
         return new Uint8Array(native.encodeUtf8(String(text)));
@@ -55,12 +95,13 @@ R"JS((function (native) {
         get encoding() { return "utf-8"; }
         encode(input) { return utf8Bytes(input === undefined ? "" : input); }
         encodeInto(source, destination) {
-            if (toStringTag(destination) !== "Uint8Array") {
+            if (typedArrayKind(destination) !== "Uint8Array") {
                 throw new TypeError("TextEncoder.encodeInto: the destination must be a Uint8Array");
             }
             source = String(source);
             let read = 0;
             let written = 0;
+            const capacity = byteLengthOf(destination);
             while (read < source.length) {
                 let point = source.codePointAt(read);
                 const units = point > 0xFFFF ? 2 : 1;
@@ -68,7 +109,7 @@ R"JS((function (native) {
                     point = 0xFFFD;
                 }
                 const size = point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
-                if (written + size > destination.length) {
+                if (written + size > capacity) {
                     break;
                 }
                 if (size === 1) {
@@ -108,9 +149,10 @@ R"JS((function (native) {
             const stream = Boolean(options && options.stream);
             let bytes = input === undefined ? new Uint8Array(0) : bytesOf(input, "TextDecoder.decode");
             if (this.#pending !== null) {
-                const joined = new Uint8Array(this.#pending.length + bytes.length);
-                joined.set(this.#pending);
-                joined.set(bytes, this.#pending.length);
+                const pendingLength = byteLengthOf(this.#pending);
+                const joined = new Uint8Array(pendingLength + byteLengthOf(bytes));
+                apply(typedArraySet, joined, [this.#pending]);
+                apply(typedArraySet, joined, [bytes, pendingLength]);
                 bytes = joined;
                 this.#pending = null;
             }
@@ -121,7 +163,7 @@ R"JS((function (native) {
             }
             let text = result[0];
             if (result[1] > 0) {
-                this.#pending = bytes.slice(bytes.length - result[1]);
+                this.#pending = copyBytes(bytes, byteLengthOf(bytes) - result[1]);
             }
             if (!this.#bomSeen && text.length > 0) {
                 this.#bomSeen = true;
@@ -166,19 +208,21 @@ R"JS(    const INTEGER_ARRAYS = ["Int8Array", "Uint8Array", "Uint8ClampedArray",
     const DIGESTS = ["SHA-1", "SHA-256", "SHA-384", "SHA-512"];
     const crypto = {
         getRandomValues(array) {
-            if (!ArrayBuffer.isView(array)) {
+            if (!isArrayBufferView(array)) {
                 throw new TypeError("crypto.getRandomValues: expected an integer typed array");
             }
-            if (!INTEGER_ARRAYS.includes(toStringTag(array))) {
-                throw new DOMException("crypto.getRandomValues: " + toStringTag(array) + " is not an integer typed array",
-                    "TypeMismatchError");
+            const kind = typedArrayKind(array);
+            if (!INTEGER_ARRAYS.includes(kind)) {
+                throw new DOMException("crypto.getRandomValues: " + (kind === undefined ? "DataView" : kind) +
+                    " is not an integer typed array", "TypeMismatchError");
             }
-            if (array.byteLength > 65536) {
-                throw new DOMException("crypto.getRandomValues: " + array.byteLength +
-                    " bytes were asked for; the limit is 65536", "QuotaExceededError");
+            const length = byteLengthOf(array);
+            if (length > 65536) {
+                throw new DOMException("crypto.getRandomValues: " + length + " bytes were asked for; the limit is 65536",
+                    "QuotaExceededError");
             }
-            new Uint8Array(array.buffer, array.byteOffset, array.byteLength)
-                .set(new Uint8Array(native.randomBytes(array.byteLength)));
+            apply(typedArraySet, new Uint8Array(apply(TYPED_ARRAY.buffer, array, []), apply(TYPED_ARRAY.byteOffset, array, []),
+                length), [new Uint8Array(native.randomBytes(length))]);
             return array;
         },
         randomUUID() { return native.randomUUID(); },
@@ -197,7 +241,8 @@ R"JS(    const INTEGER_ARRAYS = ["Int8Array", "Uint8Array", "Uint8ClampedArray",
                         throw new DOMException("crypto.subtle.digest: " + name + " is not supported; use SHA-1, " +
                             "SHA-256, SHA-384 or SHA-512", "NotSupportedError");
                     }
-                    return native.digest(name, bytesOf(data, "crypto.subtle.digest").slice().buffer);
+                    const copy = copyBytes(bytesOf(data, "crypto.subtle.digest"), 0);
+                    return native.digest(name, apply(TYPED_ARRAY.buffer, copy, []));
                 } catch (error) {
                     return Promise.reject(error);
                 }
@@ -214,7 +259,7 @@ R"JS(    const INTEGER_ARRAYS = ["Int8Array", "Uint8Array", "Uint8ClampedArray",
             if (typeof options.transfer[Symbol.iterator] !== "function") {
                 throw new TypeError("structuredClone: transfer must be iterable");
             }
-            transfer = Array.from(options.transfer);
+            transfer = apply(arrayFrom, Array, [options.transfer]);
         }
         const result = native.clone(value, transfer);
         if (!result[0]) {

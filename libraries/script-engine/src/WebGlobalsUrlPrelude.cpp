@@ -35,17 +35,18 @@ R"JS(    function formEncode(text) {
             return text;
         }
         const bytes = utf8Bytes(text);
-        const out = new Uint8Array(bytes.length);
+        const size = byteLengthOf(bytes);
+        const out = new Uint8Array(size);
         let length = 0;
-        for (let i = 0; i < bytes.length; i++) {
-            if (bytes[i] === 0x25 && i + 2 < bytes.length && isHexDigit(bytes[i + 1]) && isHexDigit(bytes[i + 2])) {
+        for (let i = 0; i < size; i++) {
+            if (bytes[i] === 0x25 && i + 2 < size && isHexDigit(bytes[i + 1]) && isHexDigit(bytes[i + 2])) {
                 out[length++] = parseInt(String.fromCharCode(bytes[i + 1], bytes[i + 2]), 16);
                 i += 2;
             } else {
                 out[length++] = bytes[i];
             }
         }
-        return utf8Text(out.subarray(0, length));
+        return utf8Text(new Uint8Array(apply(TYPED_ARRAY.buffer, out, []), 0, length));
     }
     function parseForm(input) {
         const list = [];
@@ -79,7 +80,7 @@ R"JS(    function formEncode(text) {
             if (typeof init === "object" || typeof init === "function") {
                 if (typeof init[Symbol.iterator] === "function") {
                     for (const pair of init) {
-                        const entry = Array.from(pair);
+                        const entry = apply(arrayFrom, Array, [pair]);
                         if (entry.length !== 2) {
                             throw new TypeError("URLSearchParams: each pair must be [name, value]");
                         }
@@ -333,14 +334,14 @@ R"JS(    const USERINFO_ENCODE = "\"#/:;<=>?@[\\]^`{|}";
         set search(value) {
             value = String(value);
             const query = value.startsWith("?") ? value.slice(1) : value;
-            this.#reparse({ query: query === "" ? null : query.replace(/#/g, "%23") });
+            this.#reparse({ query: value === "" ? null : query.replace(/#/g, "%23") });
         }
         get searchParams() { return this.#params; }
         get hash() { return this.#record.fragment ? "#" + this.#record.fragment : ""; }
         set hash(value) {
             value = String(value);
             const fragment = value.startsWith("#") ? value.slice(1) : value;
-            this.#reparse({ fragment: fragment === "" ? null : fragment });
+            this.#reparse({ fragment: value === "" ? null : fragment });
         }
         toString() { return this.href; }
         toJSON() { return this.href; }
