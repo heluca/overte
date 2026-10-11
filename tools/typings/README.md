@@ -11,7 +11,7 @@ context plus a shared types file:
 | `overte-avatar.d.ts` | Avatar scripts (`@hifi-avatar`) |
 | `overte-server-entity.d.ts` | Server entity scripts (`@hifi-server-entity`) |
 | `overte-assignment-client.d.ts` | Assignment client scripts (`@hifi-assignment-client`) |
-| `overte-types.d.ts` | Typedefs, class instance types and `Signal<F>`, referenced by every context file |
+| `overte-types.d.ts` | Typedefs, class instance types, `Signal<F>` and `ImportMeta`, referenced by every context file |
 
 ## Using them
 
@@ -120,6 +120,13 @@ never `any`; most are typos in the source JSDoc (`QUuid`, `GrphicsMeshPart`) and
 - Optional parameters that precede a required one become separate overloads.
 - A property and a function documented under the same name (a `Q_PROPERTY` and its getter) keep
   the property.
+
+- `import.meta.url` is a module-loader feature, not a documented API, so no doclet owns it.
+  `emit.js` writes an `interface ImportMeta { url: string; }` straight into `overte-types.d.ts`
+  (the `IMPORT_META_PRELUDE` constant, alongside the `Signal<F>` prelude) instead of generating it
+  from JSDoc. TypeScript's own lib never declares `ImportMeta` at any `target`/`module` setting
+  (only `@types/node` does), so an `.mjs` script's `tsconfig.json` needs no special `module` or
+  `lib` setting for `import.meta.url` to typecheck — referencing a context file is enough.
 
 ## Known gaps
 

@@ -60,3 +60,6 @@ new URL("http://example.com/").canParse("x");
 
 // @ts-expect-error Given a callback, getAsset returns nothing to await on.
 Assets.getAsset("/games/saved.json", () => {}).then(print);
+
+// @ts-expect-error Script.remoteCallerID is read-only; only the engine sets it.
+Script.remoteCallerID = "caller-id";

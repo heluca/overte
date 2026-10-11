@@ -46,6 +46,14 @@
  *     <em>Read-only.</em>
  * @property {string} filename - The filename of the script file.
  *     <em>Read-only.</em>
+ * @property {string|undefined} remoteCallerID - The session ID of the remote caller, while an
+ *     entity script method that {@link Script.callEntityScriptMethod} is currently invoking on
+ *     behalf of a remote caller is running: the caller's session UUID, as a string in braces.
+ *     It is set only for the duration of that synchronous call, so an <code>async</code> method
+ *     must read it before its first <code>await</code>; by the time the method resumes, the
+ *     engine may be running other code and the value is no longer current. <code>undefined</code>
+ *     at all other times.
+ *     <em>Read-only.</em>
  * @property {Script.ResourceBuckets} ExternalPaths - External resource buckets.
  */
 

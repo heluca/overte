@@ -47,3 +47,11 @@ async function readSaved(): Promise<string> {
 }
 readSaved().then(print, (error: Error) => print(error.message));
 Assets.getAsset("/games/saved.json", (error, result) => print(error === null ? String(result.response) : error));
+
+// Script.remoteCallerID is a Uuid string while a remotely callable method runs, undefined otherwise.
+function remotelyCallable(): void {
+    const caller: string | undefined = Script.remoteCallerID;
+    if (caller !== undefined) {
+        print(caller);
+    }
+}
