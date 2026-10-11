@@ -15,6 +15,7 @@
 #include <QtCore/QObject>
 #include <QtTest/QtTest>
 
+#include "ScriptEngine.h"
 #include "ScriptValue.h"
 
 class ScriptManager;
@@ -39,6 +40,11 @@ public:
     // promise resolves once its preload has run
     Q_INVOKABLE ScriptValue loadClassicEntity(const QString& entityID, const QString& url, const QString& source);
     Q_INVOKABLE void unloadEntity(const QString& entityID, const QString& url);
+    // A promise settled from the event loop, outside any script call, as a network reply settles fetch()'s
+    Q_INVOKABLE ScriptValue resolveLater();
+    // Holds on to the current environment; sameEnvironment() tells whether the current one is that one
+    Q_INVOKABLE void rememberEnvironment();
+    Q_INVOKABLE bool sameEnvironment() const;
     Q_INVOKABLE void emitPing() { emit ping(); }
 
 signals:
@@ -46,6 +52,7 @@ signals:
 
 private:
     ScriptManager* _manager;
+    ScriptEnvironmentPointer _remembered;
 };
 
 // ES modules: the script environment (entity, sandbox, permissions) across await, and classic scripts' unchanged
@@ -56,6 +63,8 @@ private slots:
     void testEnvironmentSelfTest();
     void testTimerAfterAwaitKeepsModuleSandbox();
     void testClassicEntityTimerKeepsEntity();
+    void testClassicEntityImportAfterAwait();
+    void testClassicEnvironmentKeptPerEntity();
     void testEntityEnvironmentAcrossAwait();
     void testModuleTimerClearedOnEntityUnload();
     void testDynamicImportAfterAwaitUsesEnvironmentSandbox();

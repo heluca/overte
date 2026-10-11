@@ -26,7 +26,8 @@
 
 /// Design question Q3 of #10: whether files that ES module code pulls in with Script.include and Script.require count
 /// towards its environment's loaded URLs. Off: they keep their classic behaviour. Turning this on also needs classic
-/// scripts to get an environment of their own before it affects them, see ScriptManager::noteClassicLoad().
+/// scripts to get a module-rule environment of their own (not a ScriptEnvironment::classic one) before it affects them,
+/// see ScriptManager::noteClassicLoad().
 inline constexpr bool CLASSIC_LOADS_TAINT_ENVIRONMENT { false };
 
 /// [ScriptInterface] Whose code is running, carried across <code>await</code>: the engine stores the current environment
@@ -34,14 +35,16 @@ inline constexpr bool CLASSIC_LOADS_TAINT_ENVIRONMENT { false };
 /// timer and handler created while it is current.
 ///
 /// ES module code always runs in one: a top-level module script has its own, and so does each import() made by classic
-/// code. Classic script code runs without one and uses ScriptManager's entity and sandbox members, as it always has.
+/// code. Classic script code that ScriptManager::doWithEnvironment() runs for an entity or sandbox runs in a classic
+/// one (see #classic), so that its promise continuations keep that entity and sandbox; other classic script code runs
+/// without one and uses ScriptManager's entity and sandbox members, as it always has.
 ///
 /// The entity, sandbox and epoch never change. The loaded URLs only grow: a module that import()s untrusted code
 /// shares bindings with it, so continuations captured before the import must not stay more trusted than ones after it.
 class ScriptEnvironment {
 public:
-    ScriptEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, int epoch) :
-        entityID(entityID), sandboxURL(sandboxURL), epoch(epoch) {}
+    ScriptEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, int epoch, bool classic = false) :
+        entityID(entityID), sandboxURL(sandboxURL), epoch(epoch), classic(classic) {}
 
     /// The entity whose script this is; null outside entity scripts
     const EntityItemID entityID;
@@ -49,6 +52,9 @@ public:
     const QUrl sandboxURL;
     /// Module map generation of the environment's modules, see ScriptModuleRequest::epoch
     const int epoch;
+    /// Classic script code's: it carries only the entity and sandbox. ScriptPermissions applies the classic frame rule
+    /// and never consults its loaded URLs, and import() from it starts a new module environment with them.
+    const bool classic;
 
     /// Records a URL whose code was loaded into the environment
     void noteLoaded(const QUrl& url) { _loadedURLs.insert(url.toString()); }
