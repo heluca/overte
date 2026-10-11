@@ -59,6 +59,11 @@ bool cloneValueV8(v8::Isolate* isolate, v8::Local<v8::Context> context, v8::Loca
         if (!transferList->Get(context, i).ToLocal(&item)) {
             return false;
         }
+        if (!item->IsObject()) {
+            isolate->ThrowException(v8::Exception::TypeError(v8::String::NewFromUtf8Literal(
+                isolate, "structuredClone: the transfer list holds a value that is not an object")));
+            return false;
+        }
         if (!item->IsArrayBuffer()) {
             dataCloneError = "Only an ArrayBuffer can be transferred.";
             return false;
@@ -82,6 +87,13 @@ bool cloneValueV8(v8::Isolate* isolate, v8::Local<v8::Context> context, v8::Loca
     if (!serializer.WriteValue(context, value).FromMaybe(false)) {
         dataCloneError = delegate.message();
         return false;
+    }
+    // A getter of the value can detach a listed buffer while it is written
+    for (const auto& buffer : transfers) {
+        if (buffer->WasDetached()) {
+            dataCloneError = "An ArrayBuffer in the transfer list was detached while the value was cloned.";
+            return false;
+        }
     }
 
     std::pair<uint8_t*, size_t> data = serializer.Release();
