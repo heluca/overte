@@ -529,9 +529,14 @@ void ScriptEngineV8::storeGlobalObjectContents() {
     v8::Local<v8::Object> globalMemberObjects = v8::Object::New(_v8Isolate);
 
     auto globalMemberNames = context->Global()->GetPropertyNames(context).ToLocalChecked();
+    v8::TryCatch tryCatch(_v8Isolate);
     for (uint32_t i = 0; i < globalMemberNames->Length(); i++) {
         auto name = globalMemberNames->Get(context, i).ToLocalChecked();
-        if(!globalMemberObjects->Set(context, name, context->Global()->Get(context, name).ToLocalChecked()).FromMaybe(false)) {
+        v8::Local<v8::Value> value;
+        // A global whose getter throws is left out
+        if (!context->Global()->Get(context, name).ToLocal(&value)) {
+            tryCatch.Reset();
+        } else if (!globalMemberObjects->Set(context, name, value).FromMaybe(false)) {
             Q_ASSERT(false);
         }
     }
