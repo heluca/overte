@@ -61,6 +61,9 @@ private slots:
     void testDynamicImportAfterAwaitUsesEnvironmentSandbox();
     void testFramelessNativeCall();
     void testUntrustedModuleRefused();
+    void testMicrotaskJobsKeepEnvironment();
+    void testFrameNamesIgnoreSourceURLInModuleCode();
+    void testFrameNamesIgnoreSourceURLInClassicCode();
 };
 
 #endif // overte_ScriptModuleEnvTests_h

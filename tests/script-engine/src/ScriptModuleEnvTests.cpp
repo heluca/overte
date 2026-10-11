@@ -314,3 +314,89 @@ void ScriptModuleEnvTests::testUntrustedModuleRefused() {
     QCOMPARE(classic.errors, QStringList());
     QCOMPARE(classic.printed, QStringList({ "classic after import untrusted true" }));
 }
+
+void ScriptModuleEnvTests::testMicrotaskJobsKeepEnvironment() {
+    // queueMicrotask (a callable microtask) and a thenable (a resolve-thenable job) queued in an entity environment run
+    // in it. The gate is opened from the top-level module's environment, so the checkpoint that runs them is not
+    // already inside the entity's.
+    std::unique_ptr<EnvironmentProbe> probe;
+    QTemporaryDir dir;
+    auto run = runScript(dir, {
+        { "main.mjs",
+          "let openGate;\n"
+          "const gate = new Promise(function(resolve) { openGate = resolve; });\n"
+          "const entityDone = new Promise(function(resolve) {\n"
+          "    Probe.withModuleEnvironment('" + ENTITY + "', '" + ENTITY_URL + "', async function() {\n"
+          "        await gate;\n"
+          "        queueMicrotask(function() { print('queueMicrotask ' + Probe.entityID()); });\n"
+          "        const value = await { then: function(onFulfilled) {\n"
+          "            print('thenable then ' + Probe.entityID());\n"
+          "            onFulfilled('v');\n"
+          "        } };\n"
+          "        print('after thenable ' + value + ' ' + Probe.entityID());\n"
+          "        resolve();\n"
+          "    });\n"
+          "});\n"
+          "Script.setTimeout(function() { openGate(); }, 0);\n"
+          "await entityDone;\n"
+          "print('module [' + Probe.entityID() + ']');\n"
+          "Script.stop(true);\n" },
+    }, withProbe(probe));
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "queueMicrotask " + ENTITY, "thenable then " + ENTITY,
+                                        "after thenable v " + ENTITY, "module []" }));
+}
+
+void ScriptModuleEnvTests::testFrameNamesIgnoreSourceURLInModuleCode() {
+    // Frames are named by the URL a script was loaded from, whatever sourceURL directive its text carries: an http:
+    // module and an http: CommonJS file required from a local module are both checked as http:
+    HeldScriptServer moduleServer("export function check() { return Probe.allowed(); }\n//# sourceURL=file:///named.mjs\n");
+    HeldScriptServer requireServer("module.exports = { check: function() { return Probe.allowed(); } };\n"
+                                   "//# sourceURL=file:///named.js\n");
+    QString moduleURL = QString(moduleServer.url()).replace("held.js", "named.mjs");
+    std::unique_ptr<EnvironmentProbe> probe;
+
+    QTemporaryDir moduleDir;
+    auto module = runScript(moduleDir, {
+        { "main.mjs",
+          "import { check } from '" + moduleURL + "';\n"
+          "print('imported ' + check());\n"
+          "Script.stop(true);\n" },
+    }, withProbe(probe));
+    QVERIFY(!module.timedOut);
+    QCOMPARE(module.errors, QStringList());
+    QCOMPARE(module.printed, QStringList({ "imported false" }));
+
+    QTemporaryDir requireDir;
+    auto required = runScript(requireDir, {
+        { "main.mjs",
+          "print('direct ' + Probe.allowed());\n"
+          "const lib = Script.require('" + requireServer.url() + "');\n"
+          "print('required ' + lib.check());\n"
+          "Script.stop(true);\n" },
+    }, withProbe(probe));
+    QVERIFY(!required.timedOut);
+    QCOMPARE(required.errors, QStringList());
+    QCOMPARE(required.printed, QStringList({ "direct true", "required false" }));
+}
+
+void ScriptModuleEnvTests::testFrameNamesIgnoreSourceURLInClassicCode() {
+    // A classic entity script loaded from an http: URL is checked as that URL, whatever sourceURL directive it carries
+    std::unique_ptr<EnvironmentProbe> probe;
+    QTemporaryDir dir;
+    QString entityURL = "http://127.0.0.1:1/named-entity.js";
+    QString entity =
+        "(function() {\n"
+        "    this.preload = function() { print('entity ' + Probe.allowed()); Script.stop(true); };\n"
+        "})\n"
+        "//# sourceURL=file:///named-entity.js\n";
+    auto run = runScript(dir, {
+        { "main.js",
+          "print('direct ' + Probe.allowed());\n"
+          "Probe.loadClassicEntity('" + ENTITY + "', '" + entityURL + "', `" + entity + "`);\n" },
+    }, withProbe(probe));
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "direct true", "entity false" }));
+}
