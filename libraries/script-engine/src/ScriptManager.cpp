@@ -2232,6 +2232,8 @@ void ScriptManager::loadEntityScript(const EntityItemID& entityID, const QString
                 }
             });
     }, forceRedownload);
+    // The details just replaced may have been the last to name an epoch
+    releaseUnusedEntityModuleEpochs();
 }
 
 // The JSDoc is for the callEntityScriptMethod() call in this method.
@@ -2276,6 +2278,7 @@ void ScriptManager::entityScriptContentAvailable(const EntityItemID& entityID, c
         newDetails.errorInfo = errorInfo;
         newDetails.status = status;
         setEntityScriptDetails(entityID, scriptOrURL, newDetails);
+        releaseUnusedEntityModuleEpochs();
     };
 
     // NETWORK / FILESYSTEM ERRORS

@@ -424,6 +424,14 @@ public:
     virtual ScriptValue callReportingRejection(const ScriptValue& function, const ScriptValue& thisObject,
         const ScriptValueList& args,
         std::function<void(const QString& reason, const QString& fileName, int lineNumber)> onRejected) = 0;
+
+    /**
+     * @brief Calls the function as a constructor with no arguments. If it throws, returns undefined and sets thrown to
+     * what it threw, with its stack, and thrownFileName to the file it was thrown in, instead of reporting it. Script
+     * thread only.
+     */
+    virtual ScriptValue constructCatching(const ScriptValue& constructor, std::shared_ptr<ScriptException>* thrown,
+                                          QString* thrownFileName) = 0;
     virtual ScriptProgramPointer newProgram(const QString& sourceCode, const QString& fileName) = 0;
     virtual ScriptValue newQObject(QObject *object, ValueOwnership ownership = QtOwnership, const QObjectWrapOptions &options = QObjectWrapOptions()) = 0;
     virtual ScriptValue newValue(bool value) = 0;
@@ -524,9 +532,10 @@ public:
 
     /**
      * @brief A new module map generation, see ScriptModuleRequest::epoch. Graphs loaded under it share no module with
-     * graphs loaded under other epochs.
+     * graphs loaded under other epochs. An epoch for a reload fetches every module anew, also for later import()s, and
+     * evaluates the CommonJS files it imports again rather than taking Script.require.cache's exports.
      */
-    virtual int newModuleEpoch() = 0;
+    virtual int newModuleEpoch(bool reload) = 0;
 
     /**
      * @brief Drops an epoch's modules from the module map, once no code that uses them is still loaded.

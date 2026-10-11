@@ -11,121 +11,12 @@
 
 #include "ScriptModuleEntityTests.h"
 
-#include <memory>
-
-#include <QtCore/QRegularExpression>
-
-#include "AccountManager.h"
-#include "AddressManager.h"
-#include "DomainAccountManager.h"
-#include "NodeList.h"
-#include "ScriptModuleTestRunner.h"
+#include "ScriptModuleEntityProbe.h"
 
 QTEST_MAIN(ScriptModuleEntityTests)
 
-using Options = ModuleTestOptions;
-using Files = QList<QPair<QString, QString>>;
-
-static const QString ENTITY_A = "{0f6c1fa8-55a3-4a63-9b7b-2f8f9b0e4c11}";
-static const QString ENTITY_B = "{5d2a7c31-8e44-4b0f-a1c9-3e6f20b7d952}";
-static const QString CALLER = "{9b1e4f20-3c7d-4a85-b6e2-71d0c5a8f3e4}";
-// Prepended to each test's main.mjs
-static const QString TICK = "const tick = () => new Promise(function(resolve) { Script.setTimeout(resolve, 0); });\n";
-
-ScriptValue EntityModuleProbe::load(const QString& entityID, const QString& url, bool reload) {
-    ScriptManager* manager = _manager;
-    EntityItemID id { QUuid(entityID) };
-    ScriptPromise promise = manager->engine()->newPromise();
-    auto resolver = promise.resolver;
-    auto connection = std::make_shared<QMetaObject::Connection>();
-    *connection = QObject::connect(manager, &ScriptManager::entityScriptDetailsUpdated, this, [manager, id, url, resolver, connection] {
-        EntityScriptDetails details;
-        if (!manager->getEntityScriptDetails(id, url, details) || details.status == EntityScriptStatus::PENDING
-            || details.status == EntityScriptStatus::LOADING) {
-            return;
-        }
-        QObject::disconnect(*connection);
-        QString status = EntityScriptStatus_::valueToKey(details.status).toLower();
-        QVariant result(details.errorInfo.isEmpty() ? status : status + ": " + details.errorInfo);
-        // Settled from the event loop: settling it here would run the test script's continuation in the middle of the
-        // load, before preload, when the load was not itself called from script
-        QMetaObject::invokeMethod(manager, [resolver, result] { resolver->resolve(result); }, Qt::QueuedConnection);
-    });
-    manager->loadEntityScript(id, url, reload);
-    DependencyManager::get<ScriptCache>()->getScriptContents(url,
-        [this, manager, id, entityID, url](const QString&, const QString& contents, bool isURL, bool success, const QString& status) {
-            QMetaObject::invokeMethod(manager, [this, manager, id, entityID, url, contents, isURL, success, status] {
-                _handedOver.insert(entityID);
-                QMetaObject::invokeMethod(manager, "entityScriptContentAvailable", Qt::DirectConnection,
-                    Q_ARG(EntityItemID, id), Q_ARG(QString, url), Q_ARG(QString, contents), Q_ARG(bool, isURL),
-                    Q_ARG(bool, success), Q_ARG(QString, status));
-            }, Qt::QueuedConnection);
-        }, reload);
-    return promise.promise;
-}
-
-ScriptValue EntityModuleProbe::call(const QString& entityID, const QString& method, const QStringList& params,
-                                    const QString& remoteCallerID) {
-    ScriptManager* manager = _manager;
-    ScriptPromise promise = manager->engine()->newPromise();
-    auto resolver = promise.resolver;
-    EntityItemID id { QUuid(entityID) };
-    QUuid caller { remoteCallerID };
-    QMetaObject::invokeMethod(manager, [manager, id, method, params, caller, resolver] {
-        manager->callEntityScriptMethod(id, method, params, caller);
-        resolver->resolve(QVariant(true));
-    }, Qt::QueuedConnection);
-    return promise.promise;
-}
-
-void EntityModuleProbe::writeFile(const QString& url, const QString& contents) {
-    QFile file(QUrl(url).toLocalFile());
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        qFatal("cannot write %s", qUtf8Printable(url));
-    }
-    file.write(contents.toUtf8());
-}
-
-// "@A", "@B" and "@CALLER" stand for the IDs, "@/path" for the URL of a file in the test directory
-static QString fill(QString text, const QTemporaryDir& dir) {
-    text.replace("@A", ENTITY_A).replace("@B", ENTITY_B).replace("@CALLER", CALLER);
-    static const QRegularExpression path("@/([\\w./-]+)");
-    QRegularExpressionMatch match;
-    while ((match = path.match(text)).hasMatch()) {
-        text.replace(match.capturedStart(), match.capturedLength(), urlOf(dir, match.captured(1)));
-    }
-    return text;
-}
-
-// Runs main.mjs, the first file, with Probe
-static ModuleTestRun runEntities(const QTemporaryDir& dir, Files files, std::unique_ptr<EntityModuleProbe>& probe) {
-    for (auto& file : files) {
-        file.second = fill(file.second, dir);
-    }
-    files.first().second = TICK + files.first().second;
-    Options options;
-    options.beforeRun = [&probe](ScriptManager* manager) {
-        // loadEntityScript() refuses to load, through a null pointer, without the ScriptEngines that made the manager
-        QSharedPointer<ScriptEngines> scriptEngines = DependencyManager::get<ScriptEngines>();
-        manager->setScriptEngines(scriptEngines);
-        probe = std::make_unique<EntityModuleProbe>(manager);
-        manager->engine()->globalObject().setProperty("Probe", manager->engine()->newQObject(probe.get()));
-        QObject::connect(manager, &ScriptManager::errorEntityMessage, probe.get(),
-            [probe = probe.get()](const QString&, const QString&, int, const EntityItemID& entityID, bool) {
-                probe->errorEntities.append(entityID.isNull() ? QString() : entityID.toString());
-            });
-    };
-    return runScript(dir, files, options);
-}
-
 void ScriptModuleEntityTests::initTestCase() {
-    // Loading an entity script consults the domain, for the entity script allowlist
-    DependencyManager::registerInheritance<LimitedNodeList, NodeList>();
-    DependencyManager::set<AccountManager>(true);
-    DependencyManager::set<DomainAccountManager>();
-    DependencyManager::set<AddressManager>();
-    DependencyManager::set<NodeList>(NodeType::Agent, 0);
-    initModuleTestDependencies();
+    initEntityTestDependencies();
 }
 
 void ScriptModuleEntityTests::testDefaultExportClass() {
@@ -259,77 +150,6 @@ void ScriptModuleEntityTests::testSharedInstance() {
                                         "report " + ENTITY_A + " #1 of 2", "report " + ENTITY_B + " #2 of 2" }));
 }
 
-void ScriptModuleEntityTests::testReloadNewEpoch() {
-    // A reload of A loads the graph under a new epoch and fetches every module again, also its dependencies, and a
-    // CommonJS one is evaluated again rather than taken from Script.require.cache. B, not reloaded, keeps the old
-    // modules. Each epoch is released with its last entity, with the Script.require.cache entry it made.
-    std::unique_ptr<EntityModuleProbe> probe;
-    QTemporaryDir dir;
-    auto run = runEntities(dir, {
-        { "main.mjs",
-          "await Probe.load('@A', '@/entity.mjs', false);\n"
-          "await Probe.load('@B', '@/entity.mjs', false);\n"
-          "print('cache ' + Script.require.cache['@/lib.js'].exports.version);\n"
-          "Probe.writeFile('@/lib.js', 'print(\"lib body 2\"); module.exports = { version: 2 };');\n"
-          "Probe.writeFile('@/dep.mjs', 'export const version = 2;');\n"
-          "Probe.unload('@A', '@/entity.mjs');\n"
-          "print('reload ' + await Probe.load('@A', '@/entity.mjs', true));\n"
-          "await Probe.call('@A', 'report', [], '');\n"
-          "await Probe.call('@B', 'report', [], '');\n"
-          "print('cache ' + Script.require.cache['@/lib.js'].exports.version);\n"
-          "const records = Probe.moduleRecords();\n"
-          "Probe.unload('@B', '@/entity.mjs');\n"
-          "print('released ' + (records - Probe.moduleRecords()));\n"
-          "print('cache after B ' + Script.require.cache['@/lib.js'].exports.version);\n"
-          "Probe.unload('@A', '@/entity.mjs');\n"
-          "print('cache after A ' + Script.require.cache['@/lib.js']);\n"
-          "Script.stop(true);\n" },
-        { "entity.mjs",
-          "import lib from './lib.js';\n"
-          "import { version } from './dep.mjs';\n"
-          "let count = 0;\n"
-          "export default class {\n"
-          "    constructor() { this.number = ++count; }\n"
-          "    describe(id) { return id + ' lib ' + lib.version + ' dep ' + version + ' #' + this.number; }\n"
-          "    preload(id) { print('preload ' + this.describe(id)); }\n"
-          "    report(id) { print('report ' + this.describe(id)); }\n"
-          "}\n" },
-        { "lib.js", "print('lib body 1');\nmodule.exports = { version: 1 };\n" },
-        { "dep.mjs", "export const version = 1;\n" },
-    }, probe);
-    QVERIFY(!run.timedOut);
-    QCOMPARE(run.errors, QStringList());
-    QCOMPARE(run.printed, QStringList({ "lib body 1", "preload " + ENTITY_A + " lib 1 dep 1 #1",
-                                        "preload " + ENTITY_B + " lib 1 dep 1 #2", "cache 1", "lib body 2",
-                                        "preload " + ENTITY_A + " lib 2 dep 2 #1", "reload running",
-                                        "report " + ENTITY_A + " lib 2 dep 2 #1", "report " + ENTITY_B + " lib 1 dep 1 #2",
-                                        "cache 2", "released 3", "cache after B 2", "cache after A undefined" }));
-}
-
-void ScriptModuleEntityTests::testUnloadReleasesEpochAndReportsStalledAwait() {
-    std::unique_ptr<EntityModuleProbe> probe;
-    QTemporaryDir dir;
-    auto run = runEntities(dir, {
-        { "main.mjs",
-          "Probe.load('@A', '@/entity.mjs', false);\n"
-          "while (!globalThis.entityWaiting) { await tick(); }\n"
-          "const records = Probe.moduleRecords();\n"
-          "Probe.unload('@A', '@/entity.mjs');\n"
-          "print('released ' + (records - Probe.moduleRecords()) + ', status [' + Probe.status('@A', '@/entity.mjs') + ']');\n"
-          "Script.stop(true);\n" },
-        { "entity.mjs",
-          "globalThis.entityWaiting = true;\n"
-          "await new Promise(function() {});\n"
-          "export default class {}\n" },
-    }, probe);
-    QVERIFY(!run.timedOut);
-    QCOMPARE(run.errors, QStringList());
-    QCOMPARE(run.printed, QStringList({ "released 1, status []" }));
-    // Reported at the unload, and not again when the script stops
-    QCOMPARE(run.warnings, QStringList({ "Entity script unloaded while a top-level await was still pending at "
-                                         + urlOf(dir, "entity.mjs") + ":2" }));
-}
-
 void ScriptModuleEntityTests::testRemotelyCallableClassField() {
     // As a class field or assigned in the constructor; Script.remoteCallerID is the caller's while the method runs
     // synchronously
@@ -370,18 +190,22 @@ void ScriptModuleEntityTests::testRemotelyCallableClassField() {
 }
 
 void ScriptModuleEntityTests::testDynamicImportAfterAwait() {
-    // From a method, after an await on a timer, import() resolves against the importing module and loads under the
-    // entity's sandbox and epoch: the top-level script's instance of the same file is not shared
+    // From a method, after an await on a promise the test script settles, import() resolves against the importing
+    // module and loads under the entity's sandbox and epoch: the top-level script's instance of the file is not shared.
+    // Only the environment the await carries says whose continuation it is.
     std::unique_ptr<EntityModuleProbe> probe;
     QTemporaryDir dir;
     auto run = runEntities(dir, {
         { "main.mjs",
+          "let go;\n"
+          "globalThis.go = new Promise(function(resolve) { go = resolve; });\n"
           "await import('./entity/dep.mjs');\n"
-          "await Probe.load('@A', '@/entity/entity.mjs', false);\n" },
+          "await Probe.load('@A', '@/entity/entity.mjs', false);\n"
+          "go();\n" },
         { "entity/entity.mjs",
           "export default class {\n"
           "    async preload(id) {\n"
-          "        await new Promise(function(resolve) { Script.setTimeout(resolve, 0); });\n"
+          "        await globalThis.go;\n"
           "        const dep = await import('./dep.mjs');\n"
           "        print('imported ' + dep.where + ' in [' + Probe.entityID() + ']');\n"
           "        Script.stop(true);\n"
@@ -399,7 +223,8 @@ void ScriptModuleEntityTests::testDynamicImportAfterAwait() {
 }
 
 void ScriptModuleEntityTests::testRejectedAsyncMethodReported() {
-    // Before and after its first await; once each, for the entity, and not again as an unhandled rejection
+    // Before and after its first await; once each, for the entity, and not again as an unhandled rejection. A promise
+    // the method handles itself before returning it is not reported.
     std::unique_ptr<EntityModuleProbe> probe;
     QTemporaryDir dir;
     auto run = runEntities(dir, {
@@ -407,6 +232,7 @@ void ScriptModuleEntityTests::testRejectedAsyncMethodReported() {
           "await Probe.load('@A', '@/entity.mjs', false);\n"
           "await Probe.call('@A', 'failLater', [], '');\n"
           "await Probe.call('@A', 'failEarly', [], '');\n"
+          "await Probe.call('@A', 'handled', [], '');\n"
           "await tick();\n"
           "Script.stop(true);\n" },
         { "entity.mjs",
@@ -416,9 +242,15 @@ void ScriptModuleEntityTests::testRejectedAsyncMethodReported() {
           "        throw new Error('failed after await');\n"
           "    }\n"
           "    async failEarly(id) { throw new Error('failed before await'); }\n"
+          "    handled(id) {\n"
+          "        const p = Promise.reject(new Error('handled here'));\n"
+          "        p.catch(function(error) { print('caught ' + error.message); });\n"
+          "        return p;\n"
+          "    }\n"
           "}\n" },
     }, probe);
     QVERIFY(!run.timedOut);
+    QCOMPARE(run.printed, QStringList({ "caught handled here" }));
     QString url = urlOf(dir, "entity.mjs");
     QCOMPARE(run.errors.size(), 2);
     QVERIFY2(run.errors[0].startsWith("Uncaught (in promise) in entity script method failLater of " + url
@@ -486,3 +318,89 @@ void ScriptModuleEntityTests::testClassicEntityUnchanged() {
     QCOMPARE(run.printed, QStringList({ "classic preload " + ENTITY_A, "status running", "records 0",
                                         "classic unload " + ENTITY_A, "broken true" }));
 }
+
+void ScriptModuleEntityTests::testFailedModuleLeavesClassicEntityRunning() {
+    // A module entity script that fails to load leaves no uncaught exception behind: a classic entity script constructed
+    // right after, before the event loop would clear one, still gets its object and preload
+    std::unique_ptr<EntityModuleProbe> probe;
+    QTemporaryDir dir;
+    auto run = runEntities(dir, {
+        { "main.mjs",
+          "Probe.prepare('@B', '@/classic.js', false);\n"
+          "const classic = Probe.settled('@B', '@/classic.js');\n"
+          "await Probe.handOverOnError('@A', '@/broken.mjs', '@B', '@/classic.js');\n"
+          "print('module ' + (await Probe.load('@A', '@/broken.mjs', false)).split(':')[0]);\n"
+          "print('classic ' + await classic);\n"
+          "await Probe.call('@B', 'ping', [], '');\n"
+          "Script.stop(true);\n" },
+        { "broken.mjs", "import './nowhere.mjs';\nexport default class {}\n" },
+        { "classic.js",
+          "(function() {\n"
+          "    this.preload = function(id) { print('classic preload ' + id); };\n"
+          "    this.ping = function(id) { print('classic ping ' + id); };\n"
+          "})\n" },
+    }, probe);
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.printed, QStringList({ "classic preload " + ENTITY_B, "module error_running_script", "classic running",
+                                        "classic ping " + ENTITY_B }));
+    QCOMPARE(run.errors.size(), 1);
+}
+
+void ScriptModuleEntityTests::testConstructorThrows() {
+    // Synchronously and after a top-level await: the entity fails with the constructor's stack, reported once for it,
+    // and nothing is left pending to surface as an unhandled rejection
+    std::unique_ptr<EntityModuleProbe> probe;
+    QTemporaryDir dir;
+    auto run = runEntities(dir, {
+        { "main.mjs",
+          "print(await Probe.load('@A', '@/throws.mjs', false));\n"
+          "print(await Probe.load('@B', '@/awaits.mjs', false));\n"
+          "await tick();\n"
+          "Script.stop(true);\n" },
+        { "throws.mjs",
+          "export default class {\n"
+          "    constructor() { throw new Error('constructor failed'); }\n"
+          "}\n" },
+        { "awaits.mjs",
+          "await null;\n"
+          "export default class {\n"
+          "    constructor() { throw new Error('constructor failed after await'); }\n"
+          "}\n" },
+    }, probe);
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.printed.size(), 2);
+    QVERIFY2(run.printed[0].startsWith("error_running_script: Error: constructor failed")
+             && run.printed[0].contains(urlOf(dir, "throws.mjs") + ":2"), qPrintable(run.printed[0]));
+    QVERIFY2(run.printed[1].startsWith("error_running_script: Error: constructor failed after await")
+             && run.printed[1].contains(urlOf(dir, "awaits.mjs") + ":3"), qPrintable(run.printed[1]));
+    QCOMPARE(run.errors.size(), 2);
+    QVERIFY2(run.errors[0].startsWith("Error in the constructor of " + urlOf(dir, "throws.mjs") + ": Error: constructor failed"),
+             qPrintable(run.errors[0]));
+    QVERIFY2(run.errors[1].startsWith("Error in the constructor of " + urlOf(dir, "awaits.mjs")), qPrintable(run.errors[1]));
+    QCOMPARE(probe->errorEntities, QStringList({ ENTITY_A, ENTITY_B }));
+}
+
+void ScriptModuleEntityTests::testPreloadThrows() {
+    // As for a classic entity script: reported for the entity, which stays RUNNING and keeps its methods
+    std::unique_ptr<EntityModuleProbe> probe;
+    QTemporaryDir dir;
+    auto run = runEntities(dir, {
+        { "main.mjs",
+          "print(await Probe.load('@A', '@/entity.mjs', false));\n"
+          "await Probe.call('@A', 'ping', [], '');\n"
+          "Script.stop(true);\n" },
+        { "entity.mjs",
+          "export default class {\n"
+          "    preload(id) { throw new Error('preload failed'); }\n"
+          "    ping(id) { print('ping ' + id); }\n"
+          "}\n" },
+    }, probe);
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.printed, QStringList({ "running", "ping " + ENTITY_A }));
+    // Two reports, as for a classic entity script: the call's, with the stack, and a generic one after it
+    QCOMPARE(run.errors.size(), 2);
+    QVERIFY2(run.errors[0].contains("preload failed"), qPrintable(run.errors[0]));
+    QCOMPARE(probe->errorEntities, QStringList({ ENTITY_A, ENTITY_A }));
+}
+
+#include "moc_ScriptModuleEntityProbe.cpp"
