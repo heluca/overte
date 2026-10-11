@@ -38,3 +38,24 @@ void ScriptGlobalTamperingTests::testThrowingGlobalGetterBeforeRequire() {
     QCOMPARE(run.errors, QStringList());
     QCOMPARE(run.printed, QStringList({ "loaded 42" }));
 }
+
+void ScriptGlobalTamperingTests::testReplacedTypeErrorConstructor() {
+    // The engine throws a TypeError of its own constructor, not of whatever the global TypeError has become
+    QTemporaryDir dir;
+    auto run = runScript(dir, {
+        { "main.js",
+          "var NativeTypeError = TypeError;\n"
+          "globalThis.TypeError = function() { throw new Error('replaced TypeError ran'); };\n"
+          "try {\n"
+          "    setTimeout(42);\n"
+          "    print('no error');\n"
+          "} catch (e) {\n"
+          "    print([e instanceof NativeTypeError, e.message].join(','));\n"
+          "}\n"
+          "Script.stop(true);\n" },
+    });
+    QVERIFY(!run.timedOut);
+    QVERIFY(!run.uncaughtException);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "true,setTimeout: callback is not a function" }));
+}

@@ -58,6 +58,7 @@
 #include "ScriptValueV8Wrapper.h"
 #include "ScriptEngineLoggingV8.h"
 #include "ScriptEnvironmentV8.h"
+#include "ScriptErrorConstructorsV8.h"
 #include "ScriptModuleLoaderV8.h"
 #include "ScriptModuleMapV8.h"
 #include "ScriptValueIteratorV8Wrapper.h"
@@ -107,16 +108,7 @@ ScriptValue ScriptEngineV8::makeError(const ScriptValue& _other, const QString& 
         other = newObject();
         other.setProperty("message", _other.toString());
     }
-    auto proto = globalObject().property(type);
-    if (!proto.isFunction()) {
-        proto = globalObject().property(other.prototype().property("constructor").property("name").toString());
-    }
-    if (!proto.isFunction()) {
-#ifdef DEBUG_JS_EXCEPTIONS
-        qCDebug(shared) << "BaseScriptEngine::makeError -- couldn't find constructor for" << type << " -- using Error instead";
-#endif
-        proto = globalObject().property("Error");
-    }
+    auto proto = ScriptErrorConstructorsV8::find(this, type, other);
     if (other.engine().get() != this) {
         // JS Objects are parented to a specific script engine instance
         // -- this effectively ~clones it locally by routing through a QVariant and back
@@ -146,7 +138,7 @@ ScriptValue ScriptEngineV8::checkScriptSyntax(ScriptProgramPointer program) {
     v8::Context::Scope contextScope(getContext());
     ScriptSyntaxCheckResultPointer syntaxCheck = program->checkSyntax();
     if (syntaxCheck->state() != ScriptSyntaxCheckResult::Valid) {
-        auto err = globalObject().property("SyntaxError").construct(ScriptValueList({ newValue(syntaxCheck->errorMessage()) }));
+        auto err = ScriptErrorConstructorsV8::find(this, "SyntaxError", nullValue()).construct(ScriptValueList({ newValue(syntaxCheck->errorMessage()) }));
         err.setProperty("fileName", program->fileName());
         err.setProperty("lineNumber", syntaxCheck->errorLineNumber());
         err.setProperty("expressionBeginOffset", syntaxCheck->errorColumnNumber());
@@ -241,6 +233,7 @@ ScriptEngineV8::ScriptEngineV8(ScriptManager *manager) : ScriptEngine(manager), 
         v8::HandleScope handleScope(_v8Isolate);
         v8::Local<v8::Context> context = v8::Context::New(_v8Isolate);
         Q_ASSERT(!context.IsEmpty());
+        ScriptErrorConstructorsV8::capture(_v8Isolate, context);
         v8::Context::Scope contextScope(context);
         _contexts.append(std::make_shared<ScriptContextV8Wrapper>(this,context, ScriptContextPointer()));
         initEnvironments(context);
@@ -614,9 +607,8 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
             return nullValue();
         }
     }
-    v8::Local<v8::Context> closureContext;
-
-    closureContext = v8::Context::New(_v8Isolate);
+    v8::Local<v8::Context> closureContext = v8::Context::New(_v8Isolate);
+    ScriptErrorConstructorsV8::capture(_v8Isolate, closureContext);
     pushContext(closureContext);
 
     ScriptValue result;

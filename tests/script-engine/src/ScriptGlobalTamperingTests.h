@@ -20,6 +20,7 @@ class ScriptGlobalTamperingTests : public QObject {
 private slots:
     void initTestCase();
     void testThrowingGlobalGetterBeforeRequire();
+    void testReplacedTypeErrorConstructor();
 };
 
 #endif // overte_ScriptGlobalTamperingTests_h
