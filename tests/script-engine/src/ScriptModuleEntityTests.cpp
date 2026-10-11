@@ -432,20 +432,24 @@ void ScriptModuleEntityTests::testRejectedAsyncMethodReported() {
 
 void ScriptModuleEntityTests::testTimerAfterAwaitClearedOnUnload() {
     // A timer the entity's preload sets after an await carries the entity, so unloading it stops the timer. If it did
-    // not, the timer would fire before the one that ends the script, which is set later.
+    // not, the timer would fire before the one that ends the script, which is set later. The await is on a promise the
+    // test script settles, so only the environment the await carries says whose continuation it is.
     std::unique_ptr<EntityModuleProbe> probe;
     QTemporaryDir dir;
     auto run = runEntities(dir, {
         { "main.mjs",
+          "let go;\n"
+          "globalThis.go = new Promise(function(resolve) { go = resolve; });\n"
           "const timerSet = new Promise(function(resolve) { globalThis.timerSet = resolve; });\n"
           "await Probe.load('@A', '@/entity.mjs', false);\n"
+          "go();\n"
           "await timerSet;\n"
           "Probe.unload('@A', '@/entity.mjs');\n"
           "Script.setTimeout(function() { print('end'); Script.stop(true); }, 0);\n" },
         { "entity.mjs",
           "export default class {\n"
           "    async preload(id) {\n"
-          "        await new Promise(function(resolve) { Script.setTimeout(resolve, 0); });\n"
+          "        await globalThis.go;\n"
           "        Script.setTimeout(function() { print('entity timer fired'); }, 0);\n"
           "        globalThis.timerSet();\n"
           "    }\n"
