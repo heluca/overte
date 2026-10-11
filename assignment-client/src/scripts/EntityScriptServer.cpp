@@ -140,9 +140,8 @@ void EntityScriptServer::handleEntityScriptGetStatusPacket(QSharedPointer<Receiv
             return;
         }
 
-        EntityScriptStatus status;
+        EntityScriptStatus status { EntityScriptStatus::PENDING };
         QString errorInfo;
-        // Not getEntityScriptDetails(): copying the details copies the script object, which only the script thread may do
         if (_entitiesScriptManager->getEntityScriptStatus(entityID, entity->getServerScripts(), status, errorInfo)) {
             replyPacketList->writePrimitive(true);
             replyPacketList->writePrimitive(status);

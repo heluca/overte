@@ -1203,16 +1203,16 @@ public:
     bool hasEntityScriptDetails(const EntityItemID& entityID, const QString& scriptURL) const;
 
     /**
-     * @brief Retrieves the status and error information of an entity script
+     * @brief Get the status and error information of an entity script, from any thread
      *
-     * Unlike getEntityScriptDetails(), it does not copy the script object, so any thread may call it.
+     * Unlike getEntityScriptDetails(), this does not copy the script object, which only the script thread may do.
      *
      * @param entityID Entity ID
      * @param scriptURL Script URL
-     * @param status Returned status
-     * @param errorInfo Returned error information
-     * @return true If the entity ID was found
-     * @return false If the entity ID wasn't found. status and errorInfo will be unmodified.
+     * @param status Status of the script
+     * @param errorInfo Error information of the script
+     * @return true If there are script details for the entity
+     * @return false If there are none. status and errorInfo will be unmodified.
      */
     bool getEntityScriptStatus(const EntityItemID& entityID, const QString& scriptURL, EntityScriptStatus& status,
                                QString& errorInfo) const;

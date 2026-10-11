@@ -2105,25 +2105,16 @@ QVariant ScriptManager::cloneEntityScriptDetails(const EntityItemID& entityID, c
 #ifdef DEBUG_ENTITY_STATES
         qCDebug(scriptengine) << "cloneEntityScriptDetails" << entityID << QThread::currentThread();
 #endif
-        EntityScriptDetails scriptDetails;
-        if (getEntityScriptDetails(entityID, scriptURL, scriptDetails)) {
+        EntityScriptStatus status { EntityScriptStatus::PENDING };
+        QString errorInfo;
+        if (getEntityScriptStatus(entityID, scriptURL, status, errorInfo)) {
 #ifdef DEBUG_ENTITY_STATES
-            qCDebug(scriptengine) << "gotEntityScriptDetails" << scriptDetails.status << QThread::currentThread();
+            qCDebug(scriptengine) << "gotEntityScriptDetails" << status << QThread::currentThread();
 #endif
             map["isRunning"] = isEntityScriptRunning(entityID, scriptURL);
-            map["status"] = EntityScriptStatus_::valueToKey(scriptDetails.status).toLower();
-            map["errorInfo"] = scriptDetails.errorInfo;
+            map["status"] = EntityScriptStatus_::valueToKey(status).toLower();
+            map["errorInfo"] = errorInfo;
             map["entityID"] = entityID.toString();
-#ifdef DEBUG_ENTITY_STATES
-            {
-                auto debug = QVariantMap();
-                debug["script"] = scriptDetails.scriptText;
-                debug["scriptObject"] = scriptDetails.scriptObject.toVariant();
-                debug["lastModified"] = (qlonglong)scriptDetails.lastModified;
-                debug["sandboxURL"] = scriptDetails.definingSandboxURL;
-                map["debug"] = debug;
-            }
-#endif
         } else {
 #ifdef DEBUG_ENTITY_STATES
             qCDebug(scriptengine) << "!gotEntityScriptDetails" <<  QThread::currentThread();
@@ -2163,22 +2154,6 @@ bool ScriptManager::hasEntityScriptDetails(const EntityItemID& entityID, const Q
     return it.value().contains(scriptURL);
 }
 
-bool ScriptManager::getEntityScriptStatus(const EntityItemID& entityID, const QString& scriptURL, EntityScriptStatus& status,
-                                          QString& errorInfo) const {
-    QReadLocker locker { &_entityScriptsLock };
-    auto it = _entityScripts.constFind(entityID);
-    if (it == _entityScripts.constEnd()) {
-        return false;
-    }
-    auto it2 = it.value().constFind(scriptURL);
-    if (it2 == it.value().constEnd()) {
-        return false;
-    }
-    status = it2.value().status;
-    errorInfo = it2.value().errorInfo;
-    return true;
-}
-
 void ScriptManager::loadEntityScript(const EntityItemID& entityID, const QString& entityScript, bool forceRedownload) {
     if (QThread::currentThread() != thread()) {
         // Lambda is necessary there to keep shared_ptr counter above zero
@@ -2193,7 +2168,7 @@ void ScriptManager::loadEntityScript(const EntityItemID& entityID, const QString
     if (isStopping() || !scriptEngines || scriptEngines->isStopped()) {
         qCDebug(scriptengine) << "loadEntityScript.start " << entityID.toString()
                                      << " but isStopping==" << isStopping()
-                                     << " || engines->isStopped==" << scriptEngines->isStopped();
+                                     << " || engines->isStopped==" << (scriptEngines && scriptEngines->isStopped());
         return;
     }
 

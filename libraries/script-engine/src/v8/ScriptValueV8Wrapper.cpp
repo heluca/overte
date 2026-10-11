@@ -576,7 +576,7 @@ QString ScriptValueV8Wrapper::toString() const {
     v8::Context::Scope contextScope(_engine->getContext());
     v8::String::Utf8Value string(_engine->getIsolate(), _value.constGet());
     Q_ASSERT(*string != nullptr);
-    return QString(*string);
+    return QString::fromUtf8(*string, string.length());
 }
 
 quint16 ScriptValueV8Wrapper::toUInt16() const {
