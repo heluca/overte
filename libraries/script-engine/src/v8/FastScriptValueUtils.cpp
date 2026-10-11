@@ -11,6 +11,8 @@
 
 #include "FastScriptValueUtils.h"
 
+#include <limits>
+
 #include <qcolor.h>
 
 #include "../ScriptEngine.h"
@@ -54,8 +56,14 @@ bool qBytearrayFromScriptValue(const ScriptValue& object, QByteArray &qByteArray
         return false;
     }
     v8::Local<v8::ArrayBuffer> arrayBuffer = v8::Local<v8::ArrayBuffer>::Cast(v8Value);
-    qByteArray.resize((int)arrayBuffer->ByteLength());
-    memcpy(qByteArray.data(), arrayBuffer->Data(), arrayBuffer->ByteLength());
+    size_t byteLength = arrayBuffer->ByteLength();
+    if (byteLength > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        isolate->ThrowException(v8::Exception::RangeError(v8::String::NewFromUtf8Literal(isolate,
+            "ArrayBuffer is too large to convert to a QByteArray")));
+        return false;
+    }
+    qByteArray.resize(static_cast<int>(byteLength));
+    memcpy(qByteArray.data(), arrayBuffer->Data(), byteLength);
     return true;
 }
 

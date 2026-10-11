@@ -28,6 +28,10 @@ public:
     Q_INVOKABLE int valueLength(const ScriptValue& value) { return value.toString().length(); }
     Q_INVOKABLE QString withNul() const { return nulText; }
     Q_INVOKABLE QByteArray bytesWithNul() const { return QByteArray("x\0y", 3); }
+    Q_INVOKABLE QByteArray echoBytes(const QByteArray& bytes) {
+        lengths.append(bytes.size());
+        return bytes;
+    }
 
     QString nulText;
     QList<int> lengths;
@@ -40,6 +44,7 @@ private slots:
     void testScriptStringWithNulRoundTrip();
     void testCppStringWithNulReachesScript();
     void testCppByteArrayWithNulReachesScript();
+    void testArrayBufferRoundTrip();
 };
 
 #endif // overte_ScriptStringTests_h
