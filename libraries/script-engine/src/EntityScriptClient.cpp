@@ -30,7 +30,7 @@ void GetScriptStatusRequest::start() {
         _responseReceived = false;
         _isRunning = false;
         _status = EntityScriptStatus::ERROR_LOADING_SCRIPT;
-        _errorInfo = "";
+        _errorInfo = "entity script client unavailable";
         emit finished(this);
         return;
     }

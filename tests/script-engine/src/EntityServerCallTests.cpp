@@ -165,5 +165,8 @@ void EntityServerCallTests::testClientDestroyedBeforeQueuedStart() {
 
     QVERIFY(!run.timedOut);
     QCOMPARE(run.errors, QStringList());
-    QCOMPARE(run.printed, QStringList({ "client destroyed", "status callback false false error_loading_script []" }));
+    // Without the guard in start(), the null client happens to fail the same way while there is no entity script server
+    // node, so the error information is what tells the guarded path apart
+    QCOMPARE(run.printed, QStringList({ "client destroyed",
+                                        "status callback false false error_loading_script [entity script client unavailable]" }));
 }
