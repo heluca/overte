@@ -1203,6 +1203,21 @@ public:
     bool hasEntityScriptDetails(const EntityItemID& entityID, const QString& scriptURL) const;
 
     /**
+     * @brief Retrieves the status and error information of an entity script
+     *
+     * Unlike getEntityScriptDetails(), it does not copy the script object, so any thread may call it.
+     *
+     * @param entityID Entity ID
+     * @param scriptURL Script URL
+     * @param status Returned status
+     * @param errorInfo Returned error information
+     * @return true If the entity ID was found
+     * @return false If the entity ID wasn't found. status and errorInfo will be unmodified.
+     */
+    bool getEntityScriptStatus(const EntityItemID& entityID, const QString& scriptURL, EntityScriptStatus& status,
+                               QString& errorInfo) const;
+
+    /**
      * @brief Set a shared pointer to the ScriptEngines class
      *
      * This is used to ask ScriptEngines whether the system is being stopped.
