@@ -24,3 +24,11 @@ if (readBack.type === "Box") {
 
 // Edits need no type.
 Entities.editEntity(cloneSource, { alpha: 0.5 });
+
+// Script.remoteCallerID is a Uuid string while a remotely callable method runs, undefined otherwise.
+function remotelyCallable(): void {
+    const caller: string | undefined = Script.remoteCallerID;
+    if (caller !== undefined) {
+        print(caller);
+    }
+}

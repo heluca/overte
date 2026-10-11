@@ -39,3 +39,6 @@ Script.clearTimeout({});
 
 // @ts-expect-error Vec3 needs all three components.
 Vec3.distance({ x: 1, y: 2 }, Vec3.ZERO);
+
+// @ts-expect-error Script.remoteCallerID is read-only; only the engine sets it.
+Script.remoteCallerID = "caller-id";
