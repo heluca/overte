@@ -28,6 +28,10 @@ public:
     Q_INVOKABLE QStringList loadedURLs() const;
     // ScriptManager::currentSandboxURL()
     Q_INVOKABLE QString sandboxURL() const;
+    Q_INVOKABLE void emitPing() { emit ping(); }
+
+signals:
+    void ping();
 
 private:
     ScriptManager* _manager;
@@ -45,6 +49,12 @@ private slots:
     void testCommonJsRequiresSibling();
     void testCommonJsThrows();
     void testDynamicCommonJsFailures();
+    void testStaticCommonJsSyntaxError();
+    void testStaticCommonJsThrowsValue();
+    void testThrowSiteInRequiredFile();
+    void testFailedImportThenRequire();
+    void testImportFromCommonJsBody();
+    void testRequireSyntaxErrorKeepsUncaughtReporting();
     void testJsonImport();
     void testJsonImportWithoutAttribute();
     void testInvalidJson();

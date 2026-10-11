@@ -176,6 +176,132 @@ void ScriptModuleInteropTests::testDynamicCommonJsFailures() {
     QCOMPARE(run.printed[3], QString("cache null"));
 }
 
+void ScriptModuleInteropTests::testStaticCommonJsSyntaxError() {
+    // The SyntaxError is made in C++, with no stack: the report still names the CommonJS file and line
+    QTemporaryDir dir;
+    auto run = runScript(dir, {
+        { "main.mjs", "import './syntax.js';\nprint('must not run');\n" },
+        { "syntax.js", "\nmodule.exports = ;\n" },
+    });
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.printed, QStringList());
+    QCOMPARE(run.errors.length(), 1);
+    QString site = urlOf(dir, "syntax.js") + ":2";
+    QVERIFY2(run.errors[0].startsWith("Error while evaluating module " + site + ": SyntaxError: Error while compiling "
+                                      "CommonJS module " + site + ": "),
+             qUtf8Printable(run.errors[0]));
+    QVERIFY2(!run.errors[0].contains("no location"), qUtf8Printable(run.errors[0]));
+    QVERIFY(run.uncaughtException);
+    QCOMPARE(run.uncaughtException->errorLine, 2);
+}
+
+void ScriptModuleInteropTests::testStaticCommonJsThrowsValue() {
+    QTemporaryDir dir;
+    auto run = runScript(dir, {
+        { "main.mjs", "import './value.js';\nprint('must not run');\n" },
+        { "value.js", "\n\nthrow 'plain';\n" },
+    });
+    QVERIFY(!run.timedOut);
+    QString site = urlOf(dir, "value.js") + ":3";
+    QCOMPARE(run.errors, QStringList({ "Error while evaluating module " + site + ": Error: CommonJS module " + site +
+                                       " threw plain" }));
+    QVERIFY(run.uncaughtException);
+    QCOMPARE(run.uncaughtException->errorLine, 3);
+}
+
+void ScriptModuleInteropTests::testThrowSiteInRequiredFile() {
+    // A non-Error thrown by a file the imported one require()d is reported at the throw site, not at the imported file
+    QTemporaryDir dir;
+    auto run = runScript(dir, {
+        { "main.mjs", "import './outer.js';\nprint('must not run');\n" },
+        { "outer.js", "require('./helper.js').fail();\n" },
+        { "helper.js", "exports.fail = function() {\n\n\n\n    throw 'x';\n};\n" },
+    });
+    QVERIFY(!run.timedOut);
+    QString site = urlOf(dir, "helper.js") + ":5";
+    QCOMPARE(run.errors, QStringList({ "Error while evaluating module " + site + ": Error: CommonJS module " + site +
+                                       " threw x" }));
+    QVERIFY(run.uncaughtException);
+    QCOMPARE(run.uncaughtException->errorLine, 5);
+}
+
+void ScriptModuleInteropTests::testFailedImportThenRequire() {
+    // A second import() rejects with the same value without evaluating again. The failed file is not cached, so a
+    // later Script.require evaluates it again, with Script.require's own behaviour: reported, partial exports returned.
+    QTemporaryDir dir;
+    auto run = runScript(dir, {
+        { "main.mjs",
+          "let first;\n"
+          "try { await import('./bad.js'); } catch (error) { first = error; }\n"
+          "try { await import('./bad.js'); } catch (error) { print('second import same error ' + (error === first)); }\n"
+          "const exports = Script.require('./bad.js');\n"
+          "print('require returned ' + JSON.stringify(exports));\n"
+          "Script.stop(true);\n" },
+        { "bad.js", "print('bad evaluating');\nthrow new Error('cjs boom');\n" },
+    });
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.printed, QStringList({ "bad evaluating", "second import same error true", "bad evaluating",
+                                        "require returned {}" }));
+    QCOMPARE(run.errors.length(), 1);
+    QVERIFY2(run.errors[0].contains("cjs boom"), qUtf8Printable(run.errors[0]));
+}
+
+void ScriptModuleInteropTests::testImportFromCommonJsBody() {
+    // import() in a CommonJS file's own body, while the graph that imports the file is evaluating: it resolves against
+    // the CommonJS file and is started from the event loop
+    QTemporaryDir dir;
+    auto run = runScript(dir, {
+        { "main.mjs",
+          "import lib from './sub/lib.js';\n"
+          "print('main body');\n"
+          "const ns = await lib.loaded;\n"
+          "print('imported ' + ns.where);\n"
+          "Script.stop(true);\n" },
+        { "sub/lib.js", "module.exports = { loaded: import('./m.mjs') };\n" },
+        { "sub/m.mjs", "print('m body');\nexport const where = import.meta.url;\n" },
+    });
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "main body", "m body", "imported " + urlOf(dir, "sub/m.mjs") }));
+}
+
+void ScriptModuleInteropTests::testRequireSyntaxErrorKeepsUncaughtReporting() {
+    // Regression: a Script.require of a file with a syntax error left the engine counted as evaluating, so run() no
+    // longer reported and cleared later uncaught exceptions; this one would still be set when the script stops
+    std::unique_ptr<InteropProbe> probe;
+    QStringList unhandled;
+    bool evaluatingAfterRun = true;
+    QTemporaryDir dir;
+    Options options = withProbe(probe);
+    auto addProbe = options.beforeRun;
+    options.abortOnUncaughtException = false;
+    options.beforeRun = [addProbe, &unhandled](ScriptManager* manager) {
+        addProbe(manager);
+        QObject::connect(manager, &ScriptManager::unhandledException, [&unhandled](std::shared_ptr<ScriptException> exception) {
+            unhandled.append(exception ? exception->errorMessage : QString());
+        });
+    };
+    options.afterRun = [&evaluatingAfterRun](ScriptManager* manager) {
+        evaluatingAfterRun = manager->engine()->isEvaluating();
+    };
+    auto run = runScript(dir, {
+        { "classic.js",
+          "Script.require('./syntax.js');\n"
+          "Probe.ping.connect(function() { throw new Error('later'); });\n"
+          "Script.setTimeout(function() { Probe.emitPing(); }, 0);\n"
+          "Script.setTimeout(function() { Script.stop(true); }, 50);\n" },
+        { "syntax.js", "module.exports = ;\n" },
+    }, options);
+    QVERIFY(!run.timedOut);
+    // The signal proxy also reports the handler's throw as an error message
+    QCOMPARE(run.errors.length(), 2);
+    QVERIFY2(run.errors[0].startsWith("Can't compile script for evaluating in closure"), qUtf8Printable(run.errors[0]));
+    QVERIFY2(run.errors[1].contains("Error: later"), qUtf8Printable(run.errors[1]));
+    QVERIFY2(!unhandled.filter("later").isEmpty(), qUtf8Printable(unhandled.join(" | ")));
+    QVERIFY2(!run.uncaughtException, run.uncaughtException ? qUtf8Printable(run.uncaughtException->errorMessage) : "");
+    QVERIFY(!evaluatingAfterRun);
+}
+
 void ScriptModuleInteropTests::testJsonImport() {
     QTemporaryDir dir;
     auto run = runScript(dir, {
@@ -244,15 +370,21 @@ void ScriptModuleInteropTests::testUnsupportedAttributes() {
     QTemporaryDir dynamicDir;
     auto dynamic = runScript(dynamicDir, {
         { "main.mjs",
-          "import('./style.css', { with: { type: 'css' } }).catch(function(error) {\n"
-          "    print(error.name + ': ' + error.message);\n"
-          "    Script.stop(true);\n"
-          "});\n" },
+          "for (const options of [{ with: { type: 'json', mode: 'strict' } }, { with: { type: 'css' } }]) {\n"
+          "    try {\n"
+          "        await import('./data.json', options);\n"
+          "    } catch (error) {\n"
+          "        print(error.name + ': ' + error.message);\n"
+          "    }\n"
+          "}\n"
+          "Script.stop(true);\n" },
+        { "data.json", "{}\n" },
     });
     QVERIFY(!dynamic.timedOut);
     QCOMPARE(dynamic.errors, QStringList());
-    QCOMPARE(dynamic.printed, QStringList({ "TypeError: Cannot import './style.css' from " + urlOf(dynamicDir, "main.mjs") +
-                                            ":1: unsupported import type 'css'; only type: 'json' is supported" }));
+    QString where = "TypeError: Cannot import './data.json' from " + urlOf(dynamicDir, "main.mjs") + ":3: ";
+    QCOMPARE(dynamic.printed, QStringList({ where + "unsupported import attribute 'mode'; only type: 'json' is supported",
+                                            where + "unsupported import type 'css'; only type: 'json' is supported" }));
 }
 
 void ScriptModuleInteropTests::testIncludeOfModuleRefused() {
@@ -322,16 +454,23 @@ void ScriptModuleInteropTests::testEnvironmentRecordsCommonJs() {
           "import data from './data.json' with { type: 'json' };\n"
           "print('lib sandbox ' + lib.sandbox);\n"
           "print('loaded ' + Probe.loadedURLs().join(' '));\n"
+          "await import('./later.js');\n"
+          "await import('./later.json', { with: { type: 'json' } });\n"
+          "print('loaded ' + Probe.loadedURLs().join(' '));\n"
           "Script.stop(true);\n" },
         { "lib.js", "var helper = require('./helper.js');\nmodule.exports = { sandbox: Probe.sandboxURL() };\n" },
         { "helper.js", "module.exports = {};\n" },
         { "data.json", "{}\n" },
+        { "later.js", "module.exports = {};\n" },
+        { "later.json", "{}\n" },
     }, withProbe(probe));
     QVERIFY(!run.timedOut);
     QCOMPARE(run.errors, QStringList());
-    QCOMPARE(run.printed, QStringList({ "lib sandbox " + urlOf(dir, "main.mjs"),
-                                        "loaded " + QStringList({ urlOf(dir, "data.json"), urlOf(dir, "lib.js"),
-                                                                  urlOf(dir, "main.mjs") }).join(' ') }));
+    QStringList statically({ urlOf(dir, "data.json"), urlOf(dir, "lib.js"), urlOf(dir, "main.mjs") });
+    QStringList dynamically({ urlOf(dir, "data.json"), urlOf(dir, "later.js"), urlOf(dir, "later.json"),
+                              urlOf(dir, "lib.js"), urlOf(dir, "main.mjs") });
+    QCOMPARE(run.printed, QStringList({ "lib sandbox " + urlOf(dir, "main.mjs"), "loaded " + statically.join(' '),
+                                        "loaded " + dynamically.join(' ') }));
 }
 
 void ScriptModuleInteropTests::testCommonJsImportDoesNotBlock() {
