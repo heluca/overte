@@ -330,7 +330,7 @@ class Emitter {
         lines.push(indent + "interface " + name + " {");
         buildTree(container.properties || []).forEach(node => this.propertyLines(node,
             { bag: false, indent: inner, readonlyProperties: true }, lines));
-        this.resolveMembers(container).forEach(member => {
+        this.resolveMembers(container).filter(member => !member.hifiStatic).forEach(member => {
             lines.push(...docComment(member, inner));
             if (member.kind === "signal") {
                 lines.push(inner + "readonly " + propertyKey(member.name) + ": " + this.signalType(member) + ";");
@@ -428,6 +428,11 @@ class Emitter {
         const lines = docComment(container, "");
         lines.push("declare var " + name + ": {");
         this.paramLists(container.params, true).forEach(params => lines.push("    new (" + params + "): " + name + ";"));
+        container.members.filter(member => member.hifiStatic).forEach(member => {
+            lines.push(...docComment(member, "    "));
+            this.overloads(member).forEach(([params, returns]) =>
+                lines.push("    " + propertyKey(member.name) + "(" + params + "): " + returns + ";"));
+        });
         lines.push("    prototype: " + name + ";", "};", "");
         return lines;
     }
