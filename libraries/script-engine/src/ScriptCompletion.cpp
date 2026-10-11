@@ -102,7 +102,10 @@ void ScriptCompletion::complete(const QString& error, const ScriptValue& result)
             auto properties = result.newIterator();
             while (properties->hasNext()) {
                 properties->next();
-                reason.setProperty(properties->name(), properties->value());
+                QString name = properties->name();
+                if (name != "message" && name != "name" && name != "stack") {
+                    reason.setProperty(name, properties->value());
+                }
             }
         }
         settle(false, reason);

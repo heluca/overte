@@ -65,8 +65,8 @@ public:
 
     /**
      * @brief Completes an error-first call: the callback gets <code>(error or null, result)</code>; the promise rejects
-     * with an <code>Error</code> carrying the message and the result's own properties when the error is not empty,
-     * otherwise resolves with the result.
+     * with an <code>Error</code> carrying the message and the result's own properties (but not <code>message</code>,
+     * <code>name</code> or <code>stack</code>) when the error is not empty, otherwise resolves with the result.
      */
     void complete(const QString& error, const ScriptValue& result) const;
     // The result converted with ScriptEngine::toScriptValue(), as the callback APIs always have
