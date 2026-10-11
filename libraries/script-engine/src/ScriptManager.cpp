@@ -1754,6 +1754,12 @@ ScriptValue ScriptManager::require(const QString& moduleId) {
         // the resolver already threw an exception -- bail early
         return _engine->nullValue();
     }
+    if (isModuleURL(QUrl(modulePath))) {
+        // As Node's ERR_REQUIRE_ESM: require() is synchronous, and a module graph may wait in a top-level await
+        throwTypeError(_engine->currentContext(), _engine.get(),
+                       "Script.require cannot load an ES module (" + modulePath + "); use import()");
+        return _engine->nullValue();
+    }
 
     // check the resolved path against the cache
     auto module = cache.property(modulePath);
@@ -1872,6 +1878,11 @@ void ScriptManager::include(const QStringList& includeFiles, const ScriptValue& 
             isStandardLibrary = true;
         } else {
             thisURL = resolvePath(file);
+        }
+        if (isModuleURL(thisURL)) {
+            throwTypeError(_engine->currentContext(), _engine.get(),
+                           "Script.include cannot load an ES module (" + thisURL.toString() + "); use import()");
+            return;
         }
 
         bool disallowOutsideFiles = thisURL.isLocalFile() && !isStandardLibrary && !currentSandboxURL().isLocalFile();
