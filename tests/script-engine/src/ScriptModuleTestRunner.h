@@ -12,6 +12,7 @@
 #ifndef overte_ScriptModuleTestRunner_h
 #define overte_ScriptModuleTestRunner_h
 
+#include <functional>
 #include <memory>
 
 #include <QDir>
@@ -66,6 +67,8 @@ struct ModuleTestOptions {
     // Files fetched into ScriptCache before the script runs, so that loading them is a cache hit, which ScriptCache
     // answers synchronously
     QStringList cachedFiles;
+    // Called with the manager just before it runs, e.g. to add globals
+    std::function<void(ScriptManager*)> beforeRun;
 };
 
 inline QString urlOf(const QTemporaryDir& dir, const QString& path) {
@@ -125,6 +128,9 @@ inline ModuleTestRun runScript(const QTemporaryDir& dir, const QList<QPair<QStri
         stopper.start(options.stopAfterMs);
     }
 
+    if (options.beforeRun) {
+        options.beforeRun(sm.get());
+    }
     sm->run();
     if (options.waitAfterRunMs > 0) {
         QTest::qWait(options.waitAfterRunMs);

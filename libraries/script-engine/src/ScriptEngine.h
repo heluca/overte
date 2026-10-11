@@ -38,9 +38,11 @@ class QThread;
 class QVariant;
 class ScriptContext;
 class ScriptEngine;
+class ScriptEnvironment;
 class ScriptManager;
 class ScriptProgram;
 using ScriptEnginePointer = std::shared_ptr<ScriptEngine>;
+using ScriptEnvironmentPointer = std::shared_ptr<ScriptEnvironment>;
 using ScriptProgramPointer = std::shared_ptr<ScriptProgram>;
 
 Q_DECLARE_METATYPE(ScriptEnginePointer);
@@ -65,6 +67,9 @@ struct ScriptModuleRequest {
     int epoch { 0 };
     /// Bypass ScriptCache for every module of the graph, not only the entry
     bool forceDownload { false };
+    /// Environment the graph is evaluated in, and that its URLs are recorded in; null for a new one made from
+    /// sandboxURL and epoch, with no entity
+    ScriptEnvironmentPointer environment;
 };
 
 /// Called once per ScriptEngine::loadModule, on the engine's thread, when the graph's evaluation has settled: after
@@ -512,6 +517,18 @@ public:
     virtual void queueMicrotask(const ScriptValue& callback) = 0;
 
     /**
+     * @brief The environment of the ES module code that is running, see ScriptEnvironment; null in classic script code.
+     * Promise continuations run in the environment that was current where they were created (<code>then</code>,
+     * <code>await</code>).
+     */
+    virtual ScriptEnvironmentPointer currentEnvironment() = 0;
+
+    /**
+     * @brief Makes an environment current, or none for null, and returns the one that was. See ScriptEnvironmentScope.
+     */
+    virtual ScriptEnvironmentPointer swapCurrentEnvironment(const ScriptEnvironmentPointer& environment) = 0;
+
+    /**
      * @brief Test the underlying scripting engine
      *
      * This compiles, executes and verifies the execution of a trivial test program
@@ -585,7 +602,10 @@ public: // not for public use, but I don't like how Qt strings this along with p
     virtual ScriptValue create(int type, const void* ptr) = 0;
     virtual QVariant convert(const ScriptValue& value, int type) = 0;
     virtual void registerCustomType(int type, MarshalFunction mf, DemarshalFunction df) = 0;
-    virtual QStringList getCurrentScriptURLs() const = 0;
+    /// Names the scripts on the stack were compiled with (not sourceURL directives), innermost first; empty for a
+    /// frame without one. Empty when native code was called with no script frame on the stack. Frames of other contexts
+    /// (Script.require modules run in contexts of their own) are hidden by V8 unless includeOtherContexts is set.
+    virtual QStringList getCurrentScriptURLs(bool includeOtherContexts = false) const = 0;
     virtual void perManagerLoopIterationCleanup() = 0;
 
 signals:

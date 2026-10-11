@@ -19,6 +19,7 @@
 #include <QtCore/QStringList>
 #include <QtCore/QThread>
 
+#include "../ScriptEnvironment.h"
 #include "../ScriptManager.h"
 #include "../ScriptModuleResolver.h"
 #include "ScriptContextV8Wrapper.h"
@@ -76,19 +77,34 @@ v8::MaybeLocal<v8::Promise> ScriptModuleLoaderV8::importModuleDynamically(v8::Lo
     if (stack->GetFrameCount() > 0) {
         site.line = stack->GetFrame(isolate, 0)->GetLineNumber();
     }
-    // The same sandbox as a top-level module's imports. Entity scripts get theirs with the environment (#10 slice 3).
-    QUrl sandboxURL = manager ? QUrl(manager->getAbsoluteFilename()) : QUrl();
+    // From module code, the caller's environment: its sandbox and epoch, and it records what the import loads. From
+    // classic code, a new one for the imported graph, with the script's entity and sandbox (an entity script's URL, or
+    // the manager's own as for a top-level module's imports), recording the importer too.
+    ScriptEnvironmentPointer environment = engine->currentEnvironment();
+    if (!environment) {
+        EntityItemID entityID = manager ? manager->currentEntityIdentifier() : EntityItemID();
+        QUrl classicSandboxURL = manager ? manager->currentSandboxURL() : QUrl();
+        if (classicSandboxURL.isEmpty() && manager) {
+            classicSandboxURL = QUrl(manager->getAbsoluteFilename());
+        }
+        // Epoch 0 until entity scripts (#11) carry theirs in the ScriptOrigin's host-defined options
+        environment = std::make_shared<ScriptEnvironment>(entityID, classicSandboxURL, 0);
+        environment->noteLoaded(site.importer);
+    }
+    QUrl sandboxURL = environment->sandboxURL;
 
     ScriptPromise promise = engine->newPromise();
-    QString error;
-    QUrl url = resolveImport(site, importAttributes->Length() > 0, sandboxURL, &error);
+    QString error = MODULES_UNAVAILABLE;
+    QUrl url = engine->isEnvironmentCarriedAcrossAwait()
+        ? resolveImport(site, importAttributes->Length() > 0, sandboxURL, &error) : QUrl();
     if (url.isEmpty()) {
         V8ScriptValue reason(engine, v8::Exception::TypeError(toV8String(isolate, error)));
         promise.resolver->reject(ScriptValue(new ScriptValueV8Wrapper(engine, std::move(reason))));
     } else {
-        // Epoch 0 until entity scripts (#11) carry theirs in the ScriptOrigin's host-defined options. The start is
-        // queued so that nothing is evaluated inside this callback, even when the whole graph is loaded already.
-        auto loader = new ScriptModuleLoaderV8(engine, { url, QString(), sandboxURL, 0, false }, promise.resolver, site);
+        // The start is queued so that nothing is evaluated inside this callback, even when the whole graph is loaded
+        // already.
+        auto loader = new ScriptModuleLoaderV8(engine, { url, QString(), sandboxURL, environment->epoch, false, environment },
+                                               promise.resolver, site);
         QMetaObject::invokeMethod(loader, "start", Qt::QueuedConnection);
     }
     return ScriptValueV8Wrapper::fullUnwrap(engine, promise.promise).get().As<v8::Promise>();

@@ -56,6 +56,7 @@
 #include "ScriptPromiseV8.h"
 #include "ScriptValueV8Wrapper.h"
 #include "ScriptEngineLoggingV8.h"
+#include "ScriptEnvironmentV8.h"
 #include "ScriptModuleLoaderV8.h"
 #include "ScriptModuleMapV8.h"
 #include "ScriptValueIteratorV8Wrapper.h"
@@ -241,6 +242,7 @@ ScriptEngineV8::ScriptEngineV8(ScriptManager *manager) : ScriptEngine(manager), 
         Q_ASSERT(!context.IsEmpty());
         v8::Context::Scope contextScope(context);
         _contexts.append(std::make_shared<ScriptContextV8Wrapper>(this,context, ScriptContextPointer()));
+        initEnvironments(context);
 
         V8ScriptValue nullScriptValue(this, v8::Null(_v8Isolate));
         _nullValue = ScriptValue(new ScriptValueV8Wrapper(this, nullScriptValue));
@@ -289,6 +291,7 @@ ScriptEngineV8::~ScriptEngineV8() {
     _deferredUntilScriptReturns.clear();
     qDeleteAll(findChildren<ScriptModuleLoaderV8*>(QString(), Qt::FindDirectChildrenOnly));
     _modules.reset();
+    _environments.reset();
     _contexts.clear();
     _nullValue = ScriptValue();
     _undefinedValue = ScriptValue();
@@ -1443,7 +1446,11 @@ void ScriptEngineV8::performMicrotaskCheckpoint() {
     }
     // Held across the checkpoint so that entries made by the microtasks themselves don't start a nested one.
     _scriptEntryDepth++;
+    v8::HandleScope handleScope(_v8Isolate);
+    // Each microtask runs in the environment it captured and leaves none behind; the caller's own is put back
+    v8::Local<v8::Value> environment = _v8Isolate->GetContinuationPreservedEmbedderData();
     _v8Isolate->PerformMicrotaskCheckpoint();
+    _v8Isolate->SetContinuationPreservedEmbedderData(environment);
     reportPendingPromiseRejections();
     _scriptEntryDepth--;
     postDeferredUntilScriptReturns();
@@ -1642,17 +1649,22 @@ void ScriptEngineV8::logBacktrace(const QString &title) {
     }
 }
 
-QStringList ScriptEngineV8::getCurrentScriptURLs() const {
+QStringList ScriptEngineV8::getCurrentScriptURLs(bool includeOtherContexts) const {
     auto isolate = _v8Isolate;
     Q_ASSERT(isolate->IsCurrent());
     v8::HandleScope handleScope(isolate);
     v8::Context::Scope contextScope(_v8Isolate->GetCurrentContext());
-    v8::Local<v8::StackTrace> stackTrace = v8::StackTrace::CurrentStackTrace(isolate, 100);
+    auto options = includeOtherContexts
+        ? static_cast<v8::StackTrace::StackTraceOptions>(v8::StackTrace::kDetailed | v8::StackTrace::kExposeFramesAcrossSecurityOrigins)
+        : v8::StackTrace::kDetailed;
+    v8::Local<v8::StackTrace> stackTrace = v8::StackTrace::CurrentStackTrace(isolate, 100, options);
     QStringList scriptURLs;
     //V8TODO nicer formatting
     for (int i = 0; i < stackTrace->GetFrameCount(); i++) {
         v8::Local<v8::StackFrame> stackFrame = stackTrace->GetFrame(isolate, i);
-        scriptURLs.append(QString(*v8::String::Utf8Value(isolate, stackFrame->GetScriptNameOrSourceURL())));
+        // The name the script was compiled with: script text cannot change it, unlike a sourceURL directive
+        v8::Local<v8::String> scriptName = stackFrame->GetScriptName();
+        scriptURLs.append(scriptName.IsEmpty() ? QString() : QString(*v8::String::Utf8Value(isolate, scriptName)));
     }
     return scriptURLs;
 }

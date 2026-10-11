@@ -45,6 +45,7 @@
 
 class ScriptContextV8Wrapper;
 class ScriptEngineV8;
+class ScriptEnvironmentTableV8;
 class ScriptModuleLoaderV8;
 class ScriptModuleMapV8;
 class ScriptManager;
@@ -154,6 +155,8 @@ public:  // ScriptEngine implementation
     virtual void queueMicrotask(const ScriptValue& callback) override;
     virtual void loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) override;
     virtual void reportStalledTopLevelAwaits() override;
+    virtual ScriptEnvironmentPointer currentEnvironment() override;
+    virtual ScriptEnvironmentPointer swapCurrentEnvironment(const ScriptEnvironmentPointer& environment) override;
     virtual void compileTest() override;
     virtual QString scriptValueDebugDetails(const ScriptValue &value) override;
     QString scriptValueDebugDetailsV8(const V8ScriptValue &value);
@@ -194,6 +197,8 @@ public: // public non-interface methods for other QtScript-specific classes to u
     /// For work that must not run inside script code: queues the task to the engine's thread as the outermost call into
     /// script returns. Engine thread only.
     void deferUntilScriptReturns(std::function<void()> task);
+    /// Whether ScriptEnvironmentTableV8::selfTest passed when the engine was made
+    bool isEnvironmentCarriedAcrossAwait() const { return _environmentCarriedAcrossAwait; }
 
 public: // not for public use, but I don't like how Qt strings this along with private friend functions
     virtual ScriptValue create(int type, const void* ptr) override;
@@ -215,7 +220,7 @@ public: // not for public use, but I don't like how Qt strings this along with p
     const v8::Local<v8::Context> getConstContext() const;
     QString formatErrorMessageFromTryCatch(v8::TryCatch &tryCatch);
     // Useful for debugging
-    virtual QStringList getCurrentScriptURLs() const override;
+    virtual QStringList getCurrentScriptURLs(bool includeOtherContexts = false) const override;
 
     using ObjectWrapperMap = QMap<QObject*, QWeakPointer<ScriptObjectV8Proxy>>;
     mutable QMutex _qobjectWrapperMapProtect;
@@ -320,6 +325,12 @@ private:
     // See deferUntilScriptReturns; posted by performMicrotaskCheckpoint once the entry depth is back to zero
     std::vector<std::function<void()>> _deferredUntilScriptReturns;
     void postDeferredUntilScriptReturns();
+    // The current ScriptEnvironment, in continuation-preserved embedder data
+    std::unique_ptr<ScriptEnvironmentTableV8> _environments;
+    bool _environmentCarriedAcrossAwait { false };
+    void initEnvironments(v8::Local<v8::Context> context);
+    // loadModule() without an environment that survives await: reports ScriptModuleLoaderV8::MODULES_UNAVAILABLE
+    void refuseModuleLoad(const QUrl& url, ScriptModuleCallback onEvaluated);
 #ifdef OVERTE_V8_MEMORY_DEBUG
     std::atomic<size_t> scriptValueCount{0};
     std::atomic<size_t> scriptValueProxyCount{0};

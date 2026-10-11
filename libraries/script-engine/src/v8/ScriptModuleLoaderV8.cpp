@@ -21,6 +21,7 @@
 
 #include "../BatchLoader.h"
 #include "../ScriptCache.h"
+#include "../ScriptEnvironment.h"
 #include "../ScriptManager.h"
 #include "ScriptContextV8Wrapper.h"
 #include "ScriptEngineLoggingV8.h"
@@ -54,7 +55,15 @@ static std::atomic<quint64> nextLoaderId { 1 };
 
 void ScriptEngineV8::loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) {
     Q_ASSERT(QThread::currentThread() == thread());
-    auto loader = new ScriptModuleLoaderV8(this, request, std::move(onEvaluated));
+    if (!_environmentCarriedAcrossAwait) {
+        refuseModuleLoad(request.url, std::move(onEvaluated));
+        return;
+    }
+    ScriptModuleRequest withEnvironment = request;
+    if (!withEnvironment.environment) {
+        withEnvironment.environment = std::make_shared<ScriptEnvironment>(EntityItemID(), request.sandboxURL, request.epoch);
+    }
+    auto loader = new ScriptModuleLoaderV8(this, withEnvironment, std::move(onEvaluated));
     QMetaObject::invokeMethod(loader, "start", Qt::QueuedConnection);
 }
 
@@ -297,6 +306,13 @@ void ScriptModuleLoaderV8::instantiateAndEvaluate() {
             return;
         }
     }
+
+    // Every module of the graph counts, also one evaluated before: the environment can now reach its bindings
+    for (auto record : _seen) {
+        _request.environment->noteLoaded(record->url);
+    }
+    // Module bodies, and the continuations and reactions created below, run in the graph's environment
+    ScriptEnvironmentScope environmentScope(_engine, _request.environment);
 
     // A module that was evaluated before (a second import(), or one shared with another graph) is not evaluated again:
     // Evaluate() returns the settled promise of its first evaluation, or the pending one of a top-level await.
