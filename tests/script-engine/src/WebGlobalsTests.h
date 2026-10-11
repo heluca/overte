@@ -52,6 +52,7 @@ private slots:
     void testUrlSearchParams();
     void testUrlTable();
     void testUrlParts();
+    void testReplacedBuiltins();
     void testClosureRealm();
 
 private:

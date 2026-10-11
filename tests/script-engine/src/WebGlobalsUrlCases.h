@@ -87,4 +87,40 @@ static const char* const URL_DIVERGENCES = R"JS([)JS"
     R"JS(["https://example.com/a|b^c",null,"https://example.com/a%7Cb%5Ec"])JS"
     R"JS(])JS";
 
+// The parts of a URL, its origin and its setters
+static const char* const URL_PARTS_SCRIPT = R"JS(
+var r = [];
+var u = new URL("https://user:pa%40ss@EXAMPLE.com:8443/p/a/t/h?query=string#hash");
+r.push(u.href, u.protocol, u.username, u.password, u.host, u.hostname, u.port, u.pathname, u.search, u.hash, u.origin);
+r.push(new URL("http://example.com:80/").origin, new URL("file:///x").origin, new URL("blob:https://example.com/id").origin,
+    new URL("foo://x/").origin, new URL("mailto:a@b").pathname, new URL("mailto:a@b").host);
+u = new URL("http://example.com/a?b#c");
+u.protocol = "https"; r.push(u.href);
+u.protocol = "foo"; r.push(u.href);
+u.username = "us er"; r.push(u.href);
+u.password = "p@ss"; r.push(u.href);
+u.host = "other.org:8080"; r.push(u.href);
+u.hostname = "third.net"; r.push(u.host);
+u.port = "443"; r.push(u.host);
+u.port = "abc"; u.port = "99999"; r.push(u.port);
+u.port = "8443x"; r.push(u.port);
+u.port = ""; r.push(u.host);
+u.pathname = "x y/z?w"; r.push(u.pathname);
+u.search = "q=1 2"; r.push(u.search);
+u.hash = "top"; r.push(u.hash);
+u.hash = ""; u.search = ""; r.push(u.href);
+u.href = "http://new.example/"; r.push(u.href);
+try { u.href = "not a url"; } catch (e) { r.push(e.name, u.href); }
+r.push(JSON.stringify({ u: u }), String(u), URL.canParse("http://x/"), URL.canParse("nope"), URL.canParse("/a", "http://x/"));
+["nope", "/a"].forEach(function (input) { try { new URL(input); } catch (e) { r.push(e.name); } });
+try { new URL("/a", "nope"); } catch (e) { r.push(e.name); }
+try { new URL(); } catch (e) { r.push(e.name); }
+r.push(new URL(u).href, new URL("x", new URL("http://b.example/dir/")).href, new URL(u) !== u);
+var empty = new URL("http://a.example/p?x#y");
+empty.search = "?";
+empty.hash = "#";
+r.push(empty.href, empty.search, empty.hash);
+print(JSON.stringify(r));
+Script.stop(true);)JS";
+
 #endif // overte_WebGlobalsUrlCases_h

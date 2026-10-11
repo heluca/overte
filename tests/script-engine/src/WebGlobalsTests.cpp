@@ -343,36 +343,7 @@ Script.stop(true);)JS", printed));
 
 void WebGlobalsTests::testUrlParts() {
     QStringList printed;
-    QVERIFY(runScript(R"JS(
-var r = [];
-var u = new URL("https://user:pa%40ss@EXAMPLE.com:8443/p/a/t/h?query=string#hash");
-r.push(u.href, u.protocol, u.username, u.password, u.host, u.hostname, u.port, u.pathname, u.search, u.hash, u.origin);
-r.push(new URL("http://example.com:80/").origin, new URL("file:///x").origin, new URL("blob:https://example.com/id").origin,
-    new URL("foo://x/").origin, new URL("mailto:a@b").pathname, new URL("mailto:a@b").host);
-u = new URL("http://example.com/a?b#c");
-u.protocol = "https"; r.push(u.href);
-u.protocol = "foo"; r.push(u.href);
-u.username = "us er"; r.push(u.href);
-u.password = "p@ss"; r.push(u.href);
-u.host = "other.org:8080"; r.push(u.href);
-u.hostname = "third.net"; r.push(u.host);
-u.port = "443"; r.push(u.host);
-u.port = "abc"; u.port = "99999"; r.push(u.port);
-u.port = "8443x"; r.push(u.port);
-u.port = ""; r.push(u.host);
-u.pathname = "x y/z?w"; r.push(u.pathname);
-u.search = "q=1 2"; r.push(u.search);
-u.hash = "top"; r.push(u.hash);
-u.hash = ""; u.search = ""; r.push(u.href);
-u.href = "http://new.example/"; r.push(u.href);
-try { u.href = "not a url"; } catch (e) { r.push(e.name, u.href); }
-r.push(JSON.stringify({ u: u }), String(u), URL.canParse("http://x/"), URL.canParse("nope"), URL.canParse("/a", "http://x/"));
-["nope", "/a"].forEach(function (input) { try { new URL(input); } catch (e) { r.push(e.name); } });
-try { new URL("/a", "nope"); } catch (e) { r.push(e.name); }
-try { new URL(); } catch (e) { r.push(e.name); }
-r.push(new URL(u).href, new URL("x", new URL("http://b.example/dir/")).href, new URL(u) !== u);
-print(JSON.stringify(r));
-Script.stop(true);)JS", printed));
+    QVERIFY(runScript(URL_PARTS_SCRIPT, printed));
     QCOMPARE(printed, QStringList({ R"OUT(["https://user:pa%40ss@example.com:8443/p/a/t/h?query=string#hash","https:","user","pa%40ss","ex)OUT"
         R"OUT(ample.com:8443","example.com","8443","/p/a/t/h","?query=string","#hash","https://example.com:844)OUT"
         R"OUT(3","http://example.com","null","https://example.com","null","a@b","","https://example.com/a?b#c")OUT"
@@ -381,7 +352,80 @@ Script.stop(true);)JS", printed));
         R"OUT(,"third.net","/x%20y/z%3Fw","?q=1%202","#top","https://us%20er:p%40ss@third.net/x%20y/z%3Fw","ht)OUT"
         R"OUT(tp://new.example/","TypeError","http://new.example/","{\"u\":\"http://new.example/\"}","http://n)OUT"
         R"OUT(ew.example/",true,false,true,"TypeError","TypeError","TypeError","TypeError","http://new.example)OUT"
-        R"OUT(/","http://b.example/dir/x",true])OUT" }));
+        R"OUT(/","http://b.example/dir/x",true,"http://a.example/p?#","",""])OUT" }));
+}
+
+// A script replaces the built-ins the globals use; they keep working, or throw a TypeError, as with the originals
+void WebGlobalsTests::testReplacedBuiltins() {
+    QStringList printed;
+    QVERIFY(runScript(R"JS(
+var r = [];
+var realByteLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Int8Array.prototype), "byteLength").get;
+var lengthOf = function (view) { return realByteLength.call(view); };
+var destination = new Uint8Array(1);
+var words = new Uint32Array(4);
+var dataView = new DataView(new Int8Array([0, 104, 105]).buffer, 1);
+function attempt(fn) { try { return fn(); } catch (e) { return e.name; } }
+function hex(buffer) {
+    return Array.prototype.map.call(new Int8Array(buffer), function (b) { return ((b & 0xFF) + 0x100).toString(16).slice(1); }).join("");
+}
+var TypedArrayPrototype = Object.getPrototypeOf(Int8Array.prototype);
+var originals = { String: String, Uint8Array: Uint8Array, from: Array.from, isView: ArrayBuffer.isView,
+    toString: Object.prototype.toString, set: TypedArrayPrototype.set, slice: TypedArrayPrototype.slice,
+    subarray: TypedArrayPrototype.subarray, descriptors: Object.getOwnPropertyDescriptors(TypedArrayPrototype) };
+function restore() {
+    String = originals.String;
+    Uint8Array = originals.Uint8Array;
+    Array.from = originals.from;
+    ArrayBuffer.isView = originals.isView;
+    Object.prototype.toString = originals.toString;
+    TypedArrayPrototype.set = originals.set;
+    TypedArrayPrototype.slice = originals.slice;
+    TypedArrayPrototype.subarray = originals.subarray;
+    ["byteLength", "byteOffset", "length", "buffer"].forEach(function (name) {
+        Object.defineProperty(TypedArrayPrototype, name, originals.descriptors[name]);
+    });
+}
+String = function () { return 42; };
+Uint8Array = function () { return { length: 1e9 }; };
+Array.from = function () { return "not an array"; };
+ArrayBuffer.isView = function () { return true; };
+Object.prototype.toString = function () { return "[object Uint8Array]"; };
+["byteLength", "byteOffset", "length", "buffer"].forEach(function (name) {
+    Object.defineProperty(TypedArrayPrototype, name, { get: function () { return 1e9; } });
+});
+TypedArrayPrototype.set = function () {};
+TypedArrayPrototype.slice = function () { return {}; };
+TypedArrayPrototype.subarray = function () { return {}; };
+r.push(lengthOf(new TextEncoder().encode("hi")), new TextEncoder().encodeInto("hi", destination).written);
+var decoder = new TextDecoder();
+r.push(decoder.decode(new Int8Array([104, 105])), decoder.decode(dataView),
+    attempt(function () { return decoder.decode({}); }));
+r.push(decoder.decode(new Int8Array([-16, -97]), { stream: true }), decoder.decode(new Int8Array([-104, -128])).codePointAt(0));
+r.push(btoa("hi"), atob("aGk="), crypto.getRandomValues(words) === words,
+    attempt(function () { return crypto.getRandomValues({}); }),
+    attempt(function () { return crypto.getRandomValues(new Float32Array(2)); }));
+var clone = structuredClone([1, 2], { transfer: [] });
+r.push(Array.isArray(clone) && clone.length === 2,
+    attempt(function () { return structuredClone(1, { transfer: { [Symbol.iterator]: function () { throw new RangeError("it"); } } }); }),
+    attempt(function () { return structuredClone({ get x() { throw new SyntaxError("getter"); } }); }));
+r.push(new URL("http://example.com/a?x=1").searchParams.get("x"), new URLSearchParams("a=%41").get("a"),
+    new URLSearchParams([["k", "v"]]).toString());
+var hashed = crypto.subtle.digest("SHA-1", new Int8Array([104, 105]));
+var refused = crypto.subtle.digest("SHA-1", {});
+// Put back before anything else runs: the engine's own script helpers use the built-ins too
+restore();
+hashed.then(function (hash) {
+    r.push(hex(hash));
+    return refused;
+}).catch(function (e) {
+    r.push(e.name);
+}).then(function () {
+    print(JSON.stringify(r));
+    Script.stop(true);
+});)JS", printed));
+    QCOMPARE(printed, QStringList({ R"OUT([2,1,"hi","hi","TypeError","",128512,"aGk=","hi",true,"TypeError","TypeMismatchError",true,"Rang)OUT"
+        R"OUT(eError","SyntaxError","1","A","k=v","c22b5f9178342609428d6f51b2c5af4c0bde6a42","TypeError"])OUT" }));
 }
 
 void WebGlobalsTests::testStructuredCloneOverteObjects() {
