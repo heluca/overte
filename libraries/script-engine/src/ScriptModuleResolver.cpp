@@ -60,6 +60,18 @@ bool isModuleURL(const QUrl& url) {
     return url.path().endsWith(".mjs", Qt::CaseInsensitive);
 }
 
+ScriptModuleKind moduleKindOf(const QUrl& url) {
+    QString path = url.path();
+    if (isModuleURL(url)) {
+        return ScriptModuleKind::SourceText;
+    } else if (path.endsWith(".js", Qt::CaseInsensitive)) {
+        return ScriptModuleKind::CommonJS;
+    } else if (path.endsWith(".json", Qt::CaseInsensitive)) {
+        return ScriptModuleKind::Json;
+    }
+    return ScriptModuleKind::Unsupported;
+}
+
 QUrl resolveModuleSpecifier(const QString& specifier, const QUrl& referrer, const QUrl& sandboxURL, QString* error) {
     auto fail = [error](const QString& why) {
         if (error) {

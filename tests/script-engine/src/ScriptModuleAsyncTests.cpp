@@ -284,27 +284,27 @@ void ScriptModuleAsyncTests::testDynamicImportTopLevelAwaitRejectionWithoutAbort
 }
 
 void ScriptModuleAsyncTests::testDynamicImportRefusals() {
-    // The checks static imports make, through the same resolveImport: attributes and classic .js are refused
+    // The checks static imports make, through the same resolveImport: attributes and extensions
     QTemporaryDir dir;
     auto run = runScript(dir, {
         { "main.mjs",
           "import('./lib.mjs', { with: { type: 'json' } }).then(function() { print('must not resolve'); }, function(error) {\n"
           "    print(error.name + ': ' + error.message);\n"
-          "    return import('./lib.js');\n"
+          "    return import('./notes.txt');\n"
           "}).then(function() { print('must not resolve'); }, function(error) {\n"
           "    print(error.name + ': ' + error.message);\n"
           "    Script.stop(true);\n"
           "});\n" },
         { "lib.mjs", "export const value = 1;\n" },
-        { "lib.js", "module.exports = 1;\n" },
+        { "notes.txt", "text\n" },
     });
     QVERIFY(!run.timedOut);
     QCOMPARE(run.errors, QStringList());
     QString main = urlOf(dir, "main.mjs");
     QCOMPARE(run.printed, QStringList({
-        "TypeError: Cannot import './lib.mjs' from " + main + ":1: import attributes are not supported yet",
-        "TypeError: Cannot import './lib.js' from " + main + ":3: importing a classic .js script from a module is not "
-        "supported yet; use a .mjs module" }));
+        "TypeError: Cannot import './lib.mjs' from " + main + ":1: with { type: 'json' } is only for .json files",
+        "TypeError: Cannot import './notes.txt' from " + main + ":3: only .mjs (ES module), .js (CommonJS) and .json "
+        "files can be imported" }));
 }
 
 void ScriptModuleAsyncTests::testDynamicImportRemoteEntryRefusesLocal() {

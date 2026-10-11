@@ -17,7 +17,9 @@
 
 #include <memory>
 
+#include <QtCore/QList>
 #include <QtCore/QObject>
+#include <QtCore/QPair>
 #include <QtCore/QSet>
 #include <QtCore/QString>
 #include <QtCore/QUrl>
@@ -29,12 +31,22 @@
 
 class ScriptEngineV8;
 
+/// [V8] Why ScriptEngineV8::evaluateInClosure failed, when its caller asked for it rather than for a report
+struct ScriptClosureFailureV8 {
+    bool failed { false };
+    /// What the code threw; empty for a syntax error
+    v8::Global<v8::Value> exception;
+    QString syntaxError;
+    int line { -1 };
+};
+
 /// [V8] Loads one ES module graph, for ScriptEngine::loadModule or for a dynamic import().
 ///
 /// Fetch phase: each module is fetched through ScriptCache and compiled on the engine thread as its source arrives;
 /// its static imports are then resolved and fetched in turn. Nothing waits in a nested event loop, the engine thread
 /// keeps running its own loop. Records already in the module map are reused, including ones another loader is still
-/// fetching, so a module shared by several importers or by a cycle is fetched and compiled once.
+/// fetching, so a module shared by several importers or by a cycle is fetched and compiled once. CommonJS (.js) and
+/// JSON (.json) files are leaves of the graph, synthetic modules with a default export (ScriptModuleSyntheticV8.cpp).
 ///
 /// When every module of the graph is compiled, the entry is linked and evaluated in the engine's main context, from
 /// the event loop with no script code on the stack. If evaluation suspends in a top-level await, the loader waits for
@@ -82,12 +94,23 @@ private:
 
     static void fetch(ScriptEngineV8* engine, const ScriptModuleRecordV8Pointer& record, bool forceDownload);
     static void compile(ScriptEngineV8* engine, const ScriptModuleRecordV8Pointer& record, const QString& source);
+    /// For a CommonJS or JSON record: a synthetic module whose default export evaluateSynthetic sets
+    static void compileSynthetic(ScriptEngineV8* engine, const ScriptModuleRecordV8Pointer& record, const QString& source);
+    static v8::MaybeLocal<v8::Value> evaluateSynthetic(v8::Local<v8::Context> context, v8::Local<v8::Module> module);
+    /// Evaluates a CommonJS record's source as Script.require does, see ScriptModuleSyntheticV8.cpp
+    static v8::MaybeLocal<v8::Value> evaluateCommonJs(ScriptEngineV8* engine, ScriptModuleRecordV8& record);
     static v8::MaybeLocal<v8::Module> resolveModuleCallback(v8::Local<v8::Context> context, v8::Local<v8::String> specifier,
                                                             v8::Local<v8::FixedArray> importAttributes,
                                                             v8::Local<v8::Module> referrer);
-    /// Resolves an import of the site's specifier and checks that it may be imported. Returns an empty URL and sets
-    /// error to a message naming the site if not.
-    static QUrl resolveImport(const ImportSite& site, bool hasImportAttributes, const QUrl& sandboxURL, QString* error);
+    using ImportAttributes = QList<QPair<QString, QString>>;
+    /// The (key, value) pairs of a V8 import attributes array, whose entries are entrySize long: 3 with source offsets
+    /// (static imports), 2 without (import())
+    static ImportAttributes importAttributes(v8::Local<v8::Context> context, v8::Local<v8::FixedArray> attributes,
+                                             int entrySize);
+    /// Resolves an import of the site's specifier and checks that it may be imported with these attributes. Returns an
+    /// empty URL and sets error to a message naming the site if not.
+    static QUrl resolveImport(const ImportSite& site, const ImportAttributes& attributes, const QUrl& sandboxURL,
+                              QString* error);
     /// Called by the reactions to an evaluation promise that was pending, i.e. suspended in a top-level await
     static void evaluationFulfilled(const v8::FunctionCallbackInfo<v8::Value>& info);
     static void evaluationRejected(const v8::FunctionCallbackInfo<v8::Value>& info);

@@ -72,6 +72,11 @@ void ScriptModuleTests::testResolveModuleSpecifier() {
     QVERIFY(isModuleURL(QUrl("http://example.invalid/a.mjs?v=2#top")));
     QVERIFY(!isModuleURL(QUrl("http://example.invalid/a.js")));
     QVERIFY(!isModuleURL(QUrl("http://example.invalid/a.js?x=.mjs")));
+    QVERIFY(moduleKindOf(QUrl("http://example.invalid/a.MJS?v=2")) == ScriptModuleKind::SourceText);
+    QVERIFY(moduleKindOf(QUrl("http://example.invalid/a.js?x=.mjs")) == ScriptModuleKind::CommonJS);
+    QVERIFY(moduleKindOf(QUrl("file:///a/data.json#x")) == ScriptModuleKind::Json);
+    QVERIFY(moduleKindOf(QUrl("http://example.invalid/a.txt")) == ScriptModuleKind::Unsupported);
+    QVERIFY(moduleKindOf(QUrl("http://example.invalid/json")) == ScriptModuleKind::Unsupported);
 }
 
 void ScriptModuleTests::testStaticImport() {
@@ -198,19 +203,16 @@ void ScriptModuleTests::testBareSpecifier() {
     QVERIFY2(run.errors[0].contains("bare specifier 'lodash' is not supported"), qUtf8Printable(run.errors[0]));
 }
 
-void ScriptModuleTests::testJsImport() {
+void ScriptModuleTests::testUnsupportedImport() {
     QTemporaryDir dir;
     auto run = runScript(dir, {
-        { "main.mjs", "\nimport lib from './lib.js';\nprint('must not run');\n" },
-        { "lib.js", "module.exports = 1;\n" },
+        { "main.mjs", "\nimport text from './notes.txt';\nprint('must not run');\n" },
+        { "notes.txt", "text\n" },
     });
     QVERIFY(!run.timedOut);
     QCOMPARE(run.printed, QStringList());
-    QCOMPARE(run.errors.length(), 1);
-    QVERIFY2(run.errors[0].startsWith("Cannot import './lib.js' from " + urlOf(dir, "main.mjs") + ":2: "),
-             qUtf8Printable(run.errors[0]));
-    QVERIFY2(run.errors[0].endsWith("importing a classic .js script from a module is not supported yet; use a .mjs module"),
-             qUtf8Printable(run.errors[0]));
+    QCOMPARE(run.errors, QStringList({ "Cannot import './notes.txt' from " + urlOf(dir, "main.mjs") + ":2: only .mjs "
+                                       "(ES module), .js (CommonJS) and .json files can be imported" }));
 }
 
 void ScriptModuleTests::testDependencySyntaxError() {

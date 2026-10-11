@@ -106,7 +106,9 @@ void ScriptModuleLoaderV8::fetch(ScriptEngineV8* engine, const ScriptModuleRecor
     QObject::connect(proxy, &ScriptCacheSignalProxy::contentAvailable, engine,
         [engine, record](const QString&, const QString& contents, bool isURL, bool success, const QString& status) {
             auto scopeGuard = engine->getScopeGuard();
-            if (success && isURL) {
+            if (success && isURL && record->kind != ScriptModuleKind::SourceText) {
+                compileSynthetic(engine, record, contents);
+            } else if (success && isURL) {
                 compile(engine, record, contents);
             } else {
                 record->state = State::Failed;
@@ -206,7 +208,8 @@ void ScriptModuleLoaderV8::walk(const ScriptModuleRecordV8Pointer& record, const
         ImportSite importSite { toQString(isolate, request->GetSpecifier()), record->url,
                                 module->SourceOffsetToLocation(request->GetSourceOffset()).GetLineNumber() + 1 };
         QString error;
-        QUrl url = resolveImport(importSite, request->GetImportAttributes()->Length() > 0, _request.sandboxURL, &error);
+        QUrl url = resolveImport(importSite, importAttributes(context, request->GetImportAttributes(), 3),
+                                 _request.sandboxURL, &error);
         if (url.isEmpty()) {
             fail(error, importer, importSite.line);
             return;

@@ -31,6 +31,7 @@ ScriptModuleRecordV8Pointer ScriptModuleMapV8::insert(int epoch, const QUrl& url
     auto record = std::make_shared<ScriptModuleRecordV8>();
     record->url = url;
     record->epoch = epoch;
+    record->kind = moduleKindOf(url);
     auto inserted = _records.emplace(Key(epoch, url.toString()), record);
     Q_ASSERT(inserted.second);
     return record;

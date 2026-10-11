@@ -27,7 +27,7 @@ private slots:
     void testMissingModule();
     void testUnreachableModule();
     void testBareSpecifier();
-    void testJsImport();
+    void testUnsupportedImport();
     void testDependencySyntaxError();
     void testUnresolvableCycle();
     void testEvaluationError();

@@ -27,14 +27,35 @@
 #include "ScriptEngineV8.h"
 #include "ScriptValueV8Wrapper.h"
 
-QUrl ScriptModuleLoaderV8::resolveImport(const ImportSite& site, bool hasImportAttributes, const QUrl& sandboxURL,
-                                         QString* error) {
+ScriptModuleLoaderV8::ImportAttributes ScriptModuleLoaderV8::importAttributes(v8::Local<v8::Context> context,
+                                                                             v8::Local<v8::FixedArray> attributes,
+                                                                             int entrySize) {
+    v8::Isolate* isolate = context->GetIsolate();
+    ImportAttributes pairs;
+    for (int i = 0; i + 1 < attributes->Length(); i += entrySize) {
+        pairs.append({ toQString(isolate, attributes->Get(context, i).As<v8::Value>()),
+                       toQString(isolate, attributes->Get(context, i + 1).As<v8::Value>()) });
+    }
+    return pairs;
+}
+
+QUrl ScriptModuleLoaderV8::resolveImport(const ImportSite& site, const ImportAttributes& attributes,
+                                         const QUrl& sandboxURL, QString* error) {
     QString where = siteText(site.importer.toString(), site.line);
-    // Hosts must reject attributes they do not support rather than ignore them
-    if (hasImportAttributes) {
-        // Slice 4 of #10 accepts { type: 'json' } here
-        *error = QString("Cannot import '%1' from %2: import attributes are not supported yet").arg(site.specifier, where);
+    auto refuse = [&](const QString& why) {
+        *error = QString("Cannot import '%1' from %2: %3").arg(site.specifier, where, why);
         return QUrl();
+    };
+    // Hosts must reject attributes they do not support rather than ignore them
+    bool json = false;
+    for (const auto& attribute : attributes) {
+        if (attribute.first != "type") {
+            return refuse(QString("unsupported import attribute '%1'; only type: 'json' is supported").arg(attribute.first));
+        }
+        if (attribute.second != "json") {
+            return refuse(QString("unsupported import type '%1'; only type: 'json' is supported").arg(attribute.second));
+        }
+        json = true;
     }
 
     QString resolveError;
@@ -43,22 +64,23 @@ QUrl ScriptModuleLoaderV8::resolveImport(const ImportSite& site, bool hasImportA
         *error = QString("Cannot find module '%1' imported from %2 (%3)").arg(site.specifier, where, resolveError);
         return QUrl();
     }
-    if (!isModuleURL(url)) {
-        // Slice 4 of #10 replaces the .js refusal with a CommonJS synthetic module
-        QString why = url.path().endsWith(".js", Qt::CaseInsensitive)
-            ? "importing a classic .js script from a module is not supported yet; use a .mjs module"
-            : "only .mjs files are ES modules";
-        *error = QString("Cannot import '%1' from %2: %3").arg(site.specifier, where, why);
-        return QUrl();
+    switch (moduleKindOf(url)) {
+        case ScriptModuleKind::SourceText:
+        case ScriptModuleKind::CommonJS:
+            return json ? refuse("with { type: 'json' } is only for .json files") : url;
+        case ScriptModuleKind::Json:
+            return json ? url : refuse("a .json file can only be imported with { type: 'json' }");
+        case ScriptModuleKind::Unsupported:
+            break;
     }
-    return url;
+    return refuse("only .mjs (ES module), .js (CommonJS) and .json files can be imported");
 }
 
 v8::MaybeLocal<v8::Promise> ScriptModuleLoaderV8::importModuleDynamically(v8::Local<v8::Context> context,
                                                                           v8::Local<v8::Data>,
                                                                           v8::Local<v8::Value> resourceName,
                                                                           v8::Local<v8::String> specifier,
-                                                                          v8::Local<v8::FixedArray> importAttributes) {
+                                                                          v8::Local<v8::FixedArray> attributes) {
     v8::Isolate* isolate = context->GetIsolate();
     auto engine = static_cast<ScriptEngineV8*>(isolate->GetData(ENGINE_ISOLATE_DATA_SLOT));
     ScriptManager* manager = engine->manager();
@@ -96,7 +118,7 @@ v8::MaybeLocal<v8::Promise> ScriptModuleLoaderV8::importModuleDynamically(v8::Lo
     ScriptPromise promise = engine->newPromise();
     QString error = MODULES_UNAVAILABLE;
     QUrl url = engine->isEnvironmentCarriedAcrossAwait()
-        ? resolveImport(site, importAttributes->Length() > 0, sandboxURL, &error) : QUrl();
+        ? resolveImport(site, importAttributes(context, attributes, 2), sandboxURL, &error) : QUrl();
     if (url.isEmpty()) {
         V8ScriptValue reason(engine, v8::Exception::TypeError(toV8String(isolate, error)));
         promise.resolver->reject(ScriptValue(new ScriptValueV8Wrapper(engine, std::move(reason))));

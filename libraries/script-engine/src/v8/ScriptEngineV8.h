@@ -43,6 +43,7 @@
 #include "../ScriptManager.h"
 #include "../ScriptException.h"
 
+struct ScriptClosureFailureV8;
 class ScriptContextV8Wrapper;
 class ScriptEngineV8;
 class ScriptEnvironmentTableV8;
@@ -320,6 +321,9 @@ private:
     std::vector<PendingPromiseRejection> _pendingPromiseRejections;
     // ES modules of this isolate, see ScriptModuleLoaderV8
     std::unique_ptr<ScriptModuleMapV8> _modules;
+    // Set by ScriptModuleLoaderV8 for the evaluateInClosure of a CommonJS file an ES module imports, which then hands
+    // its failure over instead of reporting it; the closures of the require() calls inside do not see it
+    ScriptClosureFailureV8* _closureFailure { nullptr };
     // Resolvers made by newPromise() reach the engine only through this, see ScriptPromiseV8.h
     std::shared_ptr<ScriptPromiseBridgeV8> _promiseBridge;
     // See deferUntilScriptReturns; posted by performMicrotaskCheckpoint once the entry depth is back to zero
