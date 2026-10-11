@@ -40,5 +40,23 @@ Script.clearTimeout({});
 // @ts-expect-error Vec3 needs all three components.
 Vec3.distance({ x: 1, y: 2 }, Vec3.ZERO);
 
+// @ts-expect-error A URL needs an input.
+new URL();
+
+// @ts-expect-error encode returns a Uint8Array, not a string.
+const notText: string = new TextEncoder().encode("x");
+
+// @ts-expect-error randomUUID returns a string.
+const notNumber: number = crypto.randomUUID();
+
+// @ts-expect-error structuredClone needs a value.
+structuredClone();
+
+// @ts-expect-error digest takes bytes; encode a string with TextEncoder first.
+crypto.subtle.digest("SHA-256", "x");
+
+// @ts-expect-error canParse is static, not a member of a URL.
+new URL("http://example.com/").canParse("x");
+
 // @ts-expect-error Given a callback, getAsset returns nothing to await on.
 Assets.getAsset("/games/saved.json", () => {}).then(print);

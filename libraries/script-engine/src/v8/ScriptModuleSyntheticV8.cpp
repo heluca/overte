@@ -141,9 +141,27 @@ v8::MaybeLocal<v8::Value> ScriptModuleLoaderV8::evaluateCommonJs(ScriptEngineV8*
     ScriptValue jsRequire = engine->globalObject().property("Script").property("require");
     ScriptValue cache = jsRequire.property("cache");
     ScriptValue module = cache.property(modulePath);
-    // The test Script.require makes for a cached module. A reload's epoch evaluates the file it fetched anew instead,
-    // replacing the entry for every later Script.require too.
-    if (record.forceDownload || !module.property("exports").isObject()) {
+    // The test Script.require makes for a cached module. A reload's epoch evaluates the file anew instead, replacing
+    // the entry for every later Script.require too. So does an entity script whose URL differs from that of the one
+    // whose import made the entry only in its query (a cache-busting query): it is the same script, changed. Entity
+    // scripts with different files share the entry, as with Script.require.
+    auto isCacheBustedEntry = [&] {
+        auto made = engine->_commonJsCacheEpochs.find(modulePath);
+        if (made == engine->_commonJsCacheEpochs.end() || *made == record.epoch) {
+            return false;
+        }
+        auto maker = engine->_modules->find(*made, record.url);
+        if (!maker || maker->commonJsModule.IsEmpty()
+            || !maker->commonJsModule.Get(isolate)->StrictEquals(ScriptValueV8Wrapper::fullUnwrap(engine, module).get())) {
+            return false;
+        }
+        QUrl entry = engine->_moduleEpochEntries.value(record.epoch);
+        QUrl makerEntry = engine->_moduleEpochEntries.value(*made);
+        QUrl::FormattingOptions file = QUrl::RemoveQuery | QUrl::RemoveFragment;
+        return !entry.isEmpty() && entry != makerEntry && entry.adjusted(file) == makerEntry.adjusted(file);
+    };
+    bool reevaluate = engine->_reloadModuleEpochs.contains(record.epoch) || isCacheBustedEntry();
+    if (reevaluate || !module.property("exports").isObject()) {
         module = manager->newModule(modulePath);
         // Before evaluation, as in Script.require, so that a cyclic require() finds it
         cache.setProperty(modulePath, module);
@@ -159,6 +177,7 @@ v8::MaybeLocal<v8::Value> ScriptModuleLoaderV8::evaluateCommonJs(ScriptEngineV8*
             return v8::MaybeLocal<v8::Value>();
         }
         record.commonJsModule.Reset(isolate, ScriptValueV8Wrapper::fullUnwrap(engine, module).get());
+        engine->_commonJsCacheEpochs.insert(modulePath, record.epoch);
         module.setProperty("loaded", true, ScriptValue::ReadOnly | ScriptValue::Undeletable);
         // Script.require's reference point for telling a deleted cache key from one never set
         jsRequire.data().setProperty(modulePath, module);

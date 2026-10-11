@@ -114,6 +114,11 @@ exports.handlers = {
     // but before it is passed to the template for output
     newDoclet: function (e) {
 
+        // "Class.member" is how instance members are named here, so a static member is marked by its @static tag
+        if (/@static\b/.test(e.doclet.comment || "")) {
+            e.doclet.hifiStatic = true;
+        }
+
         // we only care about hifi custom tags on namespace and class doclets
         if (e.doclet.kind === "namespace" || e.doclet.kind === "class") {
             const rows = [];

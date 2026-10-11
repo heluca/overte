@@ -43,7 +43,7 @@ R"JS((function (native) {
         if (body === undefined || body === null) {
             return null;
         }
-        // Not instanceof: an entity script's ArrayBuffer comes from the realm of its own context
+        // Not instanceof: a Script.require module's ArrayBuffer comes from the realm of its own context
         if (Object.prototype.toString.call(body) === "[object ArrayBuffer]") {
             return body;
         }
