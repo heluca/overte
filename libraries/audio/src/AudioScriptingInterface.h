@@ -199,6 +199,55 @@ protected:
     Q_INVOKABLE ScriptAudioInjector* playSound(SharedSoundPointer sound, const AudioInjectorOptions& injectorOptions = AudioInjectorOptions());
 
     /*@jsdoc
+     * Starts playing live audio from a URL as it arrives. The response body must be raw 16-bit little-endian PCM at
+     * 24000 Hz, with no header or container: mono, or interleaved stereo when <code>injectorOptions.stereo</code> is
+     * <code>true</code>. The producer does any resampling and downmixing. As with {@link Audio.playSound}, the audio is sent
+     * to the audio mixer so that everyone hears it, unless <code>injectorOptions.localOnly</code> is <code>true</code>.
+     * <p>The injector plays the audio 10 ms at a time. When the stream falls behind, the injector plays silence and keeps
+     * going; when it runs ahead, the oldest audio beyond about 200 ms is dropped, so the delay never grows. The injector
+     * finishes, triggering {@link AudioInjector.finished}, when the response ends or fails, or when it is stopped, which closes
+     * the connection. Reconnecting is up to the script: call <code>Audio.playStream</code> again from the
+     * <code>finished</code> handler.</p>
+     * <p>The <code>loop</code>, <code>secondOffset</code> and <code>pitch</code> options have no effect on a stream, nor does
+     * {@link AudioInjector.restart}. Changing <code>position</code>, <code>orientation</code> or <code>volume</code> with
+     * {@link AudioInjector.setOptions} applies while the stream plays.</p>
+     * @function Audio.playStream
+     * @param {string} url - The URL of the stream, usually <code>http://</code> or <code>https://</code>.
+     * @param {AudioInjector.AudioInjectorOptions} [injectorOptions={}] - Configures where and how the audio injector plays the
+     *     stream.
+     * @returns {AudioInjector} The audio injector that plays the stream.
+     * @example <caption>Play a live stream at an entity's position, reconnecting when the stream ends.</caption>
+     * // Server entity script.
+     * (function () {
+     *     var STREAM_URL = "http://127.0.0.1:8000/pcm";  // Replace with the URL of your stream.
+     *     var injector = null;
+     *     var stopped = false;
+     *
+     *     function play(entityID) {
+     *         var position = Entities.getEntityProperties(entityID, ["position"]).position;
+     *         injector = Audio.playStream(STREAM_URL, { position: position, volume: 0.8 });
+     *         injector.finished.connect(function () {
+     *             if (!stopped) {
+     *                 Script.setTimeout(function () {
+     *                     play(entityID);
+     *                 }, 1000);
+     *             }
+     *         });
+     *     }
+     *
+     *     this.preload = play;
+     *     this.unload = function () {
+     *         stopped = true;
+     *         if (injector) {
+     *             injector.stop();
+     *         }
+     *     };
+     * });
+     */
+    Q_INVOKABLE ScriptAudioInjector* playStream(const QString& url,
+                                                const AudioInjectorOptions& injectorOptions = AudioInjectorOptions());
+
+    /*@jsdoc
      * Starts playing the content of an audio file locally (isn't sent to the audio mixer). This is the same as calling
      * {@link Audio.playSound} with {@link AudioInjector.AudioInjectorOptions} <code>localOnly</code> set <code>true</code> and
      * the specified <code>position</code>.

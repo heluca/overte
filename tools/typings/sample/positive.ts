@@ -55,3 +55,10 @@ function remotelyCallable(): void {
         print(caller);
     }
 }
+
+// A live PCM stream plays at a position and moves with setOptions; reconnecting when it finishes is the script's job.
+function playStreamAt(position: Vec3): void {
+    const injector: AudioInjector = Audio.playStream("http://127.0.0.1:8000/pcm", { position, volume: 0.8, stereo: false });
+    injector.finished.connect(() => Script.setTimeout(() => playStreamAt(position), 1000));
+    injector.setOptions({ position: Vec3.sum(position, Vec3.UNIT_Y) });
+}

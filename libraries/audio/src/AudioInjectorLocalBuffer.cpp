@@ -16,6 +16,11 @@ AudioInjectorLocalBuffer::AudioInjectorLocalBuffer(AudioDataPointer audioData) :
 {
 }
 
+AudioInjectorLocalBuffer::AudioInjectorLocalBuffer(AudioStreamSourcePointer stream) :
+    _stream(stream)
+{
+}
+
 AudioInjectorLocalBuffer::~AudioInjectorLocalBuffer() {
     stop();
 }
@@ -35,6 +40,17 @@ bool AudioInjectorLocalBuffer::seek(qint64 pos) {
 }
 
 qint64 AudioInjectorLocalBuffer::readData(char* data, qint64 maxSize) {
+    if (!_isStopped && _stream) {
+        // Whole network frames, silence while the stream underruns; returning nothing tells the reader the stream ended
+        const int frameBytes = _stream->getFrameBytes();
+        qint64 bytesRead = 0;
+        while (bytesRead + frameBytes <= maxSize &&
+               _stream->readFrame(AudioStreamSource::Local, data + bytesRead) != AudioStreamSource::Frame::Ended) {
+            bytesRead += frameBytes;
+        }
+        return bytesRead;
+    }
+
     if (!_isStopped && _audioData) {
         
         // first copy to the end of the raw audio
