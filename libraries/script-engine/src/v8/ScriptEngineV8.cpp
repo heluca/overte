@@ -367,7 +367,7 @@ void ScriptEngineV8::registerValue(ScriptEngineScopeGuardV8* scopeGuard, const Q
 
     for (const auto& pathPart : pathToValue) {
         partsToGo--;
-        v8::Local<v8::String> pathPartV8 = v8::String::NewFromUtf8(_v8Isolate, pathPart.toStdString().c_str(),v8::NewStringType::kNormal).ToLocalChecked();
+        v8::Local<v8::String> pathPartV8 = v8::String::NewFromTwoByte(_v8Isolate, reinterpret_cast<const uint16_t*>(pathPart.utf16()), v8::NewStringType::kNormal, pathPart.length()).ToLocalChecked();
         v8::Local<v8::Value> currentPath;
         bool createProperty = false;
         if (!partObject->Get(context, pathPartV8).ToLocal(&currentPath)) {
@@ -413,7 +413,7 @@ void ScriptEngineV8::registerGlobalObject(ScriptEngineScopeGuard* scopeGuard, co
     v8::Local<v8::Context> context = getContext();
     v8::Context::Scope contextScope(context);
     v8::Local<v8::Object> v8GlobalObject = context->Global();
-    v8::Local<v8::String> v8Name = v8::String::NewFromUtf8(_v8Isolate, name.toStdString().c_str()).ToLocalChecked();
+    v8::Local<v8::String> v8Name = v8::String::NewFromTwoByte(_v8Isolate, reinterpret_cast<const uint16_t*>(name.utf16()), v8::NewStringType::kNormal, name.length()).ToLocalChecked();
 
     if (!v8GlobalObject->Get(context, v8Name).IsEmpty()) {
         if (object) {
@@ -476,7 +476,7 @@ void ScriptEngineV8::registerGetterSetter(ScriptEngineScopeGuard* scopeGuard, co
             Q_ASSERT(v8parent.get()->IsObject());
             v8::Local<v8::Object> v8ParentObject = v8::Local<v8::Object>::Cast(v8parent.get());
             v8::Local<v8::String> v8propertyName =
-                v8::String::NewFromUtf8(_v8Isolate, name.toStdString().c_str()).ToLocalChecked();
+                v8::String::NewFromTwoByte(_v8Isolate, reinterpret_cast<const uint16_t*>(name.utf16()), v8::NewStringType::kNormal, name.length()).ToLocalChecked();
             v8::Local<v8::Object> v8ObjectToSetProperty;
             ScriptObjectV8Proxy *proxy = ScriptObjectV8Proxy::unwrapProxy(V8ScriptValue(this, v8ParentObject));
             // If object is ScriptObjectV8Proxy, then setting property needs to be handled differently
@@ -495,7 +495,7 @@ void ScriptEngineV8::registerGetterSetter(ScriptEngineScopeGuard* scopeGuard, co
         }
     } else {
         v8::Local<v8::String> v8propertyName =
-            v8::String::NewFromUtf8(_v8Isolate, name.toStdString().c_str()).ToLocalChecked();
+            v8::String::NewFromTwoByte(_v8Isolate, reinterpret_cast<const uint16_t*>(name.utf16()), v8::NewStringType::kNormal, name.length()).ToLocalChecked();
         if (!context->Global()->DefineProperty(context, v8propertyName, propertyDescriptor).FromMaybe(false)) {
             qCDebug(scriptengine_v8) << "DefineProperty failed for registerGetterSetter \"" << name << "\" for global object";
         }
@@ -821,11 +821,11 @@ ScriptValue ScriptEngineV8::evaluate(const QString& sourceCode, const QString& f
     v8::HandleScope handleScope(_v8Isolate);
     auto context = getContext();
     v8::Context::Scope contextScope(context);
-    v8::ScriptOrigin scriptOrigin(v8::String::NewFromUtf8(getIsolate(), fileName.toStdString().c_str()).ToLocalChecked());
+    v8::ScriptOrigin scriptOrigin(v8::String::NewFromTwoByte(getIsolate(), reinterpret_cast<const uint16_t*>(fileName.utf16()), v8::NewStringType::kNormal, fileName.length()).ToLocalChecked());
     v8::Local<v8::Script> script;
     {
         v8::TryCatch tryCatch(getIsolate());
-        if (!v8::Script::Compile(context, v8::String::NewFromUtf8(getIsolate(), sourceCode.toStdString().c_str()).ToLocalChecked(), &scriptOrigin).ToLocal(&script)) {
+        if (!v8::Script::Compile(context, v8::String::NewFromTwoByte(getIsolate(), reinterpret_cast<const uint16_t*>(sourceCode.utf16()), v8::NewStringType::kNormal, sourceCode.length()).ToLocalChecked(), &scriptOrigin).ToLocal(&script)) {
             QString errorMessage(QString("Error while compiling script: \"") + fileName + QString("\" ") + formatErrorMessageFromTryCatch(tryCatch));
             if (_manager) {
                 v8::Local<v8::Message> exceptionMessage = tryCatch.Message();
@@ -1223,7 +1223,7 @@ ScriptValue ScriptEngineV8::newValue(const QString& value) {
     Q_ASSERT(_v8Isolate->IsCurrent());
     v8::HandleScope handleScope(_v8Isolate);
     v8::Context::Scope contextScope(getContext());
-    v8::Local<v8::String> valueV8 = v8::String::NewFromUtf8(_v8Isolate, value.toStdString().c_str(), v8::NewStringType::kNormal).ToLocalChecked();
+    v8::Local<v8::String> valueV8 = v8::String::NewFromTwoByte(_v8Isolate, reinterpret_cast<const uint16_t*>(value.utf16()), v8::NewStringType::kNormal, value.length()).ToLocalChecked();
     V8ScriptValue result(this, valueV8);
     return ScriptValue(new ScriptValueV8Wrapper(this, std::move(result)));
 }
