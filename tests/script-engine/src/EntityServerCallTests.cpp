@@ -12,6 +12,7 @@
 #include "EntityServerCallTests.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QSemaphore>
 #include <QtCore/QThread>
 
 #include "AccountManager.h"
@@ -56,15 +57,24 @@ static const QString CALLS =
     "bodyDone = true;\n"
     "stopWhenDone();\n";
 
-// A networkless test script has no Entities, so add it
-static ModuleTestRun runCalls() {
+// A networkless test script has no Entities, so add it, and the other globals given
+static ModuleTestRun runWithEntities(const QString& source, const QList<QPair<QString, QObject*>>& globals = {}) {
     QTemporaryDir dir;
     ModuleTestOptions options;
-    options.beforeRun = [](ScriptManager* manager) {
+    options.beforeRun = [globals](ScriptManager* manager) {
         auto entities = DependencyManager::get<EntityScriptingInterface>();
         manager->engine()->globalObject().setProperty("Entities", manager->engine()->newQObject(entities.data()));
+        for (const auto& global : globals) {
+            manager->engine()->globalObject().setProperty(global.first, manager->engine()->newQObject(global.second));
+        }
     };
-    return runScript(dir, { { "main.js", CALLS } }, options);
+    return runScript(dir, { { "main.js", source } }, options);
+}
+
+void ClientTeardown::destroyClient() {
+    DependencyManager::destroy<EntityScriptClient>();
+    destroyed = true;
+    _gate.release();
 }
 
 static QStringList sorted(QStringList list) {
@@ -86,7 +96,7 @@ void EntityServerCallTests::initTestCase() {
 void EntityServerCallTests::testWithoutClientEachCallThrows() {
     // As in an entity script server, which sets up Entities but no EntityScriptClient
     QVERIFY(!DependencyManager::get<EntityScriptClient>());
-    auto run = runCalls();
+    auto run = runWithEntities(CALLS);
     QVERIFY(!run.timedOut);
     QCOMPARE(run.errors, QStringList());
     QCOMPARE(run.printed, QStringList({
@@ -104,7 +114,7 @@ void EntityServerCallTests::testWithClientAndNoServer() {
     auto client = DependencyManager::set<EntityScriptClient>();
     client->moveToThread(&clientThread);
 
-    auto run = runCalls();
+    auto run = runWithEntities(CALLS);
 
     QMetaObject::invokeMethod(client.data(), [raw = client.data()] { raw->moveToThread(QCoreApplication::instance()->thread()); },
                               Qt::BlockingQueuedConnection);
@@ -124,4 +134,36 @@ void EntityServerCallTests::testWithClientAndNoServer() {
         "metadata returned true",
         "metadata callback false error_loading_script entity server script details not found",
     }));
+}
+
+void EntityServerCallTests::testClientDestroyedBeforeQueuedStart() {
+    // As in an Agent whose script stops while its main thread is busy: aboutToFinish() destroys the client before the
+    // status request's queued start() runs on the client's thread
+    QThread clientThread;
+    clientThread.start();
+    DependencyManager::set<EntityScriptClient>()->moveToThread(&clientThread);
+    QSemaphore gate;
+    // Holds the client's thread until the script has destroyed the client, so start() stays queued until then
+    QMetaObject::invokeMethod(DependencyManager::get<EntityScriptClient>().data(), [&gate] { gate.acquire(); },
+                              Qt::QueuedConnection);
+    ClientTeardown teardown(gate);
+
+    auto run = runWithEntities(
+        "Entities.getServerScriptStatus('{0f6c1fa8-55a3-4a63-9b7b-2f8f9b0e4c11}', function(success, isRunning, status, errorInfo) {\n"
+        "    print('status callback ' + success + ' ' + isRunning + ' ' + status + ' [' + errorInfo + ']');\n"
+        "    Script.stop(true);\n"
+        "});\n"
+        "Teardown.destroyClient();\n"
+        "print('client destroyed');\n",
+        { { "Teardown", &teardown } });
+
+    if (!teardown.destroyed) {
+        teardown.destroyClient();
+    }
+    clientThread.quit();
+    clientThread.wait();
+
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "client destroyed", "status callback false false error_loading_script []" }));
 }
