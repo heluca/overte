@@ -43,9 +43,11 @@
 #include "ZoneEntityItem.h"
 #include "WebEntityItem.h"
 #include <EntityScriptClient.h>
+#include "EntityScriptClientAccess.h"
 #include <Profile.h>
 #include "GrabPropertyGroup.h"
 #include <ScriptContext.h>
+#include <Scriptable.h>
 #include <ScriptEngineCast.h>
 #include <ScriptValue.h>
 
@@ -1301,7 +1303,11 @@ void EntityScriptingInterface::callEntityMethod(const QUuid& id, const QString& 
 
 void EntityScriptingInterface::callEntityServerMethod(const QUuid& id, const QString& method, const QStringList& params) {
     PROFILE_RANGE(script_entities, __FUNCTION__);
-    DependencyManager::get<EntityScriptClient>()->callEntityServerMethod(id, method, params);
+    auto client = entityScriptClientOrRaise(Scriptable::engine().get(), "callEntityServerMethod");
+    if (!client) {
+        return;
+    }
+    client->callEntityServerMethod(id, method, params);
 }
 
 void EntityScriptingInterface::callEntityClientMethod(const QUuid& clientSessionID, const QUuid& entityID, const QString& method, const QStringList& params) {
@@ -1544,7 +1550,10 @@ ParabolaToEntityIntersectionResult EntityScriptingInterface::evalParabolaInterse
 }
 
 bool EntityScriptingInterface::reloadServerScripts(const QUuid& entityID) {
-    auto client = DependencyManager::get<EntityScriptClient>();
+    auto client = entityScriptClientOrRaise(Scriptable::engine().get(), "reloadServerScripts");
+    if (!client) {
+        return false;
+    }
     return client->reloadServerScript(entityID);
 }
 
@@ -1585,7 +1594,10 @@ bool EntityPropertyMetadataRequest::script(EntityItemID entityID, const ScriptVa
 }
 
 bool EntityPropertyMetadataRequest::serverScripts(EntityItemID entityID, const ScriptValue& handler) {
-    auto client = DependencyManager::get<EntityScriptClient>();
+    auto client = entityScriptClientOrRaise(_scriptManager->engine().get(), "queryPropertyMetadata(\"serverScripts\")");
+    if (!client) {
+        return false;
+    }
     auto request = client->createScriptStatusRequest(entityID);
     QPointer<ScriptManager> manager = _scriptManager;
     QObject::connect(request, &GetScriptStatusRequest::finished, _scriptManager, [=, this](GetScriptStatusRequest* request) mutable {
@@ -1615,7 +1627,8 @@ bool EntityPropertyMetadataRequest::serverScripts(EntityItemID entityID, const S
         callScopedHandlerObject(handler, err, result);
         request->deleteLater();
     });
-    request->start();
+    // On the client's thread, which owns its pending requests
+    QMetaObject::invokeMethod(request, "start");
     return true;
 }
 
@@ -1668,7 +1681,10 @@ bool EntityScriptingInterface::queryPropertyMetadata(const QUuid& entityID,
 
 //bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, const ScriptValue& callback) {
 bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, ScriptValue callback) {
-    auto client = DependencyManager::get<EntityScriptClient>();
+    auto client = entityScriptClientOrRaise(callback.engine().get(), "getServerScriptStatus");
+    if (!client) {
+        return false;
+    }
     auto request = client->createScriptStatusRequest(entityID);
 
     auto engine = callback.engine();
@@ -1694,7 +1710,8 @@ bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, Scri
         // This causes ScriptValueProxy to be released, and thus its destructor is called on script engine thread and not main thread
         callback = ScriptValue();
     });
-    request->start();
+    // On the client's thread, which owns its pending requests
+    QMetaObject::invokeMethod(request, "start");
     return true;
 }
 
