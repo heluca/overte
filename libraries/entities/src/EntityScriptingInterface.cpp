@@ -1566,17 +1566,20 @@ bool EntityPropertyMetadataRequest::script(EntityItemID entityID, const ScriptVa
     using LocalScriptStatusRequest = QFutureWatcher<QVariant>;
 
     LocalScriptStatusRequest* request = new LocalScriptStatusRequest;
-    QObject::connect(request, &LocalScriptStatusRequest::finished, _scriptManager, [=, this]() mutable {
+    // This EntityPropertyMetadataRequest lives on the caller's stack and is gone when the future finishes; the
+    // connection ends with the manager, so the manager outlives the handler
+    ScriptManager* manager = _scriptManager;
+    QObject::connect(request, &LocalScriptStatusRequest::finished, _scriptManager, [=]() mutable {
         auto details = request->result().toMap();
         ScriptValue err, result;
         if (details.contains("isError")) {
             if (!details.contains("message")) {
                 details["message"] = details["errorInfo"];
             }
-            err = _scriptManager->engine()->makeError(_scriptManager->engine()->toScriptValue(details));
+            err = manager->engine()->makeError(manager->engine()->toScriptValue(details));
         } else {
             details["success"] = true;
-            result = _scriptManager->engine()->toScriptValue(details);
+            result = manager->engine()->toScriptValue(details);
         }
         callScopedHandlerObject(handler, err, result);
         request->deleteLater();
@@ -1692,7 +1695,6 @@ bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, Scri
     if (!client) {
         return false;
     }
-    auto request = client->createScriptStatusRequest(entityID);
 
     auto engine = callback.engine();
     auto manager = engine->manager();
@@ -1702,6 +1704,7 @@ bool EntityScriptingInterface::getServerScriptStatus(const QUuid& entityID, Scri
         engine->raiseException("This script does not belong to a ScriptManager");
         return false;
     }
+    auto request = client->createScriptStatusRequest(entityID);
 
     connect(request, &GetScriptStatusRequest::finished, manager, [callback](GetScriptStatusRequest* request) mutable {
         auto engine = callback.engine();
