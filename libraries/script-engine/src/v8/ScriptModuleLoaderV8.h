@@ -33,10 +33,14 @@ class ScriptEngineV8;
 
 /// [V8] Why ScriptEngineV8::evaluateInClosure failed, when its caller asked for it rather than for a report
 struct ScriptClosureFailureV8 {
+    /// Set until the code has run to completion
     bool failed { false };
-    /// What the code threw; empty for a syntax error
+    /// What the code threw, if it threw
     v8::Global<v8::Value> exception;
+    /// The compiler's message, for a syntax error
     QString syntaxError;
+    /// Where it threw or failed to compile; for a throw, possibly in a file the code require()d
+    QString fileName;
     int line { -1 };
 };
 
@@ -99,6 +103,8 @@ private:
     static v8::MaybeLocal<v8::Value> evaluateSynthetic(v8::Local<v8::Context> context, v8::Local<v8::Module> module);
     /// Evaluates a CommonJS record's source as Script.require does, see ScriptModuleSyntheticV8.cpp
     static v8::MaybeLocal<v8::Value> evaluateCommonJs(ScriptEngineV8* engine, ScriptModuleRecordV8& record);
+    /// Where a CommonJS file's evaluation failed with this exception, for one that has no stack to say so
+    static bool findCommonJsErrorSite(ScriptEngineV8* engine, v8::Local<v8::Value> exception, QString* fileName, int* line);
     static v8::MaybeLocal<v8::Module> resolveModuleCallback(v8::Local<v8::Context> context, v8::Local<v8::String> specifier,
                                                             v8::Local<v8::FixedArray> importAttributes,
                                                             v8::Local<v8::Module> referrer);

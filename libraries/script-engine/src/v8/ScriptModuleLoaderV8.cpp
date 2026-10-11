@@ -423,7 +423,7 @@ void ScriptModuleLoaderV8::reportEvaluationError(v8::Local<v8::Context> context,
     }
 
     QString text = toQString(isolate, exception);
-    if (line <= 0) {
+    if (line <= 0 && !findCommonJsErrorSite(_engine, exception, &fileName, &line)) {
         // A value rejected after an await carries no stack, so the entry's URL above is only a fallback
         text += exception->IsNativeError() ? " (no location)" : " (no location: rejected with a non-Error value)";
     }

@@ -83,6 +83,47 @@ v8::MaybeLocal<v8::Value> ScriptModuleLoaderV8::evaluateSynthetic(v8::Local<v8::
     return handleScope.Escape(resolver->GetPromise());
 }
 
+// Only an Error carries a stack naming where it was thrown. For anything else the loader's report takes the file and
+// line from the record (findCommonJsErrorSite), and the message names them for import(), which rejects with it.
+static void throwCommonJsFailure(ScriptEngineV8* engine, ScriptModuleRecordV8& record, const ScriptClosureFailureV8& failure) {
+    v8::Isolate* isolate = engine->getIsolate();
+    QString fileName = failure.fileName.isEmpty() ? record.url.toString() : failure.fileName;
+    QString site = ScriptModuleLoaderV8::siteText(fileName, failure.line);
+    if (!failure.exception.IsEmpty() && failure.exception.Get(isolate)->IsNativeError()) {
+        isolate->ThrowException(failure.exception.Get(isolate));
+        return;
+    }
+    QString text;
+    if (!failure.exception.IsEmpty()) {
+        text = QString("CommonJS module %1 threw %2")
+            .arg(site, ScriptModuleLoaderV8::toQString(isolate, failure.exception.Get(isolate)));
+    } else if (!failure.syntaxError.isEmpty()) {
+        text = QString("Error while compiling CommonJS module %1: %2").arg(site, failure.syntaxError);
+    } else {
+        text = QString("CommonJS module %1 could not be evaluated").arg(record.url.toString());
+    }
+    v8::Local<v8::String> message = ScriptModuleLoaderV8::toV8String(isolate, text);
+    v8::Local<v8::Value> exception = failure.exception.IsEmpty() && !failure.syntaxError.isEmpty()
+        ? v8::Exception::SyntaxError(message) : v8::Exception::Error(message);
+    record.commonJsError.Reset(isolate, exception);
+    record.errorFileName = fileName;
+    record.errorLine = failure.line;
+    isolate->ThrowException(exception);
+}
+
+bool ScriptModuleLoaderV8::findCommonJsErrorSite(ScriptEngineV8* engine, v8::Local<v8::Value> exception,
+                                                 QString* fileName, int* line) {
+    v8::Isolate* isolate = engine->getIsolate();
+    for (const auto& record : engine->_modules->records()) {
+        if (!record->commonJsError.IsEmpty() && record->commonJsError.Get(isolate)->StrictEquals(exception)) {
+            *fileName = record->errorFileName;
+            *line = record->errorLine;
+            return true;
+        }
+    }
+    return false;
+}
+
 // Evaluated as Script.require evaluates a file it fetched: through ScriptManager::instantiateModule, in a closure of its
 // own, and into Script.require.cache under the resolved URL. So Script.require of the same URL and the import return
 // the same exports whichever comes first, and require() inside the file works as it always has. The environment is
@@ -114,17 +155,7 @@ v8::MaybeLocal<v8::Value> ScriptModuleLoaderV8::evaluateCommonJs(ScriptEngineV8*
         engine->_closureFailure = nullptr;
         if (failure.failed) {
             cache.setProperty(modulePath, engine->nullValue());
-            QString site = siteText(modulePath, failure.line);
-            v8::Local<v8::Value> exception = failure.exception.IsEmpty()
-                ? v8::Exception::SyntaxError(toV8String(isolate, QString("Error while compiling CommonJS module %1: %2")
-                                                                     .arg(site, failure.syntaxError)))
-                : failure.exception.Get(isolate);
-            if (!exception->IsNativeError()) {
-                // Only an Error carries a stack naming the file and line
-                exception = v8::Exception::Error(toV8String(isolate, QString("CommonJS module %1 threw %2")
-                                                                         .arg(site, toQString(isolate, exception))));
-            }
-            isolate->ThrowException(exception);
+            throwCommonJsFailure(engine, record, failure);
             return v8::MaybeLocal<v8::Value>();
         }
         module.setProperty("loaded", true, ScriptValue::ReadOnly | ScriptValue::Undeletable);
