@@ -81,6 +81,14 @@ ScriptValue EnvironmentProbe::resolveLater() {
     return promise.promise;
 }
 
+void EnvironmentProbe::rememberEnvironment() {
+    _remembered = _manager->engine()->currentEnvironment();
+}
+
+bool EnvironmentProbe::sameEnvironment() const {
+    return _remembered && _manager->engine()->currentEnvironment() == _remembered;
+}
+
 static Options withProbe(std::unique_ptr<EnvironmentProbe>& probe, Options options = Options()) {
     options.beforeRun = [&probe](ScriptManager* manager) {
         probe = std::make_unique<EnvironmentProbe>(manager);
@@ -200,6 +208,27 @@ void ScriptModuleEnvTests::testClassicEntityImportAfterAwait() {
     QCOMPARE(run.errors, QStringList());
     QCOMPARE(run.printed, QStringList({ "before false true " + ENTITY, "after false true " + ENTITY + " " + entityURL,
                                         "lib " + libURL + " " + ENTITY + " " + entityURL, "imported true", "end" }));
+}
+
+void ScriptModuleEnvTests::testClassicEnvironmentKeptPerEntity() {
+    // A loaded classic entity keeps one environment across its method calls (here preload and unload) and gets a new
+    // one once it has unloaded
+    std::unique_ptr<EnvironmentProbe> probe;
+    QTemporaryDir dir;
+    QString first = "(function() { this.preload = function() { Probe.rememberEnvironment(); };"
+                    " this.unload = function() { print('unload same ' + Probe.sameEnvironment()); }; })";
+    QString second = "(function() { this.preload = function() {"
+                     " print('reloaded same ' + Probe.sameEnvironment()); }; })";
+    auto run = runScript(dir, {
+        { "main.js",
+          "Probe.loadClassicEntity('" + ENTITY + "', '" + ENTITY_URL + "', \"" + first + "\").then(function() {\n"
+          "    Probe.unloadEntity('" + ENTITY + "', '" + ENTITY_URL + "');\n"
+          "    return Probe.loadClassicEntity('" + ENTITY + "', '" + ENTITY_URL + "', \"" + second + "\");\n"
+          "}).then(function() { Script.stop(true); });\n" },
+    }, withProbe(probe));
+    QVERIFY(!run.timedOut);
+    QCOMPARE(run.errors, QStringList());
+    QCOMPARE(run.printed, QStringList({ "unload same true", "reloaded same false" }));
 }
 
 void ScriptModuleEnvTests::testEntityEnvironmentAcrossAwait() {

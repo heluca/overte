@@ -37,7 +37,8 @@ static const QString ENTITY = "{0f6c1fa8-55a3-4a63-9b7b-2f8f9b0e4c11}";
 // Never fetched: the tests hand the source over. Not a file: URL, which ScriptManager would check for changes.
 static const QString ENTITY_URL = "http://127.0.0.1:1/entity.js";
 
-// Accepts WebSocket connections on 127.0.0.1, from a thread of its own, and sends each one "hello"
+// Accepts WebSocket connections on 127.0.0.1, from a thread of its own, sends each one "hello" and a 3-byte binary
+// message, and closes it
 class HelloWebSocketServer {
 public:
     HelloWebSocketServer() {
@@ -50,6 +51,8 @@ public:
             QObject::connect(_server, &QWebSocketServer::newConnection, _server, [this] {
                 while (QWebSocket* socket = _server->nextPendingConnection()) {
                     socket->sendTextMessage("hello");
+                    socket->sendBinaryMessage(QByteArray("bin"));
+                    socket->close();
                 }
             });
         }, Qt::BlockingQueuedConnection);
@@ -232,7 +235,8 @@ void ScriptModuleEnvCallbackTests::testXhrCallbackTimerCarriesEntity() {
 }
 
 void ScriptModuleEnvCallbackTests::testWebSocketCallbacksKeepModuleEnvironment() {
-    // onopen and onmessage run from the event loop in the environment they were assigned in, as for XMLHttpRequest
+    // Every handler runs from the event loop in the environment it was assigned in, as for XMLHttpRequest: onopen,
+    // onmessage for a text and a binary message, onclose when the server closes, and onerror for a refused connection
     HelloWebSocketServer webSocketServer;
     HeldScriptServer server("export const value = 'untrusted';\n");
     QString untrustedURL = QString(server.url()).replace("held.js", "untrusted.mjs");
@@ -240,16 +244,22 @@ void ScriptModuleEnvCallbackTests::testWebSocketCallbacksKeepModuleEnvironment()
         "const ws = new WebSocket('" + webSocketServer.url() + "');\n"
         "ws.onopen = function() { print('open ' + Probe.allowed()); };\n"
         "ws.onmessage = function(message) {\n"
-        "    print('message ' + message.data + ' ' + Probe.allowed() + ' [' + Probe.entityID() + ']');\n"
+        "    const data = typeof message.data === 'string' ? message.data : message.data.byteLength + ' bytes';\n"
+        "    print('message ' + data + ' ' + Probe.allowed() + ' [' + Probe.entityID() + ']');\n"
+        "};\n"
+        "ws.onclose = function() {\n"
+        "    print('close ' + Probe.allowed() + ' [' + Probe.entityID() + ']');\n"
         "    Script.stop(true);\n"
         "};\n";
+    QStringList allowed({ "open true", "message hello true []", "message 3 bytes true []", "close true []" });
+    QStringList refused({ "open false", "message hello false []", "message 3 bytes false []", "close false []" });
     std::unique_ptr<CallbackProbe> probe;
 
     QTemporaryDir trustedDir;
     auto trusted = runScript(trustedDir, { { "main.mjs", connect } }, withProbe(probe));
     QVERIFY(!trusted.timedOut);
     QCOMPARE(trusted.errors, QStringList());
-    QCOMPARE(trusted.printed, QStringList({ "open true", "message hello true []" }));
+    QCOMPARE(trusted.printed, allowed);
 
     QTemporaryDir untrustedDir;
     auto untrusted = runScript(untrustedDir, {
@@ -257,7 +267,7 @@ void ScriptModuleEnvCallbackTests::testWebSocketCallbacksKeepModuleEnvironment()
     }, withProbe(probe));
     QVERIFY(!untrusted.timedOut);
     QCOMPARE(untrusted.errors, QStringList());
-    QCOMPARE(untrusted.printed, QStringList({ "open false", "message hello false []" }));
+    QCOMPARE(untrusted.printed, refused);
 
     QTemporaryDir entityDir;
     auto entity = runScript(entityDir, {
@@ -266,5 +276,17 @@ void ScriptModuleEnvCallbackTests::testWebSocketCallbacksKeepModuleEnvironment()
     }, withProbe(probe));
     QVERIFY(!entity.timedOut);
     QCOMPARE(entity.errors, QStringList());
-    QCOMPARE(entity.printed, QStringList({ "open false", "message hello false [" + ENTITY + "]" }));
+    QCOMPARE(entity.printed, QStringList({ "open false", "message hello false [" + ENTITY + "]",
+                                           "message 3 bytes false [" + ENTITY + "]", "close false [" + ENTITY + "]" }));
+
+    QTemporaryDir refusedDir;
+    auto refusedRun = runScript(refusedDir, {
+        { "main.mjs",
+          "await import('" + untrustedURL + "');\n"
+          "const ws = new WebSocket('ws://127.0.0.1:1');\n"
+          "ws.onerror = function() { print('error ' + Probe.allowed()); Script.stop(true); };\n" },
+    }, withProbe(probe));
+    QVERIFY(!refusedRun.timedOut);
+    QCOMPARE(refusedRun.errors, QStringList());
+    QCOMPARE(refusedRun.printed, QStringList({ "error false" }));
 }
