@@ -96,7 +96,8 @@ static bool areURLsAllowed(int permissionIndex, const std::vector<QString>& urls
 // stack. Design question Q3 of #10 would bring classic scripts here by giving them an environment too.
 static bool isEnvironmentAllowed(int permissionIndex, ScriptEngine* engine, const ScriptEnvironment& environment,
                                  const QString& scriptURL) {
-    QStringList stack = engine->getCurrentScriptURLs();
+    // Frames of Script.require modules too, which run in contexts of their own
+    QStringList stack = engine->getCurrentScriptURLs(true);
     if (stack.isEmpty()) {
         // A native function called with no script frame, e.g. passed straight to then() or Script.setTimeout(): the
         // environment says whose continuation it is, but not which of its URLs chose the function, so fail closed
@@ -114,10 +115,9 @@ static bool isEnvironmentAllowed(int permissionIndex, ScriptEngine* engine, cons
     for (const QString& url : environment.loadedURLs()) {
         urlsToCheck.push_back(url);
     }
+    // A frame without a name is checked as the empty string, which no prefix allows
     for (const QString& url : stack) {
-        if (!url.isEmpty()) {
-            urlsToCheck.push_back(url);
-        }
+        urlsToCheck.push_back(url);
     }
     return areURLsAllowed(permissionIndex, urlsToCheck);
 }
@@ -159,24 +159,16 @@ bool ScriptPermissions::isCurrentScriptAllowed(ScriptPermissions::Permission per
         urlsToCheck.push_back(scriptURL);
     }
 
-    auto currentURL = Scriptable::context()->currentFileName();
-    if (!currentURL.isEmpty() && currentURL != scriptURL) {
-        urlsToCheck.push_back(currentURL);
+    // The topmost script frame (every ScriptContext in the chain reports the same one), by the name it was compiled
+    // with: ScriptContext::currentFileName() follows sourceURL directives and is for messages. A frame without a name
+    // is checked as the empty string, which no prefix allows; with no frame at all only the manager URL counts.
+    QStringList frames = engine->getCurrentScriptURLs();
+    if (!frames.isEmpty() && frames.first() != scriptURL) {
+        urlsToCheck.push_back(frames.first());
     }
 
     if (PERMISSIONS_DEBUG_ENABLED) {
-        qDebug() << "ScriptPermissions::isCurrentScriptAllowed: filename: " << scriptURL;
-    }
-    auto parentContext = Scriptable::context()->parentContext();
-    while (parentContext) {
-        QString parentFilename = parentContext->currentFileName();
-        if (!parentFilename.isEmpty()) {
-            urlsToCheck.push_back(parentContext->currentFileName());
-            if (PERMISSIONS_DEBUG_ENABLED) {
-                qDebug() << "ScriptPermissions::isCurrentScriptAllowed: parent filename: " << parentContext->currentFileName();
-            }
-        }
-        parentContext = parentContext->parentContext();
+        qDebug() << "ScriptPermissions::isCurrentScriptAllowed: filename: " << scriptURL << " topmost frame: " << frames.value(0);
     }
 
     // Check if the script is allowed:

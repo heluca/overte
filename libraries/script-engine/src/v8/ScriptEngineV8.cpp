@@ -1649,17 +1649,22 @@ void ScriptEngineV8::logBacktrace(const QString &title) {
     }
 }
 
-QStringList ScriptEngineV8::getCurrentScriptURLs() const {
+QStringList ScriptEngineV8::getCurrentScriptURLs(bool includeOtherContexts) const {
     auto isolate = _v8Isolate;
     Q_ASSERT(isolate->IsCurrent());
     v8::HandleScope handleScope(isolate);
     v8::Context::Scope contextScope(_v8Isolate->GetCurrentContext());
-    v8::Local<v8::StackTrace> stackTrace = v8::StackTrace::CurrentStackTrace(isolate, 100);
+    auto options = includeOtherContexts
+        ? static_cast<v8::StackTrace::StackTraceOptions>(v8::StackTrace::kDetailed | v8::StackTrace::kExposeFramesAcrossSecurityOrigins)
+        : v8::StackTrace::kDetailed;
+    v8::Local<v8::StackTrace> stackTrace = v8::StackTrace::CurrentStackTrace(isolate, 100, options);
     QStringList scriptURLs;
     //V8TODO nicer formatting
     for (int i = 0; i < stackTrace->GetFrameCount(); i++) {
         v8::Local<v8::StackFrame> stackFrame = stackTrace->GetFrame(isolate, i);
-        scriptURLs.append(QString(*v8::String::Utf8Value(isolate, stackFrame->GetScriptNameOrSourceURL())));
+        // The name the script was compiled with: script text cannot change it, unlike a sourceURL directive
+        v8::Local<v8::String> scriptName = stackFrame->GetScriptName();
+        scriptURLs.append(scriptName.IsEmpty() ? QString() : QString(*v8::String::Utf8Value(isolate, scriptName)));
     }
     return scriptURLs;
 }

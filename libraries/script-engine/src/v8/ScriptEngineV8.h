@@ -220,7 +220,7 @@ public: // not for public use, but I don't like how Qt strings this along with p
     const v8::Local<v8::Context> getConstContext() const;
     QString formatErrorMessageFromTryCatch(v8::TryCatch &tryCatch);
     // Useful for debugging
-    virtual QStringList getCurrentScriptURLs() const override;
+    virtual QStringList getCurrentScriptURLs(bool includeOtherContexts = false) const override;
 
     using ObjectWrapperMap = QMap<QObject*, QWeakPointer<ScriptObjectV8Proxy>>;
     mutable QMutex _qobjectWrapperMapProtect;

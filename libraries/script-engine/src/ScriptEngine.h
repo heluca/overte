@@ -602,7 +602,10 @@ public: // not for public use, but I don't like how Qt strings this along with p
     virtual ScriptValue create(int type, const void* ptr) = 0;
     virtual QVariant convert(const ScriptValue& value, int type) = 0;
     virtual void registerCustomType(int type, MarshalFunction mf, DemarshalFunction df) = 0;
-    virtual QStringList getCurrentScriptURLs() const = 0;
+    /// Names the scripts on the stack were compiled with (not sourceURL directives), innermost first; empty for a
+    /// frame without one. Empty when native code was called with no script frame on the stack. Frames of other contexts
+    /// (Script.require modules run in contexts of their own) are hidden by V8 unless includeOtherContexts is set.
+    virtual QStringList getCurrentScriptURLs(bool includeOtherContexts = false) const = 0;
     virtual void perManagerLoopIterationCleanup() = 0;
 
 signals:
