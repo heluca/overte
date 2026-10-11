@@ -53,6 +53,7 @@ private slots:
     void testUrlTable();
     void testUrlParts();
     void testReplacedBuiltins();
+    void testNativeChecks();
     void testClosureRealm();
 
 private:
