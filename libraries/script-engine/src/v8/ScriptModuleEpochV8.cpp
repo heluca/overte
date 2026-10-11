@@ -48,6 +48,7 @@ void ScriptEngineV8::releaseModuleEpoch(int epoch) {
     reportStalledTopLevelAwaits(epoch, "Entity script unloaded while a top-level await was still pending at ");
     _downloadModuleEpochs.remove(epoch);
     _reloadModuleEpochs.remove(epoch);
+    _moduleEpochEntries.remove(epoch);
     ScriptModuleLoaderV8::releaseEpoch(this, epoch);
 }
 
@@ -93,6 +94,9 @@ void ScriptModuleLoaderV8::releaseEpoch(ScriptEngineV8* engine, int epoch) {
         record->waiters.clear();
         if (!record->commonJsModule.IsEmpty()) {
             removeRequireCacheEntry(engine, record->url.toString(), record->commonJsModule.Get(isolate));
+            if (engine->_commonJsCacheEpochs.value(record->url.toString(), 0) == epoch) {
+                engine->_commonJsCacheEpochs.remove(record->url.toString());
+            }
         }
         record->module.Reset();
         record->jsonValue.Reset();

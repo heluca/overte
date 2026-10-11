@@ -61,6 +61,9 @@ void ScriptEngineV8::loadModule(const ScriptModuleRequest& request, ScriptModule
     }
     ScriptModuleRequest withEnvironment = request;
     applyModuleEpochDownload(withEnvironment);
+    if (request.epoch != 0 && !_moduleEpochEntries.contains(request.epoch)) {
+        _moduleEpochEntries.insert(request.epoch, request.url);
+    }
     if (!withEnvironment.environment) {
         withEnvironment.environment = std::make_shared<ScriptEnvironment>(EntityItemID(), request.sandboxURL, request.epoch);
     }
@@ -98,7 +101,6 @@ void ScriptModuleLoaderV8::start() {
 
 void ScriptModuleLoaderV8::fetch(ScriptEngineV8* engine, const ScriptModuleRecordV8Pointer& record, bool forceDownload) {
     auto scriptCache = DependencyManager::get<ScriptCache>();
-    record->forceDownload = forceDownload;
     // The BatchLoader pattern: the proxy outlives a loader deleted mid-fetch, and the result belongs to the record
     // (other loaders may be waiting on it), so it is delivered to the engine rather than to this loader.
     auto proxy = new ScriptCacheSignalProxy();

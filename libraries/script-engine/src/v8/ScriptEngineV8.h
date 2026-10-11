@@ -349,6 +349,10 @@ private:
     QSet<int> _downloadModuleEpochs;
     // Epochs made for a reload, see newModuleEpoch()
     QSet<int> _reloadModuleEpochs;
+    // The entry URL of each entity epoch's first load, and which epoch's CommonJS import made the Script.require.cache
+    // entry of a URL; see ScriptModuleLoaderV8::evaluateCommonJs
+    QHash<int, QUrl> _moduleEpochEntries;
+    QHash<QString, int> _commonJsCacheEpochs;
     void applyModuleEpochDownload(ScriptModuleRequest& request);
     // Reports the modules of the epoch (of every epoch if negative) still suspended in a top-level await, as a warning
     // starting with what
