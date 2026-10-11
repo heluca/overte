@@ -137,6 +137,16 @@ test("seats come from Script.remoteCallerID and moves drop disc models on the bo
     assert.match(engine.named("GT.Status")[0].text, /Red to move \(move 3,/);
 });
 
+test("join passes the seat parameter through to the core", () => {
+    const engine = fakeEngine();
+    const referee = loaded(engine);
+    engine.call(referee, ALICE, "join", ["Alice", "1"]);
+    engine.call(referee, BOB, "join", ["Bob", "1"]);
+    assert.deepEqual(engine.projection().seats, [null, { session: ALICE, name: "Alice" }]);
+    assert.deepEqual(engine.sent[engine.sent.length - 1].message,
+        { type: "rejected", to: BOB, method: "join", reason: "seat taken" });
+});
+
 test("a call without a caller id is refused and announced on the channel", () => {
     const engine = fakeEngine();
     const referee = loaded(engine);
@@ -311,4 +321,26 @@ test("a reload adopts the column targets and seats, and deletes duplicates that 
     assert.equal(engine.entities.size, before);
     assert.equal(engine.named("GT.Col3")[0], kept);
     assert.equal(engine.named("GT.Seat1").length, 1);
+});
+
+test("adopted children are brought back to the current layout and client script", () => {
+    const engine = fakeEngine();
+    const stale = { script: "https://old-host/gameTable/gametable-client.mjs", localPosition: { x: 9, y: 9, z: 9 },
+        dimensions: { x: 1, y: 1, z: 1 } };
+    const column = engine.Entities.addEntity({ name: "GT.Col2", parentID: BOARD, type: "Box", ...stale });
+    const seat = engine.Entities.addEntity({ name: "GT.Seat1", parentID: BOARD, type: "Text", ...stale });
+    const status = engine.Entities.addEntity({ name: "GT.Status", parentID: BOARD, type: "Text",
+        localPosition: stale.localPosition, dimensions: stale.dimensions });
+    loaded(engine);
+    const fresh = engine.named("GT.Col1")[0];
+    const adoptedColumn = engine.entities.get(column);
+    assert.equal(adoptedColumn.script, fresh.script);
+    assert.match(adoptedColumn.script, /^file:.*\/gametable-client\.mjs$/);
+    assert.deepEqual(adoptedColumn.dimensions, fresh.dimensions);
+    assert.equal(adoptedColumn.localPosition.y, fresh.localPosition.y);
+    assert.ok(adoptedColumn.localPosition.x > fresh.localPosition.x);
+    assert.equal(engine.entities.get(seat).script, fresh.script);
+    assert.ok(engine.entities.get(seat).localPosition.x > 0.35);
+    assert.ok(engine.entities.get(status).localPosition.y > fresh.localPosition.y);
+    assert.equal(engine.entities.get(status).script, undefined);
 });

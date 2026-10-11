@@ -123,6 +123,39 @@ test("join is idempotent for a seated caller and refuses a third player", () => 
     assert.deepEqual(world.event, { type: "rejected", to: CAROL, method: "join", reason: "table full" });
 });
 
+test("join takes the seat asked for, and refuses a taken or malformed one", () => {
+    const { world, core } = table();
+    assert.equal(core.join(ALICE, "Alice", "1"), true);
+    assert.deepEqual(world.state.seats, [null, { session: ALICE, name: "Alice" }]);
+    const published = world.published.length;
+    assert.equal(core.join(BOB, "Bob", "1"), false);
+    assert.deepEqual(world.event, { type: "rejected", to: BOB, method: "join", reason: "seat taken" });
+    ["2", "01", "-1", "x", " 0"].forEach(seat => {
+        assert.equal(core.join(BOB, "Bob", seat), false);
+        assert.deepEqual(world.event, { type: "rejected", to: BOB, method: "join", reason: "seat must be 0 or 1" });
+    });
+    assert.equal(world.published.length, published, "a refused join stores nothing");
+    // A seated caller asking for the other seat keeps the one it has
+    assert.equal(core.join(ALICE, "Alice", "0"), true);
+    assert.deepEqual(world.event.seats, [null, { session: ALICE, name: "Alice" }]);
+    assert.equal(core.join(BOB, "Bob", "0"), true);
+    assert.deepEqual(world.state.seats, [{ session: BOB, name: "Bob" }, { session: ALICE, name: "Alice" }]);
+    assert.equal(world.state.phase, "playing");
+    assert.equal(world.state.toMove, 0);
+});
+
+test("join without a seat takes the free one, whichever it is", () => {
+    const { world, core } = table();
+    core.join(ALICE, "Alice", "0");
+    core.join(ALICE, "Alice", "");
+    assert.equal(core.join(BOB, "Bob", ""), true);
+    assert.deepEqual(world.state.seats.map(seat => seat.session), [ALICE, BOB]);
+    const second = table();
+    second.core.join(ALICE, "Alice", "1");
+    second.core.join(BOB, "Bob");
+    assert.deepEqual(second.world.state.seats.map(seat => seat.session), [BOB, ALICE]);
+});
+
 test("names are cosmetic: trimmed, stripped of control characters, capped, defaulted", () => {
     const { world, core } = table();
     core.join(ALICE, "  A\nlice\u0007 ".padEnd(60, "x"));

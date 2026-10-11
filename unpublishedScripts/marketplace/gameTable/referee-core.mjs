@@ -169,9 +169,10 @@ export class RefereeCore {
     /**
      * @param {string | undefined} caller
      * @param {string} [name] cosmetic; the entity script server cannot look display names up
+     * @param {string} [seat] "0" or "1" for that seat; absent or "" for the first free one
      * @returns {boolean} whether the call was accepted
      */
-    join(caller, name) {
+    join(caller, name, seat) {
         this.expire();
         if (!isCaller(caller)) {
             return this.reject(caller, "join", "no caller id");
@@ -180,11 +181,17 @@ export class RefereeCore {
             this.world.announce({ type: "state", ...this.projection() });
             return true;
         }
+        if (seat !== undefined && seat !== "" && seat !== "0" && seat !== "1") {
+            return this.reject(caller, "join", "seat must be 0 or 1");
+        }
         if (this.phase !== "waiting") {
             return this.reject(caller, "join", "table full");
         }
-        const seat = this.seats[0] === null ? 0 : 1;
-        this.seats[seat] = { session: caller, name: cleanName(name, caller), joinedAt: this.world.now() };
+        const chosen = seat === "0" || seat === "1" ? Number(seat) : this.seats[0] === null ? 0 : 1;
+        if (this.seats[chosen] !== null) {
+            return this.reject(caller, "join", "seat taken");
+        }
+        this.seats[chosen] = { session: caller, name: cleanName(name, caller), joinedAt: this.world.now() };
         if (this.seats.every(Boolean)) {
             this.startGame();
         } else {

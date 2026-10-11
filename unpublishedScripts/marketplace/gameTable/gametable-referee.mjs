@@ -135,10 +135,10 @@ export default class GameTableReferee {
     // Remotely callable. The engine passes (entityID, params: string[]) and stamps the
     // caller's authenticated session id in Script.remoteCallerID for the synchronous part only.
 
-    /** @param {Uuid} _id @param {string[]} params [name] */
+    /** @param {Uuid} _id @param {string[]} params [name, seat?] */
     join(_id, params) {
         const caller = Script.remoteCallerID;
-        this.core.join(caller, params[0]);
+        this.core.join(caller, params[0], params[1]);
     }
 
     /** @param {Uuid} _id @param {string[]} params [column] */
@@ -185,7 +185,8 @@ export default class GameTableReferee {
      * preload runs, so sweep them for a while (as Shortbow does): adopt the status display,
      * the column targets and the seat buttons, delete any duplicate of them and any disc this
      * instance did not create (left by one that died without unloading). Each of them is
-     * created only if none turned up.
+     * created only if none turned up. An adopted child is brought back to the current layout
+     * and client script URL, so a resized board or a moved asset host leaves nothing stale.
      * @param {number} deadline
      */
     findChildren(deadline) {
@@ -195,9 +196,13 @@ export default class GameTableReferee {
             const name = Entities.getEntityProperties(id, ["name"]).name || "";
             if (FIXED_NAMES.includes(name)) {
                 const adopted = this.fixed.get(name);
-                if (adopted === undefined || adopted === id) {
+                if (adopted === undefined) {
                     this.fixed.set(name, id);
-                } else {
+                    const { localPosition, dimensions, script } =
+                        /** @type {Partial<Entities.EntityProperties_Box>} */ (this.fixedProperties(name));
+                    Entities.editEntity(id, script === undefined
+                        ? { localPosition, dimensions } : { localPosition, dimensions, script });
+                } else if (adopted !== id) {
                     Entities.deleteEntity(id);
                 }
             } else if (name.startsWith(DISC_PREFIX) && !ours.has(id)) {
