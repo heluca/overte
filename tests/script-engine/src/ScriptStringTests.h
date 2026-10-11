@@ -27,6 +27,7 @@ public:
     Q_INVOKABLE int variantLength(const QVariant& value) { return value.toString().length(); }
     Q_INVOKABLE int valueLength(const ScriptValue& value) { return value.toString().length(); }
     Q_INVOKABLE QString withNul() const { return nulText; }
+    Q_INVOKABLE QByteArray bytesWithNul() const { return QByteArray("x\0y", 3); }
 
     QString nulText;
     QList<int> lengths;
@@ -38,6 +39,7 @@ private slots:
     void initTestCase();
     void testScriptStringWithNulRoundTrip();
     void testCppStringWithNulReachesScript();
+    void testCppByteArrayWithNulReachesScript();
 };
 
 #endif // overte_ScriptStringTests_h

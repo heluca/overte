@@ -710,7 +710,9 @@ V8ScriptValue ScriptEngineV8::castVariantToValue(const QVariant& val) {
         case QMetaType::QString:
         case QMetaType::QByteArray:
         {
-            QString string = val.toString();
+            // QVariant::toString() on a QByteArray stops at its first NUL
+            QString string = valTypeId == QMetaType::QByteArray
+                ? QString::fromUtf8(val.toByteArray().constData(), val.toByteArray().size()) : val.toString();
             return V8ScriptValue(this, v8::String::NewFromTwoByte(_v8Isolate, reinterpret_cast<const uint16_t*>(string.utf16()), v8::NewStringType::kNormal, string.length()).ToLocalChecked());
         }
         case QMetaType::QVariant:

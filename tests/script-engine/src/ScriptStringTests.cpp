@@ -70,3 +70,14 @@ void ScriptStringTests::testCppStringWithNulReachesScript() {
     QCOMPARE(probe.nulText.length(), 3);
     QCOMPARE(runAndPrint(probe, script, "testCppStringWithNulReachesScript.js"), QString("3,0,y,3,true"));
 }
+
+void ScriptStringTests::testCppByteArrayWithNulReachesScript() {
+    // Without a QByteArray marshaller registered, as here, a QByteArray reaches script as a string
+    QString script =
+        "var bytes = strings.bytesWithNul();\n"
+        "print([typeof bytes, bytes.length, bytes.charCodeAt(1), bytes.charAt(2)].join(','));\n"
+        "Script.stop(true);\n";
+
+    StringProbe probe;
+    QCOMPARE(runAndPrint(probe, script, "testCppByteArrayWithNulReachesScript.js"), QString("string,3,0,y"));
+}
