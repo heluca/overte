@@ -25,6 +25,20 @@ if (readBack.type === "Box") {
 // Edits need no type.
 Entities.editEntity(cloneSource, { alpha: 0.5 });
 
+// Web globals.
+const dataUrl = new URL("./data.json", Script.resolvePath(""));
+print(dataUrl.href, dataUrl.searchParams.get("v") ?? "", String(URL.canParse("x", dataUrl)));
+const encoded: Uint8Array = new TextEncoder().encode("h\u00e9llo");
+print(new TextDecoder("utf-8", { fatal: true }).decode(encoded, { stream: false }), crypto.randomUUID());
+const copied = structuredClone({ list: [1, 2] }, { transfer: [] }) as { list: number[] };
+print(String(copied.list.length), btoa(atob("aGk=")), String(performance.now() - performance.timeOrigin));
+crypto.getRandomValues(new Uint32Array(4));
+crypto.subtle.digest({ name: "SHA-256" }, encoded).then((hash: ArrayBuffer) => print(String(hash.byteLength)));
+async function hashText(text: string): Promise<number> {
+    return (await crypto.subtle.digest("SHA-1", new TextEncoder().encode(text))).byteLength;
+}
+hashText("abc").catch((error: DOMException) => print(error.name, String(error.code)));
+
 // Script.remoteCallerID is a Uuid string while a remotely callable method runs, undefined otherwise.
 function remotelyCallable(): void {
     const caller: string | undefined = Script.remoteCallerID;
