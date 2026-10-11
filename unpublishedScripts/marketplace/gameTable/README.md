@@ -15,10 +15,11 @@ Two tables live here:
 | `connect4.mjs` | anywhere | The rules: pure functions over an immutable board, no engine globals |
 | `referee-core.mjs` | anywhere | Seats, turns, the clock and the published state; side effects go through an injected world adapter |
 | `gametable-referee.mjs` | entity script server | The board's `serverScripts`: the remotely callable methods, and the adapter over `Entities`, `Messages` and `Script` |
+| `gametable-client.mjs` | Interface | The client entity `script` of the board, its column targets and its seat buttons: clicks become server method calls, and the channel becomes announcements and highlights |
 
-The modules need the fork's ES module support for entity scripts (`.mjs` `serverScripts` with
-`export default class`). Imports are relative, so the three files and `assets/` must be served
-from the same directory.
+The modules need the fork's ES module support for entity scripts (`.mjs` `serverScripts` and
+`script` with `export default class`). Imports are relative, so the four files and `assets/` must
+be served from the same directory.
 
 ### Rezzing a board
 
@@ -34,6 +35,7 @@ Entities.addEntity({
     dimensions: { x: 0.75, y: 0.65, z: 0.04 },
     color: { red: 30, green: 60, blue: 160 },
     serverScripts: "https://<asset-host>/gameTable/gametable-referee.mjs",
+    script: "https://<asset-host>/gameTable/gametable-client.mjs",
     userData: JSON.stringify({ gameTableConfig: { turnTimeoutS: 180, waitTimeoutS: 600 } })
 });
 ```
@@ -55,10 +57,18 @@ The children are found by name, so a reload does not duplicate them:
   read the game without inspecting the board.
 - `GT.Disc r<row>c<col>`: one red or black checker model per disc, collisionless and not
   grabbable. The discs of a winning line are drawn larger. Row 0 is the top row.
+- `GT.Col0` to `GT.Col6`: column targets, a strip of small boxes just above the board's top edge,
+  one over each column, between the board and `GT.Status`.
+- `GT.Seat0` and `GT.Seat1`: seat buttons, Text entities reading "Play Red" and "Play Black" to
+  the left and right of the board's bottom corners.
+
+The column targets and seat buttons run `gametable-client.mjs` (their `script` is set to the copy
+next to the referee) and are triggerable, so hand controllers can press them too.
 
 When the referee loads, it sweeps the board's children for a few seconds while the entity server
-delivers them. It adopts `GT.Status`, and deletes any duplicate of it and any disc it did not
-create.
+delivers them. It adopts `GT.Status`, the column targets and the seat buttons, and deletes any
+duplicate of them and any disc it did not create. Whichever of the first three it has not found
+by the end of the sweep, it creates.
 
 On unload the referee abandons a game in progress (an `over` message with reason `abandoned`). It
 then writes the table to `userData` as `offline`, deletes its discs, and shows "Referee not running"
@@ -151,6 +161,42 @@ sender ID is whatever the sending client wrote.
 `reason` for `rejected` is one of: `no caller id`, `table full`, `game not started`, `game over`,
 `game not over`, `not seated`, `not your turn`, `column must be one digit 0-6`, `column full`.
 
+### Playing as a human
+
+1. Rez the board with both scripts set, as above: `serverScripts` (the referee) and `script` (the
+   client). Within a few seconds the status display, the seven column targets and the two seat
+   buttons appear.
+2. Click "Play Red" or "Play Black" (or point a hand controller at it and pull the trigger). The
+   referee seats you under your display name. When both seats are taken the game starts.
+3. On your turn an announcement says "Your turn" and the columns you can play light up green. Click
+   the target above a column to drop a disc there.
+
+Click your own seat button again to leave; in a game in progress that resigns. Anything the
+referee refuses ("not your turn", "column full", "table full") comes back as an announcement. There
+is no rematch button yet: for a rematch one player leaves and rejoins, which starts the next game.
+The table also resets on its own 300 seconds after a game ends.
+
+The client is the same module on every one of those entities, with a role taken from the entity's
+name:
+
+- A column target calls `Entities.callEntityServerMethod(board, "move", [String(column)])`.
+- A seat button calls `join` with `MyAvatar.sessionDisplayName`, or `leave` when the board's
+  `userData` shows the user in that seat.
+- The board's own instance subscribes to the channel named in `userData` (or `gametable:<board
+  id>` if there is no state there yet, in which case it calls `state`). It announces what concerns
+  the user with `Window.displayAnnouncement`: whose turn it is, waiting for an opponent, the result,
+  losing the seat, the referee going offline, and refusals addressed to the user's session ID.
+  Spectators get no announcement for every move. While it is the user's turn it puts a green box around each
+  legal column target. These boxes are local entities: the user sees them, nobody else does, and
+  they need no edit rights. They ignore picks, so the click goes through to the target.
+
+The client keeps no game state and writes nothing to the board: the referee decides everything,
+and the client only asks. On unload the board's instance unsubscribes and deletes its highlights.
+Messages subscriptions belong to the whole Interface session (one `MessagesClient`), so any other
+script of yours listening on the same channel stops receiving it too.
+
+If Interface's entity script allowlist is enabled, it must admit the client's URL.
+
 ### How an agent plays
 
 An agent is a player like any other: its session ID is its seat. The referee neither knows nor
@@ -194,7 +240,7 @@ Node (24 or later) runs the tests; it is a development tool, never a runtime dep
 
 ```sh
 npm test            # node:test over test/*.test.mjs: the rules, the referee core, and the entry with fake globals
-npm run typecheck   # tsc over the three modules against tools/typings' server entity declarations
+npm run typecheck   # tsc twice: the referee against the server entity declarations, the client against the client entity ones
 ```
 
 `typecheck` needs the declarations built first: `npm ci && npm run build` in `tools/typings`.
