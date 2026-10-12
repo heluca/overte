@@ -1,5 +1,5 @@
 {
-    // Type-checks the client entity script against the client entity declarations built in
+    // Type-checks the client entity scripts against the client entity declarations built in
     // tools/typings. A separate project from tsconfig.json: the two contexts declare different
     // globals. The core it imports uses none.
     "compilerOptions": {
@@ -18,6 +18,8 @@
     "files": [
         "../../../tools/typings/dist/overte-client-entity.d.ts",
         "piano-core.mjs",
-        "piano-client.mjs"
+        "piano-client.mjs",
+        "piano-bench-core.mjs",
+        "piano-bench-client.mjs"
     ]
 }

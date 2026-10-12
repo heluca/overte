@@ -15,6 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
     parseConfig, withStatus, statusOf, compactStatus, pollDelay, Backoff, formatDuration, formatStatus, formatSongs,
+    parseDisplayURL, displayGeometry, parseDisplayEvent,
     DEFAULT_VOLUME, ACTIVE_POLL_MS, IDLE_POLL_MS
 } from "../piano-core.mjs";
 
@@ -137,4 +138,36 @@ test("formatSongs lists title, composer and duration, and says how many are left
     assert.equal(formatSongs(null), "Songs\n(Orpheus did not answer)");
     assert.equal(formatDuration(59.9), "0:59");
     assert.equal(formatDuration(3600), "60:00");
+});
+
+test("parseDisplayURL: an http(s) page with no default and no placeholders", () => {
+    const url = "https://assets.example:8443/piano/piano-display.html?v=2";
+    assert.deepEqual(parseDisplayURL(JSON.stringify({ piano: { displayURL: url } })), { displayURL: url });
+    for (const userData of ["", JSON.stringify({ piano: {} }), JSON.stringify({ piano: { displayURL: "ftp://x/y" } }),
+        JSON.stringify({ piano: { displayURL: "https://<asset-host>/piano/piano-display.html" } })]) {
+        assert.match(/** @type {any} */ (parseDisplayURL(userData)).error, /piano\.displayURL must be/, userData);
+    }
+});
+
+test("displayGeometry: the 0.30 x 0.17 m desk glass at 720 page pixels, at any piano scale", () => {
+    for (const width of [1.48, 0.74, undefined]) {
+        const { dimensions, dpi } = displayGeometry(width === undefined ? undefined : { x: width });
+        const scale = width === undefined ? 1 : width / 1.48;
+        assert.ok(Math.abs(dimensions.x - 0.30 * scale) < 1e-9 && Math.abs(dimensions.y - 0.17 * scale) < 1e-9);
+        assert.equal(Math.round(dimensions.x * 39.3701 * dpi), 720);
+        assert.equal(Math.round(dimensions.y * 39.3701 * dpi), 408);
+    }
+});
+
+test("parseDisplayEvent: the page's messages, exactly as piano-display.html sends them", () => {
+    // Captured from the page in headless Chrome with a stub EventBridge, every button clicked
+    const sent = ["previous", "pause", "stop", "next", "replay"].map(action => `{"type":"piano-display","action":"${action}"}`);
+    for (const message of sent) {
+        assert.deepEqual(parseDisplayEvent(message), { action: JSON.parse(message).action, songId: null });
+    }
+    assert.deepEqual(parseDisplayEvent('{"type":"piano-display","action":"play-song","songId":3}'), { action: "play-song", songId: 3 });
+    for (const message of ["", "rubbish", '{"type":"other","action":"stop"}', '{"type":"piano-display","action":"delete"}',
+        '{"type":"piano-display","action":"play-song"}', '{"type":"piano-display","action":"play-song","songId":"3"}']) {
+        assert.equal(parseDisplayEvent(message), null, message);
+    }
 });
