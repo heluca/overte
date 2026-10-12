@@ -460,4 +460,32 @@ test("switching a board's game removes the other game's children", () => {
     assert.equal(engine.named("GT.Seat0").length, 1);
     assert.equal(engine.named("GT.Seat0")[0].text, "Play Black", "an adopted seat button takes the game's look");
     assert.equal(engine.named("GT.Sq r4c4").length, 1);
+    assert.deepEqual(engine.named("GT.Seat1")[0].localRotation, { x: 0, y: 1, z: 0, w: 0 }, "seat 1 faces its edge");
+    // And back: Connect Four's seat buttons face front again
+    engine.entities.get(BOARD).userData = "";
+    loaded(engine);
+    assert.equal(engine.named("GT.Sq r4c4").length, 0);
+    assert.equal(engine.named("GT.Col3").length, 1);
+    assert.equal(engine.named("GT.Seat1")[0].text, "Play Black");
+    assert.deepEqual(engine.named("GT.Seat1")[0].localRotation, { x: 0, y: 0, z: 0, w: 1 });
+});
+
+test("a crowning capture on the board keeps the capturer's entity and deletes the captured one", () => {
+    const engine = fakeEngine(CHECKERS, false, FLAT);
+    const referee = loaded(engine);
+    const layout = referee.layout;
+    const before = ["........", "..b.....", "...r....", "........", "........", "........", "........", "..b....."];
+    layout.draw({ board: before, move: null });
+    const red = layout.pieces.get("r2c3");
+    const black = layout.pieces.get("r1c2");
+    const manHeight = engine.entities.get(red.id).dimensions.y;
+    layout.draw({
+        board: [".R......", "........", "........", "........", "........", "........", "........", "..b....."],
+        move: { side: 1, notation: "10x1", from: [2, 3], to: [0, 1], path: [[2, 3], [0, 1]], captured: [[1, 2]], promoted: true }
+    });
+    assert.equal(layout.pieces.get("r0c1").id, red.id);
+    assert.equal(engine.entities.has(black.id), false);
+    assert.match(engine.entities.get(red.id).modelURL, /red_checker/);
+    assert.ok(engine.entities.get(red.id).dimensions.y > 2 * manHeight);
+    assert.equal(pieces(engine).length, 2);
 });

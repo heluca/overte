@@ -46,6 +46,9 @@ const SEAT_COLORS = {
  * @typedef {{ model: string, size: Vec3 }} PieceLook model relative to the referee's directory;
  *     size in square widths
  * @typedef {{ rules: { SEAT_NAMES: string[] }, rowZeroSide: number, pieces: Record<string, PieceLook> }} GridGame
+ * @typedef {{ from: number[], to: number[], captured?: number[][],
+ *     castle?: { rookFrom: number[], rookTo: number[] } }} MoveCells the move just played, as
+ *     the rules report it (checkers and chess); cells are [row, col]
  * @typedef {{ op: "move", from: string, to: string, piece: string } | { op: "add", to: string, piece: string }
  *     | { op: "remove", from: string }} PieceOp cells as "r<row>c<col>"
  */
@@ -74,14 +77,19 @@ export function cellOffset(row, col, rowZeroSide) {
 }
 
 /**
- * The fewest entity changes that turn the pieces shown into `board`: a piece that moved keeps
- * its entity (a move), one that changed in place is edited (a move to its own cell), and a
- * vacated entity is reused before a new one is added.
+ * The entity changes that turn the pieces shown into `board`. When `move` (the move just
+ * played) fits what is shown, its piece's entity is the one that moves, onto its landing square
+ * (a promotion changes that entity's model), its captures are the entities removed, and a
+ * castling rook moves as its own entity. Whatever else differs (a new game, a reload, a move
+ * this instance did not see) is reconciled with the fewest changes: a vacated entity of the
+ * same piece is moved, then one on the same cell is edited, then any is reused, before a new
+ * one is added.
  * @param {Map<string, string>} shown cell -> piece character
  * @param {string[]} board
+ * @param {MoveCells | null} [move]
  * @returns {PieceOp[]}
  */
-export function planPieces(shown, board) {
+export function planPieces(shown, board, move = null) {
     /** @type {Map<string, string>} */
     const wanted = new Map();
     board.forEach((line, row) => line.split("").forEach((piece, col) => {
@@ -93,14 +101,41 @@ export function planPieces(shown, board) {
     const needed = [...wanted.keys()].filter(cell => shown.get(cell) !== wanted.get(cell));
     /** @type {PieceOp[]} */
     const ops = [];
+    /**
+     * @param {string} from
+     * @param {string} to
+     */
+    const take = (from, to) => {
+        ops.push({ op: "move", from, to, piece: /** @type {string} */ (wanted.get(to)) });
+        vacated.splice(vacated.indexOf(from), 1);
+        needed.splice(needed.indexOf(to), 1);
+    };
+    if (move) {
+        const pairs = [[move.from, move.to]];
+        if (move.castle) {
+            pairs.push([move.castle.rookFrom, move.castle.rookTo]);
+        }
+        pairs.forEach(([from, to]) => {
+            const [fromCell, toCell] = [cellKey(from[0], from[1]), cellKey(to[0], to[1])];
+            // Only while the board shown is the one before the move: a later redraw sees it done
+            if (vacated.includes(fromCell) && needed.includes(toCell)) {
+                take(fromCell, toCell);
+            }
+        });
+        (move.captured || []).forEach(([row, col]) => {
+            const cell = cellKey(row, col);
+            if (vacated.includes(cell)) {
+                ops.push({ op: "remove", from: cell });
+                vacated.splice(vacated.indexOf(cell), 1);
+            }
+        });
+    }
     /** @param {(from: string, to: string) => boolean} fits */
     const reuse = fits => {
         for (const to of needed.slice()) {
-            const index = vacated.findIndex(from => fits(from, to));
-            if (index >= 0) {
-                ops.push({ op: "move", from: vacated[index], to, piece: /** @type {string} */ (wanted.get(to)) });
-                vacated.splice(index, 1);
-                needed.splice(needed.indexOf(to), 1);
+            const from = vacated.find(cell => fits(cell, to));
+            if (from !== undefined) {
+                take(from, to);
             }
         }
     };
@@ -110,6 +145,16 @@ export function planPieces(shown, board) {
     needed.forEach(to => ops.push({ op: "add", to, piece: /** @type {string} */ (wanted.get(to)) }));
     vacated.forEach(from => ops.push({ op: "remove", from }));
     return ops;
+}
+
+/**
+ * @param {unknown} move a move object from the rules, or anything else
+ * @returns {MoveCells | null} it, when it has the cells planPieces follows
+ */
+function moveCells(move) {
+    const cell = (/** @type {unknown} */ value) => Array.isArray(value) && value.length === 2;
+    const candidate = /** @type {Record<string, any> | null} */ (move !== null && typeof move === "object" ? move : null);
+    return candidate && cell(candidate.from) && cell(candidate.to) ? /** @type {MoveCells} */ (candidate) : null;
 }
 
 export class GridLayout {
@@ -239,11 +284,11 @@ export class GridLayout {
 
     /**
      * Brings the piece entities in line with the board, editing rather than replacing them.
-     * @param {{ board: string[] }} view
+     * @param {{ board: string[], move?: unknown }} view `move` is the last move played, if any
      */
-    draw({ board }) {
+    draw({ board, move }) {
         const shown = new Map([...this.pieces].map(([cell, piece]) => [cell, piece.piece]));
-        const ops = planPieces(shown, board);
+        const ops = planPieces(shown, board, moveCells(move));
         // Take every reused entity off its old cell before placing any, so moves can chain
         /** @type {Map<string, { id: Uuid, piece: string }>} */
         const lifted = new Map();

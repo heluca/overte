@@ -29,6 +29,7 @@ const CHILD_SEARCH_MS = 3000;
 const CHILD_POLL_MS = 500;
 // Every child the referee makes is named so; one it does not recognise is left from another game.
 const CHILD_PREFIX = "GT.";
+const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
 const OFFLINE_TEXT = "Game table\nReferee not running";
 const LOCKED_TEXT = "BOARD LOCKED: the game is not saved in userData. Unlock the board and reload its script.";
 
@@ -57,7 +58,7 @@ export default class GameTableReferee {
     /** @type {number} */ timer;
     /** @type {number | null} */ searchTimer = null;
     /** @type {Map<string, Uuid>} child name -> the one child of that name */ fixed = new Map();
-    /** @type {{ text: string, board: string[], line: number[][] | null } | null} */ view = null;
+    /** @type {{ text: string, board: string[], line: number[][] | null, move: unknown } | null} */ view = null;
     shownText = "";
     locked = false;
 
@@ -189,7 +190,8 @@ export default class GameTableReferee {
                     this.fixed.set(name, id);
                     const { type, name: _name, parentID, ...current } =
                         /** @type {Partial<Entities.EntityProperties_Box>} */ (this.layout.fixedProperties(name));
-                    Entities.editEntity(id, current);
+                    // A layout that sets no rotation means none, whatever another game's layout set
+                    Entities.editEntity(id, { localRotation: IDENTITY, ...current });
                 } else if (adopted !== id) {
                     Entities.deleteEntity(id);
                 }

@@ -113,7 +113,7 @@ test("move text is capped before the rules parse it", () => {
 // Connect Four's rules under another name, with swapped rematches.
 const SWAPPING = { ...connect4, GAME: "swapping", REMATCH: "swap", SEAT_NAMES: ["First", "Second"] };
 
-test("a swap game always starts with seat 0 and swaps the players between games", () => {
+test("a swap game always starts with seat 0 and swaps the players only on a rematch", () => {
     const { world, core } = seated({ rules: SWAPPING });
     assert.equal(world.state.game, "swapping");
     assert.equal(world.state.toMove, 0);
@@ -127,15 +127,24 @@ test("a swap game always starts with seat 0 and swaps the players between games"
     assert.equal(world.state.toMove, 0);
     assert.equal(core.move(BOB, "2"), true);
 
-    // A new opponent after a resignation: the player who stays changes seats too
+    // A new opponent after a resignation takes the seat left free; nobody swaps
     core.leave(ALICE);
     assert.deepEqual(world.state.seats.map(seat => seat && seat.session), [BOB, null]);
     core.join(CAROL, "Carol");
-    assert.deepEqual(world.state.seats.map(seat => seat.session), [CAROL, BOB]);
+    assert.deepEqual(world.state.seats.map(seat => seat.session), [BOB, CAROL]);
     assert.equal(world.state.toMove, 0);
+    // ...or the seat they ask for, after a finished game
+    playColumns(core, [0, 1, 0, 1, 0, 1, 0]);
+    core.leave(BOB);
+    core.join(ALICE, "Alice", "0");
+    assert.deepEqual(world.state.seats.map(seat => seat.session), [ALICE, CAROL]);
+    // A rematch between those two swaps them again
+    playColumns(core, [0, 1, 0, 1, 0, 1, 0]);
+    core.newGame(ALICE);
+    assert.deepEqual(world.state.seats.map(seat => seat.session), [CAROL, ALICE]);
     // An emptied table starts over without a swap
     core.leave(CAROL);
-    core.leave(BOB);
+    core.leave(ALICE);
     core.join(ALICE, "Alice");
     core.join(BOB, "Bob");
     assert.deepEqual(world.state.seats.map(seat => seat.session), [ALICE, BOB]);

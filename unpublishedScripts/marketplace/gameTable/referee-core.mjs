@@ -13,7 +13,8 @@
 //
 //      now()             -> epoch milliseconds
 //      publish(state)    -> the projection changed: store it where readers look and send it
-//      render(view)      -> { text, board, line }: redraw the status text and the discs
+//      render(view)      -> { text, board, line, move }: redraw the status text and the pieces;
+//                           move is the last move played (the rules' move object), or null
 //      announce(event)   -> { type: "state" | "rejected" | "over" | "expired", ... }: send it to the
 //                           players only; nothing is stored
 //
@@ -108,7 +109,7 @@ function cleanName(name, caller) {
  * @typedef {"waiting" | "playing" | "over" | "offline"} Phase
  * @typedef {{ type: string } & Record<string, unknown>} Announcement
  * @typedef {{ now(): number, publish(state: object): void,
- *     render(view: { text: string, board: string[], line: number[][] | null }): void,
+ *     render(view: { text: string, board: string[], line: number[][] | null, move: Move | null }): void,
  *     announce(event: Announcement): void }} World
  */
 
@@ -143,10 +144,8 @@ export class RefereeCore {
         this.phase = "waiting";
         /** @type {(Seat | null)[]} */
         this.seats = [null, null];
-        // Alternating games: the seat that moves first in the next game. Swapping games: whether
-        // the next game swaps the seats, which it does once a game has been played at the table.
+        // Alternating games: the seat that moves first in the next game.
         this.firstSeat = 0;
-        this.swapSeats = false;
         this.lastText = "";
     }
 
@@ -173,7 +172,6 @@ export class RefereeCore {
         this.seats = [null, null];
         this.phase = "waiting";
         this.firstSeat = 0;
-        this.swapSeats = false;
         this.resetTable();
     }
 
@@ -358,6 +356,10 @@ export class RefereeCore {
         if (this.seatOf(caller) < 0) {
             return this.reject(caller, "newGame", "not seated");
         }
+        if (this.rules.REMATCH === "swap") {
+            // A rematch between the same two players; a new opponent takes the seat they chose
+            this.seats.reverse();
+        }
         this.startGame();
         this.changed();
         return true;
@@ -467,10 +469,6 @@ export class RefereeCore {
         this.phase = "playing";
         this.gameId = this.tableId + ":" + now;
         if (this.rules.REMATCH === "swap") {
-            if (this.swapSeats) {
-                this.seats.reverse();
-            }
-            this.swapSeats = true;
             this.game = this.rules.newGame(0);
         } else {
             this.game = this.rules.newGame(this.firstSeat);
@@ -535,6 +533,11 @@ export class RefereeCore {
     /** @private */
     redraw() {
         this.lastText = this.statusText();
-        this.world.render({ text: this.lastText, board: this.rules.rows(this.game), line: copyResult(this.result)?.line ?? null });
+        this.world.render({
+            text: this.lastText,
+            board: this.rules.rows(this.game),
+            line: copyResult(this.result)?.line ?? null,
+            move: this.history.length ? this.history[this.history.length - 1] : null
+        });
     }
 }

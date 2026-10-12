@@ -61,3 +61,60 @@ test("a crowning reuses the man's entity for the king; a fresh board adds what i
     ]);
     assert.equal(cellKey(3, 4), "r3c4");
 });
+
+// The pieces shown for a board, as GridLayout keeps them.
+function shownFor(board) {
+    const shown = new Map();
+    board.forEach((line, row) => line.split("").forEach((piece, col) => {
+        if (piece !== ".") {
+            shown.set(cellKey(row, col), piece);
+        }
+    }));
+    return shown;
+}
+
+test("a crowning capture moves the capturer's entity and removes the captured one", () => {
+    // Red's man on 10 (r2c3) takes Black's on 6 (r1c2), landing on 1 (r0c1) as a king; a
+    // reconciliation by piece alone would reuse the captured black man for the red king
+    const before = boardWith({ r1c2: "b", r2c3: "r", r7c2: "b" });
+    const after = boardWith({ r0c1: "R", r7c2: "b" });
+    const move = { side: 1, notation: "10x1", from: [2, 3], to: [0, 1], path: [[2, 3], [0, 1]], captured: [[1, 2]],
+        promoted: true };
+    assert.deepEqual(planPieces(shownFor(before), after, move), [
+        { op: "move", from: "r2c3", to: "r0c1", piece: "R" },
+        { op: "remove", from: "r1c2" }
+    ]);
+    // Drawn again with the same last move (a countdown redraw): nothing to do
+    assert.deepEqual(planPieces(shownFor(after), after, move), []);
+});
+
+test("a king's round trip edits nothing but removes the four men it took", () => {
+    const before = boardWith({ r2c3: "B", r3c2: "r", r3c4: "r", r5c2: "r", r5c4: "r" });
+    const after = boardWith({ r2c3: "B" });
+    const move = { from: [2, 3], to: [2, 3], captured: [[3, 2], [5, 2], [5, 4], [3, 4]] };
+    assert.deepEqual(planPieces(shownFor(before), after, move), [
+        { op: "remove", from: "r3c2" }, { op: "remove", from: "r5c2" },
+        { op: "remove", from: "r5c4" }, { op: "remove", from: "r3c4" }
+    ]);
+});
+
+test("chess moves: castling moves king and rook, en passant removes the victim, a capturing promotion", () => {
+    // White castles short: e1g1 with the rook h1f1 (rank 1 is row 7)
+    const castle = { from: [7, 4], to: [7, 6], captured: [], castle: { rookFrom: [7, 7], rookTo: [7, 5] } };
+    assert.deepEqual(planPieces(shownFor(boardWith({ r7c4: "K", r7c7: "R" })), boardWith({ r7c6: "K", r7c5: "R" }), castle), [
+        { op: "move", from: "r7c4", to: "r7c6", piece: "K" },
+        { op: "move", from: "r7c7", to: "r7c5", piece: "R" }
+    ]);
+    // e5xd6 en passant: the black pawn on d5 goes, the white one moves
+    const passant = { from: [3, 4], to: [2, 3], captured: [[3, 3]] };
+    assert.deepEqual(planPieces(shownFor(boardWith({ r3c4: "P", r3c3: "p" })), boardWith({ r2c3: "P" }), passant), [
+        { op: "move", from: "r3c4", to: "r2c3", piece: "P" },
+        { op: "remove", from: "r3c3" }
+    ]);
+    // b7xa8=Q: the pawn's entity becomes the queen; the captured rook's entity goes
+    const promote = { from: [1, 1], to: [0, 0], captured: [[0, 0]], promoted: "q" };
+    assert.deepEqual(planPieces(shownFor(boardWith({ r1c1: "P", r0c0: "r" })), boardWith({ r0c0: "Q" }), promote), [
+        { op: "move", from: "r1c1", to: "r0c0", piece: "Q" },
+        { op: "remove", from: "r0c0" }
+    ]);
+});
