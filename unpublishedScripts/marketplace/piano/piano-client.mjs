@@ -13,11 +13,12 @@
 //
 //  For whoever sits at the piano, the bench's client script (piano-bench-client.mjs) calls
 //  openDisplay and closeDisplay here: a local Web entity on the music desk shows the page at
-//  userData.piano.displayURL, and the floating label hides meanwhile. The page's buttons arrive
-//  as web events; for now they are only printed and acknowledged back to the page.
+//  userData.piano.displayURL, and the floating label hides meanwhile. Its size and place come
+//  from userData.piano.display, reread every second, so it can be tuned while someone sits.
+//  The page's buttons arrive as web events; for now they are only printed and acknowledged.
 //
 
-import { statusOf, formatStatus, parseDisplayURL, displayGeometry, parseDisplayEvent } from "./piano-core.mjs";
+import { statusOf, formatStatus, parseDisplayURL, parseDisplayGeometry, parseDisplayEvent } from "./piano-core.mjs";
 
 const LABEL_NAME = "Piano.Status";
 const LABEL_SIZE = { x: 1.2, y: 0.5, z: 0.01 };
@@ -43,6 +44,8 @@ export default class PianoClient {
     reported = null;
     /** @type {{ displayURL: string } | { error: string }} */ display;
     /** @type {Uuid | null} */ displayID = null;
+    /** piano.display as JSON when the open display last took it */
+    displaySource = "";
     /** @type {((entityID: Uuid, message: string) => void) | null} */ webEventHandler = null;
 
     /** @param {Uuid} entityID */
@@ -102,20 +105,17 @@ export default class PianoClient {
             print("Piano " + this.entityID + ": no desk display, the model has no " + DISPLAY_JOINT + " joint (yet)");
             return;
         }
-        const properties = /** @type {Partial<Entities.EntityProperties_Model>} */ (
-            Entities.getEntityProperties(this.entityID, ["dimensions"]));
-        const { dimensions, dpi } = displayGeometry(properties.dimensions);
+        const geometry = this.displayGeometry(
+            Entities.getEntityProperties(this.entityID, ["userData", "dimensions"]), true);
         // The anchor's +Z points out of the desk at the player, and a Web entity's face is its
-        // +Z, so zero local offset and rotation lay the page on the glass.
+        // +Z, so an identity rotation lays the page flat on the desk, facing the player.
         this.displayID = Entities.addEntity({
             type: "Web",
             name: DISPLAY_NAME,
             parentID: this.entityID,
             parentJointIndex: joint,
-            localPosition: { x: 0, y: 0, z: 0 },
             localRotation: { x: 0, y: 0, z: 0, w: 1 },
-            dimensions,
-            dpi,
+            ...geometry,
             sourceUrl: this.display.displayURL,
             // Keyboard focus on the page would swallow the movement keys that stand the avatar up
             wantsKeyboardFocus: false,
@@ -187,11 +187,33 @@ export default class PianoClient {
     }
 
     refresh() {
+        const properties = Entities.getEntityProperties(this.entityID, ["userData", "dimensions"]);
+        if (this.displayID !== null) {
+            const geometry = this.displayGeometry(properties, false);
+            if (geometry !== null) {
+                Entities.editEntity(this.displayID, geometry);
+            }
+        }
         if (Date.now() < this.songsUntil) {
             return;
         }
-        const published = statusOf(Entities.getEntityProperties(this.entityID, ["userData"]).userData);
-        this.show(formatStatus(published || this.reported));
+        this.show(formatStatus(statusOf(properties.userData) || this.reported));
+    }
+
+    /**
+     * @param {Partial<Entities.EntityProperties>} properties the piano's userData and dimensions
+     * @param {boolean} always false: null unless piano.display changed since the display took it
+     * @returns {import("./piano-core.mjs").DisplayGeometry | null}
+     */
+    displayGeometry(properties, always) {
+        const dimensions = /** @type {Partial<Entities.EntityProperties_Model>} */ (properties).dimensions;
+        const { geometry, problems, source } = parseDisplayGeometry(properties.userData, dimensions);
+        if (!always && source === this.displaySource) {
+            return null;
+        }
+        this.displaySource = source;
+        problems.forEach(problem => print("Piano " + this.entityID + ": " + problem));
+        return geometry;
     }
 
     /** @param {string} text */

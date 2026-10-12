@@ -9,60 +9,72 @@
 
     The piano's desk display, shown on the music desk to whoever sits at the piano. This is a
     WIREFRAME of the future interface: placeholder data, and buttons that only send a web event
-    to piano-client.mjs, which prints it and acknowledges it back. Laid out for the 720 x 408
-    pixels the Web entity gets on the 0.30 x 0.17 m desk glass (piano-core.mjs DISPLAY_PIXELS).
-    Self-contained: no external fonts, scripts or images.
+    to piano-client.mjs, which prints it and acknowledges it back.
+
+    Laid out in rem on a 50 x 17.1875 rem canvas: the 0.80 x 0.275 m desk face of
+    piano-core.mjs DISPLAY_DEFAULTS, so 1 rem is 16 mm on the desk whatever the Web entity's
+    pixel count, and body text is 16 mm tall at the seated player's 0.6-0.7 m. The root font
+    size fits the canvas to the viewport, so another size or aspect from userData.piano.display
+    scales the page rather than cropping it. Self-contained: no external fonts, scripts or images.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=720, height=408, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Piano Desk Display</title>
 <style>
     :root {
         --glass: #0b0d10;
-        --line: #7d8690;
-        --faint: #3a4049;
-        --text: #d9dee3;
-        --label: #8c95a0;
-        --mark: #e8ecef;
+        --line: #8a939d;
+        --faint: #454c56;
+        --text: #e2e6ea;
+        --label: #9aa3ad;
+        --mark: #f2f4f6;
+        /* 50 x 17.1875 rem fitted into the viewport */
+        font-size: min(2vw, 5.818vh);
     }
     * { box-sizing: border-box; }
     html, body {
         margin: 0;
-        width: 720px;
-        height: 408px;
+        height: 100%;
         overflow: hidden;
         background: var(--glass);
+    }
+    body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
         color: var(--text);
-        font: 15px/1.25 "DejaVu Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+        font: 1rem/1.2 "DejaVu Sans", "Segoe UI", Helvetica, Arial, sans-serif;
         -webkit-user-select: none;
         user-select: none;
     }
     .frame {
         display: grid;
-        grid-template-columns: 424px 1fr;
-        grid-template-rows: 36px 1fr 30px;
-        gap: 8px;
-        width: 720px;
-        height: 408px;
-        padding: 8px;
+        grid-template-columns: 30rem 1fr;
+        grid-template-rows: 2rem 1fr;
+        gap: 0.6rem;
+        width: 50rem;
+        height: 17.1875rem;
+        padding: 0.5rem;
     }
     /* A wireframe region: dashed outline with its name tagged on the top edge */
     .region {
         position: relative;
-        border: 1px dashed var(--line);
-        padding: 18px 10px 8px;
+        border: 0.0625rem dashed var(--line);
+        padding: 0.75rem 0.6rem 0.4rem;
         min-width: 0;
+        min-height: 0;
     }
     .region > .tag {
         position: absolute;
-        top: -8px;
-        left: 8px;
-        padding: 0 4px;
+        top: -0.45rem;
+        left: 0.5rem;
+        padding: 0 0.25rem;
         background: var(--glass);
         color: var(--label);
-        font-size: 12px;
+        font-size: 0.75rem;
+        line-height: 0.9rem;
         letter-spacing: 0.08em;
         text-transform: uppercase;
     }
@@ -71,90 +83,82 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 0 10px;
+        gap: 1rem;
+        padding: 0 0.6rem;
+        font-size: 0.875rem;
     }
-    .status > .tag { top: -8px; }
-    .indicators { display: flex; gap: 18px; font-size: 13px; }
-    .indicator { display: flex; align-items: center; gap: 6px; }
-    .indicator svg { width: 12px; height: 12px; }
-    .wordmark { font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--label); }
-    .left { display: grid; grid-template-rows: 1fr auto auto; gap: 12px; min-height: 0; }
-    .title { font-size: 24px; margin: 2px 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .composer { color: var(--label); font-size: 15px; }
+    .status strong { color: var(--mark); letter-spacing: 0.1em; font-size: 0.875rem; }
+    .indicators { display: flex; gap: 1rem; color: var(--label); white-space: nowrap; }
+    .indicator { display: flex; align-items: center; gap: 0.35rem; }
+    .indicator svg { width: 0.8rem; height: 0.8rem; }
+    #last { color: var(--text); }
+    .left { display: grid; grid-template-rows: auto auto 1fr; gap: 0.6rem; min-height: 0; }
+    .now { display: grid; grid-template-columns: 1fr auto; align-items: end; column-gap: 0.75rem; }
+    .title { grid-column: 1 / 3; font-size: 1.75rem; line-height: 2.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .composer { color: var(--label); }
     .state {
-        display: inline-block;
-        margin-top: 8px;
-        padding: 1px 8px;
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        font-size: 13px;
+        padding: 0 0.6rem;
+        border: 0.0625rem solid var(--line);
+        border-radius: 0.6rem;
+        font-size: 0.875rem;
         text-transform: lowercase;
     }
-    .bar { height: 10px; border: 1px solid var(--line); margin: 4px 0 6px; }
-    .bar > div { height: 100%; width: 45%; background: repeating-linear-gradient(135deg, var(--line) 0 2px, transparent 2px 6px); }
-    .times { display: flex; justify-content: space-between; font-size: 14px; color: var(--label); }
-    .buttons { display: flex; justify-content: space-between; }
+    .progress { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.6rem; }
+    .bar { height: 0.6rem; border: 0.0625rem solid var(--line); }
+    .bar > div { height: 100%; width: 45%; background: repeating-linear-gradient(135deg, var(--line) 0 0.12rem, transparent 0.12rem 0.36rem); }
+    .times { color: var(--label); font-size: 0.875rem; }
+    .buttons { display: flex; justify-content: space-between; height: 100%; align-items: center; }
     button {
         font: inherit;
         color: var(--text);
         background: transparent;
-        border: 1px solid var(--line);
+        border: 0.0625rem solid var(--line);
         cursor: pointer;
     }
     button:active { background: var(--faint); }
     .transport button {
-        width: 72px;
-        height: 56px;
+        width: 5.4rem;
+        height: 2.9rem;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 3px;
-        font-size: 12px;
+        gap: 0.15rem;
+        font-size: 0.75rem;
     }
-    .transport svg { width: 22px; height: 22px; }
-    .songs { display: flex; flex-direction: column; min-height: 0; }
-    .songs ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+    .transport svg { width: 1.4rem; height: 1.4rem; }
+    .songs { display: flex; flex-direction: column; }
+    .songs ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
     .songs button {
         width: 100%;
         display: grid;
         grid-template-columns: 1fr auto;
+        align-items: center;
         text-align: left;
-        padding: 4px 8px;
+        padding: 0.25rem 0.5rem;
         border-color: var(--faint);
     }
-    .songs button.current { border-color: var(--mark); border-width: 2px; padding: 3px 7px; }
-    .songs .song { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
-    .songs .by { grid-column: 1; color: var(--label); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .songs .length { grid-column: 2; grid-row: 1 / 3; align-self: center; padding-left: 8px; font-size: 13px; color: var(--label); }
-    .more { margin-top: auto; padding-top: 4px; font-size: 12px; color: var(--label); }
-    .footer {
-        grid-column: 1 / 3;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 0 10px;
-        border: 1px solid var(--faint);
-        font-size: 12px;
-        color: var(--label);
-    }
-    .footer strong { color: var(--mark); letter-spacing: 0.1em; }
+    .songs button.current { border-color: var(--mark); border-width: 0.125rem; padding: 0.1875rem 0.4375rem; }
+    .songs .song { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .songs .length { padding-left: 0.5rem; font-size: 0.875rem; color: var(--label); }
+    .more { margin-top: auto; font-size: 0.75rem; color: var(--label); }
 </style>
 </head>
 <body>
 <main class="frame">
     <section class="region status" aria-label="Status bar">
         <span class="tag">status bar</span>
-        <span class="wordmark">Salon grand</span>
+        <span><strong>WIREFRAME</strong> &middot; placeholder data</span>
         <span class="indicators">
             <span class="indicator" title="Orpheus connection (placeholder)">
                 <svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="6" cy="6" r="2" fill="currentColor"/></svg>
-                <span>Orpheus: connected (placeholder)</span>
+                <span>Orpheus: connected</span>
             </span>
             <span class="indicator" title="EventBridge to the piano's client script">
                 <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6h3M8 6h3M4 3.5h4v5H4z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
                 <span id="bridge">Script: checking</span>
             </span>
+            <span id="last">no button pressed</span>
         </span>
     </section>
 
@@ -168,8 +172,9 @@
 
         <section class="region progress" aria-label="Progress">
             <span class="tag">progress</span>
+            <span class="times">1:24</span>
             <div class="bar"><div></div></div>
-            <div class="times"><span>1:24 elapsed</span><span>3:05 total</span></div>
+            <span class="times">3:05</span>
         </section>
 
         <section class="region transport" aria-label="Transport">
@@ -202,19 +207,14 @@
     <section class="region songs" aria-label="Song list">
         <span class="tag">song list</span>
         <ul>
-            <li><button data-song="1"><span class="song">Ode to Joy</span><span class="by">Beethoven</span><span class="length">0:16</span></button></li>
-            <li><button data-song="2" class="current"><span class="song">Gymnopedie No. 1</span><span class="by">Erik Satie</span><span class="length">3:05</span></button></li>
-            <li><button data-song="3"><span class="song">Clair de Lune</span><span class="by">Debussy</span><span class="length">5:02</span></button></li>
-            <li><button data-song="4"><span class="song">Prelude in C</span><span class="by">J. S. Bach</span><span class="length">2:20</span></button></li>
-            <li><button data-song="5"><span class="song">Nocturne Op. 9 No. 2</span><span class="by">Chopin</span><span class="length">4:33</span></button></li>
+            <li><button data-song="1"><span class="song">Ode to Joy</span><span class="length">0:16</span></button></li>
+            <li><button data-song="2" class="current"><span class="song">Gymnopedie No. 1</span><span class="length">3:05</span></button></li>
+            <li><button data-song="3"><span class="song">Clair de Lune</span><span class="length">5:02</span></button></li>
+            <li><button data-song="4"><span class="song">Prelude in C</span><span class="length">2:20</span></button></li>
+            <li><button data-song="5"><span class="song">Nocturne Op. 9 No. 2</span><span class="length">4:33</span></button></li>
         </ul>
         <div class="more">+7 more (scrolls)</div>
     </section>
-
-    <footer class="footer">
-        <span><strong>WIREFRAME</strong> &middot; placeholder data &middot; buttons send a web event only</span>
-        <span id="last">no button pressed yet</span>
-    </footer>
 </main>
 <script>
     "use strict";
@@ -222,7 +222,7 @@
     var bridge = typeof EventBridge !== "undefined" ? EventBridge : null;
     var bridgeText = document.getElementById("bridge");
     var lastText = document.getElementById("last");
-    bridgeText.textContent = bridge ? "Script: connected" : "Script: none (browser preview)";
+    bridgeText.textContent = bridge ? "Script: connected" : "Script: none (preview)";
 
     function send(event) {
         var message = JSON.stringify(event);
@@ -239,7 +239,7 @@
             try {
                 var reply = JSON.parse(message);
                 if (reply && reply.type === "piano-display-ack") {
-                    lastText.textContent = "script acknowledged " + reply.action + (reply.songId ? " " + reply.songId : "");
+                    lastText.textContent = "ack " + reply.action + (reply.songId ? " " + reply.songId : "");
                 }
             } catch (e) {
                 // Not ours

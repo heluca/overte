@@ -95,6 +95,12 @@ function fakeEngine(status = null, { displayURL = DISPLAY_URL, joints = { anchor
 
 const { default: PianoClient } = await import("../piano-client.mjs");
 
+function assertNear(actual, expected) {
+    for (const key of Object.keys(expected)) {
+        assert.ok(Math.abs(actual[key] - expected[key]) < 1e-9, key + ": " + actual[key] + " != " + expected[key]);
+    }
+}
+
 function loaded(engine) {
     const client = new PianoClient();
     client.preload(PIANO);
@@ -166,10 +172,10 @@ test("openDisplay lays a local Web page on the desk anchor and hides the label; 
     assert.equal(display.sourceUrl, DISPLAY_URL);
     assert.equal(display.parentID, PIANO);
     assert.equal(display.parentJointIndex, DESK_JOINT);
-    assert.deepEqual(display.localPosition, { x: 0, y: 0, z: 0 });
+    assertNear(display.localPosition, { x: 0, y: 0.0275, z: 0.013 });
     assert.deepEqual(display.localRotation, { x: 0, y: 0, z: 0, w: 1 });
-    assert.ok(Math.abs(display.dimensions.x - 0.30) < 1e-9 && Math.abs(display.dimensions.y - 0.17) < 1e-9);
-    assert.equal(Math.round(display.dimensions.x * 39.3701 * display.dpi), 720);
+    assertNear(display.dimensions, { x: 0.80, y: 0.275 });
+    assert.equal(Math.round(display.dimensions.x * 39.3701 * display.dpi), 1600);
     assert.equal(display.wantsKeyboardFocus, false, "the movement keys must still reach the avatar");
     assert.equal(engine.label().visible, false);
     client.closeDisplay();
@@ -224,4 +230,34 @@ test("unload closes an open display", () => {
     client.unload();
     assert.equal(engine.display(), undefined);
     assert.equal(engine.webHandlers.size, 0);
+});
+
+test("a change to piano.display re-tunes the open display within a second; bad values log once", () => {
+    const engine = fakeEngine(PLAYING);
+    const client = loaded(engine);
+    client.openDisplay();
+    const [displayID, display] = engine.display();
+    const setDisplay = value => {
+        const userData = JSON.parse(engine.entities.get(PIANO).userData);
+        userData.piano.display = value;
+        engine.entities.get(PIANO).userData = JSON.stringify(userData);
+    };
+    setDisplay({ width: 0.7, height: 0.25, offset: { x: 0, y: 0.03, z: 0.015 } });
+    engine.advance(1000);
+    assertNear(display.dimensions, { x: 0.7, y: 0.25 });
+    assertNear(display.localPosition, { x: 0, y: 0.03, z: 0.015 });
+    assert.equal(Math.round(0.7 * 39.3701 * display.dpi), 1600);
+    assert.equal(engine.display()[0], displayID, "edited in place, not recreated");
+
+    setDisplay({ width: 9 });
+    engine.advance(1000);
+    engine.advance(1000);
+    assertNear(display.dimensions, { x: 0.80, y: 0.275 });
+    assert.equal(engine.printed.filter(line => /piano\.display\.width must be/.test(line)).length, 1);
+
+    client.closeDisplay();
+    setDisplay({ width: 0.5 });
+    engine.advance(1000);
+    client.openDisplay();
+    assertNear(engine.display()[1].dimensions, { x: 0.5, y: 0.275 }, "a new display takes the current values");
 });

@@ -219,16 +219,32 @@ export function formatSongs(songs, limit = SONG_LINES) {
     return "Songs (" + songs.length + ")\n" + lines.join("\n");
 }
 
-// The desk display: a Web entity on the music desk's glass, `anchor_desk_screen` in the salon
-// grand's joint contract (spec section 4: a 0.30 x 0.17 m panel on a model 1.480 m wide).
-export const DESK_SCREEN_SIZE = { x: 0.30, y: 0.17 };
+// The desk display: a Web entity over the face of the music desk, parented to the salon grand's
+// `anchor_desk_screen` joint (spec sections 3 to 5). Measured in salon-grand.glb, in the
+// anchor's frame (+Z out of the desk towards the player, +Y up the desk): the desk board is
+// 0.82 m across (x -0.41 to 0.41), its face is at z -0.0045, the ledge stands proud of it
+// below y -0.12, the board's top is at y 0.175, and the closed score in front of it reaches
+// z 0.0099. The default covers the face above the ledge, 10 mm inside its edges, 3 mm in front
+// of the score.
+export const DISPLAY_DEFAULTS = {
+    width: 0.80,
+    height: 0.275,
+    offset: { x: 0, y: 0.0275, z: 0.013 },
+    // The page lays itself out in rem scaled to the viewport, so this is sharpness, not size
+    pagePixelsWide: 1600
+};
 export const PIANO_NATURAL_WIDTH = 1.480;
-// 720 x 408 page pixels on the 0.30 x 0.17 m glass: a Web entity is dimensions in inches x dpi
-// pixels across (RenderableWebEntityItem.cpp getWindowSize), and piano-display.html is laid out
-// for that size.
-export const DISPLAY_PIXELS = { x: 720, y: 408 };
 export const DISPLAY_ACTIONS = ["previous", "pause", "stop", "next", "replay", "play-song"];
+// A Web entity is its dimensions in inches times dpi pixels across (RenderableWebEntityItem.cpp
+// getWindowSize)
 const METERS_TO_INCHES = 39.3701;
+/** @type {Record<string, [number, number]>} */
+const DISPLAY_LIMITS = {
+    width: [0.05, 3],
+    height: [0.05, 2],
+    offset: [-1, 1],
+    pagePixelsWide: [200, 4096]
+};
 
 // As BASE_URL, but the page may carry a query or fragment.
 const PAGE_URL = /^https?:\/\/[A-Za-z0-9.\-[\]:]+(\/[^\s<>]*)?$/i;
@@ -249,17 +265,70 @@ export function parseDisplayURL(userDataText) {
 }
 
 /**
- * The display's size on a piano that may be scaled from its natural size, and the dpi that
- * keeps the page at DISPLAY_PIXELS whatever the scale.
- * @param {{ x: number } | undefined} pianoDimensions
- * @returns {{ dimensions: { x: number, y: number, z: number }, dpi: number }}
+ * @typedef {object} DisplayGeometry
+ * @property {{ x: number, y: number, z: number }} dimensions
+ * @property {{ x: number, y: number, z: number }} localPosition from `anchor_desk_screen`
+ * @property {number} dpi
  */
-export function displayGeometry(pianoDimensions) {
+
+/**
+ * The display's size, place and resolution from `piano.display`, every key optional:
+ * `{ width, height, offset: { x, y, z }, pagePixelsWide }`, metres in the piano's natural size.
+ * A value out of range is reported and replaced by its default. The result is scaled with a
+ * piano that is not at its natural size (a child's local position does not scale by itself).
+ * @param {unknown} userDataText
+ * @param {{ x: number } | undefined} pianoDimensions
+ * @returns {{ geometry: DisplayGeometry, problems: string[], source: string }} source: the raw
+ *     `piano.display` as JSON, to tell when it changed
+ */
+export function parseDisplayGeometry(userDataText, pianoDimensions) {
+    const piano = parseObject(userDataText).piano;
+    const found = piano !== null && typeof piano === "object" ? piano.display : undefined;
+    const display = found !== null && typeof found === "object" && !Array.isArray(found) ? found : {};
+    /** @type {string[]} */
+    const problems = [];
+    if (found !== undefined && display !== found) {
+        problems.push("piano.display must be an object, got " + JSON.stringify(found) + "; using the defaults");
+    }
+    /**
+     * @param {string} name
+     * @param {unknown} value
+     * @param {number} fallback
+     * @param {[number, number]} range
+     */
+    const take = (name, value, fallback, [min, max]) => {
+        if (value === undefined) {
+            return fallback;
+        }
+        if (typeof value === "number" && value >= min && value <= max) {
+            return value;
+        }
+        problems.push("piano.display." + name + " must be a number from " + min + " to " + max + ", got "
+            + JSON.stringify(value) + "; using " + fallback);
+        return fallback;
+    };
+    const width = take("width", display.width, DISPLAY_DEFAULTS.width, DISPLAY_LIMITS.width);
+    const height = take("height", display.height, DISPLAY_DEFAULTS.height, DISPLAY_LIMITS.height);
+    const pixels = take("pagePixelsWide", display.pagePixelsWide, DISPLAY_DEFAULTS.pagePixelsWide,
+        DISPLAY_LIMITS.pagePixelsWide);
+    const offsetIn = display.offset !== null && typeof display.offset === "object" ? display.offset : {};
+    if (display.offset !== undefined && offsetIn !== display.offset) {
+        problems.push("piano.display.offset must be an object { x, y, z }, got " + JSON.stringify(display.offset));
+    }
+    const offset = {
+        x: take("offset.x", offsetIn.x, DISPLAY_DEFAULTS.offset.x, DISPLAY_LIMITS.offset),
+        y: take("offset.y", offsetIn.y, DISPLAY_DEFAULTS.offset.y, DISPLAY_LIMITS.offset),
+        z: take("offset.z", offsetIn.z, DISPLAY_DEFAULTS.offset.z, DISPLAY_LIMITS.offset)
+    };
     const scale = pianoDimensions && pianoDimensions.x > 0 ? pianoDimensions.x / PIANO_NATURAL_WIDTH : 1;
-    const width = DESK_SCREEN_SIZE.x * scale;
     return {
-        dimensions: { x: width, y: DESK_SCREEN_SIZE.y * scale, z: 0.01 },
-        dpi: DISPLAY_PIXELS.x / (width * METERS_TO_INCHES)
+        geometry: {
+            dimensions: { x: width * scale, y: height * scale, z: 0.01 },
+            localPosition: { x: offset.x * scale, y: offset.y * scale, z: offset.z * scale },
+            dpi: pixels / (width * scale * METERS_TO_INCHES)
+        },
+        problems,
+        source: JSON.stringify(found === undefined ? null : found)
     };
 }
 
