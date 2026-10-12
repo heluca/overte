@@ -72,7 +72,7 @@ export default class GameTableReferee {
         this.entityID = entityID;
         this.channel = channelFor(entityID);
         const properties = /** @type {Partial<Entities.EntityProperties_Box>} */ (
-            Entities.getEntityProperties(entityID, ["userData", "dimensions", "locked"]));
+            Entities.getEntityProperties(entityID, ["userData", "dimensions", "locked", "color"]));
         this.dimensions = /** @type {Vec3} */ (properties.dimensions);
         // A locked entity takes no edit but to `locked`, so the state could not be stored.
         this.locked = properties.locked === true;
@@ -88,6 +88,12 @@ export default class GameTableReferee {
         const entry = game.entry;
         this.layout = entry.layout === "grid" ? new GridLayout(entityID, this.dimensions, HERE, entry)
             : new Connect4Layout(entityID, this.dimensions, HERE);
+        const color = this.layout.boardColor;
+        const shown = properties.color;
+        // The Connect Four layout owns the board's colour; a locked board takes no edit, as for userData
+        if (color && !this.locked && !(shown && shown.red === color.red && shown.green === color.green && shown.blue === color.blue)) {
+            Entities.editEntity(entityID, { color });
+        }
         this.core = new RefereeCore({
             now: () => Date.now(),
             publish: state => this.publish(state),
@@ -170,7 +176,8 @@ export default class GameTableReferee {
     /**
      * Children persist with the board, and the entity server may still be sending them when
      * preload runs, so sweep them for a while (as Shortbow does): adopt the layout's fixed
-     * children (the status display, the click targets and the seat buttons), delete any
+     * children (the status display, the click targets, the seat buttons and the board's own
+     * decoration: tiles, or holes and frame), delete any
      * duplicate of them, any piece this instance did not create (left by one that died without
      * unloading) and any other "GT." child (left by another game). Each fixed child is created
      * only if none turned up. An adopted child is brought back to the current layout, look and

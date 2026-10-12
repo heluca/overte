@@ -276,7 +276,7 @@ export default class GameTableClient {
     }
 
     /**
-     * Shows a local box around each column target in `columns` and removes the others. Local
+     * Shows a local highlight around each column target in `columns` and removes the others. Local
      * entities are drawn for this user only and need no edit rights; the column targets are
      * domain entities, so editing their colour would change it for everyone, if allowed at all.
      * @param {number[]} columns
@@ -312,7 +312,7 @@ export default class GameTableClient {
     addHighlights(wanted) {
         Entities.getChildrenIDs(this.boardID).forEach(id => {
             const target = /** @type {Partial<Entities.EntityProperties_Box>} */ (
-                Entities.getEntityProperties(id, ["name", "dimensions"]));
+                Entities.getEntityProperties(id, ["name", "dimensions", "shape"]));
             const column = COLUMN.exec(target.name || "");
             const col = column ? Number(column[1]) : -1;
             if (!wanted.has(col) || this.highlights.has(col)) {
@@ -320,7 +320,9 @@ export default class GameTableClient {
             }
             const size = /** @type {Vec3} */ (target.dimensions);
             this.highlights.set(col, { target: id, id: Entities.addEntity({
-                type: "Box",
+                // The target's own shape, grown round it: the highlight takes its rotation too
+                type: "Shape",
+                shape: target.shape || "Cube",
                 name: HIGHLIGHT_PREFIX + col,
                 parentID: id,
                 localPosition: { x: 0, y: 0, z: 0 },
