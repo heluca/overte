@@ -140,11 +140,12 @@ void EntityScriptServer::handleEntityScriptGetStatusPacket(QSharedPointer<Receiv
             return;
         }
 
-        EntityScriptDetails details;
-        if (_entitiesScriptManager->getEntityScriptDetails(entityID, entity->getServerScripts(), details)) {
+        EntityScriptStatus status { EntityScriptStatus::PENDING };
+        QString errorInfo;
+        if (_entitiesScriptManager->getEntityScriptStatus(entityID, entity->getServerScripts(), status, errorInfo)) {
             replyPacketList->writePrimitive(true);
-            replyPacketList->writePrimitive(details.status);
-            replyPacketList->writeString(details.errorInfo);
+            replyPacketList->writePrimitive(status);
+            replyPacketList->writeString(errorInfo);
         } else {
             replyPacketList->writePrimitive(false);
         }

@@ -28,6 +28,7 @@
 #include "ScriptContext.h"
 #include "ScriptEngine.h"
 #include "ScriptEngineCast.h"
+#include "ScriptEnvironment.h"
 #include "ScriptValue.h"
 
 Q_DECLARE_METATYPE(QByteArray*)
@@ -123,6 +124,16 @@ ScriptValue XMLHttpRequestClass::getResponseHeader(const QString& name) const {
     return _engine->nullValue();
 }
 
+void XMLHttpRequestClass::setOnTimeout(const ScriptValue& function) {
+    _onTimeout = function;
+    _onTimeoutEnvironment = _engine->currentEnvironment();
+}
+
+void XMLHttpRequestClass::setOnReadyStateChange(const ScriptValue& function) {
+    _onReadyStateChange = function;
+    _onReadyStateChangeEnvironment = _engine->currentEnvironment();
+}
+
 /*@jsdoc
  * Called when the request's ready state changes.
  * @callback XMLHttpRequest~onReadyStateChangeCallback
@@ -131,6 +142,7 @@ void XMLHttpRequestClass::setReadyState(ReadyState readyState) {
     if (readyState != _readyState) {
         _readyState = readyState;
         if (_onReadyStateChange.isFunction()) {
+            ScriptEnvironmentScope environmentScope(_engine, _onReadyStateChangeEnvironment);
             _onReadyStateChange.call(_onReadyStateChange.engine()->nullValue());
         }
     }
@@ -208,6 +220,7 @@ void XMLHttpRequestClass::doSend() {
  */
 void XMLHttpRequestClass::requestTimeout() {
     if (_onTimeout.isFunction()) {
+        ScriptEnvironmentScope environmentScope(_engine, _onTimeoutEnvironment);
         _onTimeout.call(_engine->nullValue());
     }
     abortRequest();

@@ -17,7 +17,8 @@
 #include "ScriptEngine.h"
 #include "ScriptManager.h"
 
-// Runs code the way an entity script runs: evaluateInClosure, in a v8::Context of its own with copies of the globals
+// Runs code the way Script.require() runs a module: evaluateInClosure, in a v8::Context of its own with copies of the
+// globals
 class ClosureRunner : public QObject {
     Q_OBJECT
 

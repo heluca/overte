@@ -96,7 +96,8 @@ public:
     QUrl definingSandboxURL;
 
     /**
-     * @brief ES module environment the function was registered in; null for classic script code
+     * @brief Environment the function was registered in (see ScriptEngine::currentEnvironment()); null for classic script
+     * code outside entity scripts
      *
      */
     ScriptEnvironmentPointer definingEnvironment;
@@ -1203,6 +1204,21 @@ public:
     bool hasEntityScriptDetails(const EntityItemID& entityID, const QString& scriptURL) const;
 
     /**
+     * @brief Get the status and error information of an entity script, from any thread
+     *
+     * Unlike getEntityScriptDetails(), this does not copy the script object, which only the script thread may do.
+     *
+     * @param entityID Entity ID
+     * @param scriptURL Script URL
+     * @param status Status of the script
+     * @param errorInfo Error information of the script
+     * @return true If there are script details for the entity
+     * @return false If there are none. status and errorInfo will be unmodified.
+     */
+    bool getEntityScriptStatus(const EntityItemID& entityID, const QString& scriptURL, EntityScriptStatus& status,
+                               QString& errorInfo) const;
+
+    /**
      * @brief Set a shared pointer to the ScriptEngines class
      *
      * This is used to ask ScriptEngines whether the system is being stopped.
@@ -1524,8 +1540,9 @@ public:
     /**
      * @brief The entity whose script is running, if any
      *
-     * In ES module code, the current ScriptEnvironment's, which promise continuations, timers and handlers keep; in
-     * classic script code, the one set by the innermost doWithEnvironment(). Script thread only for module code.
+     * The current ScriptEnvironment's, which promise continuations, timers and handlers keep: ES module code's, or the
+     * classic one doWithEnvironment() makes for classic code; with none, the one set by the innermost
+     * doWithEnvironment(). Script thread only for the environment's.
      *
      * @return EntityItemID Entity ID, null outside entity scripts
      */
@@ -1652,6 +1669,8 @@ protected:
     // Classic script code's environment, see currentEntityIdentifier() and currentSandboxURL()
     EntityItemID _currentEntityIdentifier; // Contains the defining entity script entity id during execution, if any. Empty for interface script execution.
     QUrl _currentSandboxURL; // The toplevel url string for the entity script that loaded the code being executed, else empty.
+    // Classic entity script code's environment per loaded entity, made on first use and dropped at unload
+    QHash<EntityItemID, ScriptEnvironmentPointer> _classicEnvironments;
 
     /**
      * @brief Records a file loaded by Script.include or Script.require in the environment that loaded it
@@ -1659,9 +1678,12 @@ protected:
      * The hook for design question Q3 of #10; does nothing while CLASSIC_LOADS_TAINT_ENVIRONMENT is off.
      *
      * @param url URL of the file
-     * @param environment Environment of the code that loaded it; null for classic script code
+     * @param environment Environment of the code that loaded it; classic or null for classic script code
      */
     void noteClassicLoad(const QUrl& url, const ScriptEnvironmentPointer& environment);
+
+    // Classic code's environment for the entity and sandbox, see doWithEnvironment(); null when both are empty
+    ScriptEnvironmentPointer classicEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL);
 
     /**
      * @brief Execute operation in the appropriate context for (the possibly empty) entityID.
@@ -1670,12 +1692,14 @@ protected:
      * global values for different entity scripts).
      *
      * The operation runs in the ES module environment given, and continuations it creates carry it; with none it runs as
-     * classic script code, without one even if called from module code.
+     * classic script code even if called from module code, in a classic environment (ScriptEnvironment::classic) that
+     * its continuations carry when there is an entity or sandbox, else without one.
      *
      * @param entityID Entity ID, may be null
      * @param sandboxURL Sandbox URL
      * @param operation Operation to call
-     * @param environment ES module environment, whose entity and sandbox are entityID and sandboxURL; null for classic code
+     * @param environment ES module environment, whose entity and sandbox are entityID and sandboxURL; null for classic
+     * code, which then runs in the entity's classic environment, see ScriptEnvironment::classic
      */
     void doWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, std::function<void()> operation,
                            const ScriptEnvironmentPointer& environment = ScriptEnvironmentPointer());
@@ -1699,7 +1723,7 @@ protected:
      * @param function  Function to call
      * @param thisObject "this" object to use for the call
      * @param args Arguments
-     * @param environment ES module environment, null for classic code
+     * @param environment ES module environment; null for classic code, as for doWithEnvironment()
      */
     void callWithEnvironment(const EntityItemID& entityID, const QUrl& sandboxURL, const ScriptValue& function, const ScriptValue& thisObject, const ScriptValueList& args,
                              const ScriptEnvironmentPointer& environment = ScriptEnvironmentPointer());

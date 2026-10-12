@@ -40,8 +40,6 @@ struct ScriptModuleRecordV8 {
     /// Resolved URL as imported: the map key, the ScriptOrigin resource name and import.meta.url
     QUrl url;
     int epoch { 0 };
-    /// Fetched bypassing ScriptCache, for a reload: a CommonJS file then does not reuse Script.require.cache
-    bool forceDownload { false };
     /// Dropped from the map with its epoch; a fetch still in flight for it is discarded
     bool released { false };
     v8::Global<v8::Module> module;

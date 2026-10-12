@@ -27,6 +27,7 @@
 #include <AudioInjectorManager.h>
 #include <AssetClient.h>
 #include <DebugDraw.h>
+#include <EntityScriptClient.h>
 #include <EntityScriptingInterface.h>
 #include <LocationScriptingInterface.h>
 #include <AudioScriptingInterface.h>
@@ -80,6 +81,7 @@ Agent::Agent(ReceivedMessage& message) :
     DependencyManager::set<AnimationCache>();
     DependencyManager::set<AnimationCacheScriptingInterface>();
     DependencyManager::set<EntityScriptingInterface>(false);
+    DependencyManager::set<EntityScriptClient>();
 
     DependencyManager::set<ResourceScriptingInterface>();
     DependencyManager::set<UserActivityLoggerScriptingInterface>();
@@ -860,6 +862,7 @@ void Agent::aboutToFinish() {
     DependencyManager::destroy<RecordingScriptingInterface>();
     DependencyManager::destroy<AnimationCacheScriptingInterface>();
     DependencyManager::destroy<EntityScriptingInterface>();
+    DependencyManager::destroy<EntityScriptClient>();
     DependencyManager::destroy<ResourceScriptingInterface>();
     DependencyManager::destroy<UserActivityLoggerScriptingInterface>();
 

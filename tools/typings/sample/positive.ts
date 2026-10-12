@@ -24,3 +24,41 @@ if (readBack.type === "Box") {
 
 // Edits need no type.
 Entities.editEntity(cloneSource, { alpha: 0.5 });
+
+// Web globals.
+const dataUrl = new URL("./data.json", Script.resolvePath(""));
+print(dataUrl.href, dataUrl.searchParams.get("v") ?? "", String(URL.canParse("x", dataUrl)));
+const encoded: Uint8Array = new TextEncoder().encode("h\u00e9llo");
+print(new TextDecoder("utf-8", { fatal: true }).decode(encoded, { stream: false }), crypto.randomUUID());
+const copied = structuredClone({ list: [1, 2] }, { transfer: [] }) as { list: number[] };
+print(String(copied.list.length), btoa(atob("aGk=")), String(performance.now() - performance.timeOrigin));
+crypto.getRandomValues(new Uint32Array(4));
+crypto.subtle.digest({ name: "SHA-256" }, encoded).then((hash: ArrayBuffer) => print(String(hash.byteLength)));
+async function hashText(text: string): Promise<number> {
+    return (await crypto.subtle.digest("SHA-1", new TextEncoder().encode(text))).byteLength;
+}
+hashText("abc").catch((error: DOMException) => print(error.name, String(error.code)));
+
+// Assets without a callback returns a promise; with one, the callback gets the result.
+async function readSaved(): Promise<string> {
+    const saved = await Assets.getAsset({ url: "/games/saved.json", responseType: "text" });
+    const hash: string = await Assets.getMapping("/games/saved.json");
+    return String(saved.response) + hash;
+}
+readSaved().then(print, (error: Error) => print(error.message));
+Assets.getAsset("/games/saved.json", (error, result) => print(error === null ? String(result.response) : error));
+
+// Script.remoteCallerID is a Uuid string while a remotely callable method runs, undefined otherwise.
+function remotelyCallable(): void {
+    const caller: string | undefined = Script.remoteCallerID;
+    if (caller !== undefined) {
+        print(caller);
+    }
+}
+
+// A live PCM stream plays at a position and moves with setOptions; reconnecting when it finishes is the script's job.
+function playStreamAt(position: Vec3): void {
+    const injector: AudioInjector = Audio.playStream("http://127.0.0.1:8000/pcm", { position, volume: 0.8, stereo: false });
+    injector.finished.connect(() => Script.setTimeout(() => playStreamAt(position), 1000));
+    injector.setOptions({ position: Vec3.sum(position, Vec3.UNIT_Y) });
+}

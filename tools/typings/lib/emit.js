@@ -19,6 +19,19 @@ const { docComment, isReadOnly, paramName, RESERVED } = require("./doc");
 // to "T | undefined".
 const MAX_EXPANDED_OPTIONALS = 3;
 
+// import.meta.url is a module-loader feature, not a documented API (no @jsdoc block owns it), so
+// it is emitted here rather than from a doclet. TypeScript's own lib declares no ImportMeta
+// interface at any target/module setting; only @types/node adds one, which these declarations do
+// not depend on, so without this prelude every .mjs script fails to typecheck on import.meta.url.
+const IMPORT_META_PRELUDE = `/**
+ * The \`import.meta\` object of an ES module (\`.mjs\`) script.
+ */
+interface ImportMeta {
+    /** The URL the engine resolved this module from. */
+    url: string;
+}
+`;
+
 const SIGNAL_PRELUDE = `/**
  * A Qt signal exposed to scripts. Connect a function to be called each time the signal is emitted;
  * the two-argument forms call the function with \`this\` bound to \`thisObject\`.
@@ -330,7 +343,7 @@ class Emitter {
         lines.push(indent + "interface " + name + " {");
         buildTree(container.properties || []).forEach(node => this.propertyLines(node,
             { bag: false, indent: inner, readonlyProperties: true }, lines));
-        this.resolveMembers(container).forEach(member => {
+        this.resolveMembers(container).filter(member => !member.hifiStatic).forEach(member => {
             lines.push(...docComment(member, inner));
             if (member.kind === "signal") {
                 lines.push(inner + "readonly " + propertyKey(member.name) + ": " + this.signalType(member) + ";");
@@ -378,7 +391,7 @@ class Emitter {
         this.model.containers.filter(container => container.kind === "class")
             .forEach(container => add(tsName(container.longname), indent => this.classLines(container, indent)));
 
-        const out = [header, SIGNAL_PRELUDE, this.partialVariantsPrelude()];
+        const out = [header, SIGNAL_PRELUDE, IMPORT_META_PRELUDE, this.partialVariantsPrelude()];
         [...groups.keys()].sort().forEach(parent => {
             const entries = groups.get(parent).sort((a, b) => a.name.localeCompare(b.name));
             const indent = parent ? "    " : "";
@@ -428,6 +441,11 @@ class Emitter {
         const lines = docComment(container, "");
         lines.push("declare var " + name + ": {");
         this.paramLists(container.params, true).forEach(params => lines.push("    new (" + params + "): " + name + ";"));
+        container.members.filter(member => member.hifiStatic).forEach(member => {
+            lines.push(...docComment(member, "    "));
+            this.overloads(member).forEach(([params, returns]) =>
+                lines.push("    " + propertyKey(member.name) + "(" + params + "): " + returns + ";"));
+        });
         lines.push("    prototype: " + name + ";", "};", "");
         return lines;
     }

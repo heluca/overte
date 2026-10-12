@@ -99,9 +99,10 @@ v8::MaybeLocal<v8::Promise> ScriptModuleLoaderV8::importModuleDynamically(v8::Lo
     }
     // From module code, the caller's environment: its sandbox and epoch, and it records what the import loads. From
     // classic code, a new one for the imported graph, with the script's entity and sandbox (an entity script's URL, or
-    // the manager's own as for a top-level module's imports), recording the importer too.
+    // the manager's own as for a top-level module's imports), recording the importer too. A classic entity script's
+    // continuation after an await has them from its classic environment.
     ScriptEnvironmentPointer environment = engine->currentEnvironment();
-    if (!environment) {
+    if (!environment || environment->classic) {
         EntityItemID entityID = manager ? manager->currentEntityIdentifier() : EntityItemID();
         QUrl classicSandboxURL = manager ? manager->currentSandboxURL() : QUrl();
         if (classicSandboxURL.isEmpty() && manager) {

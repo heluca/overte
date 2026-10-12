@@ -660,17 +660,22 @@ public slots:
     Q_INVOKABLE void callEntityMethod(const QUuid& entityID, const QString& method, const QStringList& params = QStringList());
 
     /*@jsdoc
-     * Calls a method in a server entity script from an Interface, avatar, or client entity script. The server entity script 
-     * method must be exposed as a property in the target server entity script. Additionally, the server entity script must 
-     * include the method's name in an exposed property called <code>remotelyCallable</code> that is an array of method names 
-     * that can be called.
+     * Calls a method in a server entity script from an Interface, avatar, client entity, or assignment client (Agent) script. 
+     * The server entity script method must be exposed as a property in the target server entity script. Additionally, the 
+     * server entity script must include the method's name in an exposed property called <code>remotelyCallable</code> that is 
+     * an array of method names that can be called.
      * <p>The method can read the caller's session ID as <code>Script.remoteCallerID</code>. It is set only while the method 
-     * runs synchronously: an <code>async</code> method must read it before its first <code>await</code>.</p>
+     * runs synchronously: an <code>async</code> method must read it before its first <code>await</code>. For an assignment 
+     * client (Agent) script, it is the Agent's session ID, the same as its avatar's ID, and it stays the same for as long as 
+     * the assignment runs.</p>
+     * <p class="availableIn"><strong>Supported Script Types:</strong> Interface Scripts &bull; Client Entity Scripts &bull; Avatar Scripts &bull; 
+     * Assignment Client Scripts</p>
      * @function Entities.callEntityServerMethod
      * @param {Uuid} entityID - The ID of the entity to call the method in.
      * @param {string} method - The name of the method to call. The method is called with the entity ID as the first parameter 
      *     and the <code>parameters</code> value as the second parameter.
      * @param {string[]} [parameters=[]] - The additional parameters to call the specified method with.
+     * @throws Throws an error if called from a server entity script.
      * @example <caption>Call a method in a server entity script from an Interface script.</caption>
      * // Server entity script.
      * var entityScript = (function () {
@@ -947,19 +952,28 @@ public slots:
 
     /*@jsdoc
      * Reloads an entity's server entity script such that the latest version re-downloaded.
+     * <p class="availableIn"><strong>Supported Script Types:</strong> Interface Scripts &bull; Client Entity Scripts &bull; Avatar Scripts &bull; 
+     * Assignment Client Scripts</p>
      * @function Entities.reloadServerScripts
      * @param {Uuid} entityID - The ID of the entity to reload the server entity script of.
      * @returns {boolean} <code>true</code> if the reload request was successfully sent to the server, otherwise 
      *     <code>false</code>.
+     * @throws Throws an error if called from a server entity script.
      */
     Q_INVOKABLE bool reloadServerScripts(const QUuid& entityID);
 
     /*@jsdoc
      * Gets the status of a server entity script attached to an entity.
+     * <p class="availableIn"><strong>Supported Script Types:</strong> Interface Scripts &bull; Client Entity Scripts &bull; Avatar Scripts &bull; 
+     * Assignment Client Scripts</p>
+     * <p>The entity script server does not reply for an entity it does not run server scripts for. If there is no reply
+     * within 5 seconds, the callback is called with <code>success</code> <code>false</code> and <code>errorInfo</code>
+     * <code>"no reply from the entity script server"</code>. The callback is not called once the script has stopped.</p>
      * @function Entities.getServerScriptStatus
      * @param {Uuid} entityID - The ID of the entity to get the server entity script status of.
      * @param {Entities~getServerScriptStatusCallback} callback - The function to call upon completion.
-     * @returns {boolean} <code>true</code> always.
+     * @returns {boolean} <code>true</code> if the request was made, otherwise <code>false</code>.
+     * @throws Throws an error if called from a server entity script.
      */
     /*@jsdoc
      * Called when a {@link Entities.getServerScriptStatus} call is complete.
@@ -976,16 +990,27 @@ public slots:
 
     /*@jsdoc
      * Gets metadata for certain entity properties such as <code>script</code> and <code>serverScripts</code>.
+     * <p>The <code>serverScripts</code> property can be queried from Interface, client entity, avatar, and assignment client 
+     * (Agent) scripts, but not from server entity scripts. The entity script server does not reply for an entity it does
+     * not run server scripts for: if there is no reply within 5 seconds, the callback is called with an error whose
+     * message is <code>"no reply from the entity script server"</code>. The callback is not called once the script has
+     * stopped.</p>
      * @function Entities.queryPropertyMetadata
      * @param {Uuid} entityID - The ID of the entity to get the metadata for.
      * @param {string} property - The property name to get the metadata for.
      * @param {Entities~queryPropertyMetadataCallback} callback - The function to call upon completion.
      * @returns {boolean} <code>true</code> if the request for metadata was successfully sent to the server, otherwise 
      *     <code>false</code>.
-     * @throws Throws an error if <code>property</code> is not handled yet or <code>callback</code> is not a function.
+     * @throws Throws an error if <code>property</code> is not handled yet, <code>callback</code> is not a function, or 
+     *     <code>property</code> is <code>serverScripts</code> in a server entity script.
      */
     /*@jsdoc
      * Gets metadata for certain entity properties such as <code>script</code> and <code>serverScripts</code>.
+     * <p>The <code>serverScripts</code> property can be queried from Interface, client entity, avatar, and assignment client 
+     * (Agent) scripts, but not from server entity scripts. The entity script server does not reply for an entity it does
+     * not run server scripts for: if there is no reply within 5 seconds, the callback is called with an error whose
+     * message is <code>"no reply from the entity script server"</code>. The callback is not called once the script has
+     * stopped.</p>
      * @function Entities.queryPropertyMetadata
      * @param {Uuid} entityID - The ID of the entity to get the metadata for.
      * @param {string} property - The property name to get the metadata for.
@@ -993,7 +1018,8 @@ public slots:
      * @param {Entities~queryPropertyMetadataCallback} callback - The function to call upon completion.
      * @returns {boolean} <code>true</code> if the request for metadata was successfully sent to the server, otherwise 
      *     <code>false</code>.
-     * @throws Throws an error if <code>property</code> is not handled yet or <code>callback</code> is not a function.
+     * @throws Throws an error if <code>property</code> is not handled yet, <code>callback</code> is not a function, or 
+     *     <code>property</code> is <code>serverScripts</code> in a server entity script.
      */
     /*@jsdoc
      * Called when a {@link Entities.queryPropertyMetadata} call is complete.

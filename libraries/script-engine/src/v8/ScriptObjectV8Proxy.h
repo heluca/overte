@@ -249,7 +249,7 @@ private:  // storage
     public:
         V8ScriptValue thisValue;
         V8ScriptValue callback;
-        // ES module environment the connection was made in, null for classic script code
+        // Environment the connection was made in (see ScriptEngine::currentEnvironment()), the handler runs in it
         ScriptEnvironmentPointer environment;
         Connection(const V8ScriptValue &v8ThisValue, const V8ScriptValue &v8Callback, const ScriptEnvironmentPointer& environment) :
             thisValue(v8ThisValue), callback(v8Callback), environment(environment) {};

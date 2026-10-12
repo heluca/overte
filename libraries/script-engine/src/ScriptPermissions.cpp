@@ -93,7 +93,7 @@ static bool areURLsAllowed(int permissionIndex, const std::vector<QString>& urls
 }
 
 // ES module code: an environment is only as trusted as every URL it loaded, whatever frames an await has left on the
-// stack. Design question Q3 of #10 would bring classic scripts here by giving them an environment too.
+// stack. Design question Q3 of #10 would bring classic scripts here too; their classic environments do not.
 static bool isEnvironmentAllowed(int permissionIndex, ScriptEngine* engine, const ScriptEnvironment& environment,
                                  const QString& scriptURL) {
     // Frames of Script.require modules too, which run in contexts of their own
@@ -148,7 +148,9 @@ bool ScriptPermissions::isCurrentScriptAllowed(ScriptPermissions::Permission per
         return false;
     }
     QString scriptURL = manager->getAbsoluteFilename();
-    if (auto environment = engine->currentEnvironment()) {
+    // A classic environment carries classic code's entity and sandbox only; the frame rule below applies to it
+    auto environment = engine->currentEnvironment();
+    if (environment && !environment->classic) {
         return isEnvironmentAllowed(permissionIndex, engine.get(), *environment, scriptURL);
     }
 
