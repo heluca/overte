@@ -17,6 +17,7 @@
     "files": [
         "../../../tools/typings/dist/overte-server-entity.d.ts",
         "connect4.mjs",
+        "checkers.mjs",
         "referee-core.mjs",
         "game-registry.mjs",
         "layout-connect4.mjs",
