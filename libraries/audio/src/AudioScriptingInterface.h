@@ -209,6 +209,10 @@ protected:
      * the connection. Reconnecting is up to the script: call <code>Audio.playStream</code> again from the
      * <code>finished</code> handler.</p>
      * <p>Only <code>http://</code> and <code>https://</code> URLs are played; any other URL returns <code>null</code>.</p>
+     * <p>In server entity scripts and Agent scripts, the stream request gets the domain's script credential for the URL, if
+     * there is one: the domain settings hold bearer tokens, each for requests under a URL prefix made by scripts under a
+     * script prefix. The token is sent as an <code>Authorization</code> header and is never visible to the script. A
+     * redirect away from the credential's URL prefix ends the stream rather than send the token on.</p>
      * <p>The <code>loop</code>, <code>secondOffset</code> and <code>pitch</code> options have no effect on a stream, nor does
      * {@link AudioInjector.restart}. Changing <code>position</code>, <code>orientation</code> or <code>volume</code> with
      * {@link AudioInjector.setOptions} applies while the stream plays.</p>

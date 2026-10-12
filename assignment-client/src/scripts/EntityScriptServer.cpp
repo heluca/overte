@@ -30,6 +30,7 @@
 #include <ResourceManager.h>
 #include <ResourceScriptingInterface.h>
 #include <ScriptCache.h>
+#include <ScriptCredentials.h>
 #include <ScriptEngines.h>
 #include <SoundCacheScriptingInterface.h>
 #include <UUID.h>
@@ -71,6 +72,7 @@ EntityScriptServer::EntityScriptServer(ReceivedMessage& message) : ThreadedAssig
     DependencyManager::set<AudioInjectorManager>();
 
     DependencyManager::set<ScriptCache>();
+    DependencyManager::set<ScriptCredentials>();
 
 
     // Needed to ensure the creation of the DebugDraw instance on the main thread
@@ -164,6 +166,8 @@ void EntityScriptServer::handleSettings() {
     const QJsonObject& settingsObject = domainHandler.getSettingsObject();
 
     commonParseSettingsObject(settingsObject);
+
+    ScriptCredentials::loadDomainSettings(settingsObject);
 
     static const QString ENTITY_SCRIPT_SERVER_SETTINGS_KEY = "entity_script_server";
 
@@ -714,6 +718,7 @@ void EntityScriptServer::aboutToFinish() {
 
     DependencyManager::destroy<SoundCache>();
     DependencyManager::destroy<ScriptCache>();
+    DependencyManager::destroy<ScriptCredentials>();
 
     DependencyManager::destroy<ResourceManager>();
     DependencyManager::destroy<ResourceCacheSharedItems>();

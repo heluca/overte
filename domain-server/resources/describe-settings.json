@@ -1686,6 +1686,44 @@
       ]
     },
     {
+      "name": "script_credentials",
+      "label": "Script Credentials",
+      "restart": false,
+      "assignment-types": [ 2, 5 ],
+      "settings": [
+        {
+          "name": "credentials",
+          "label": "Script Credentials",
+          "type": "table",
+          "can_add_new_rows": true,
+          "numbered": false,
+          "assignment-only": true,
+          "backup": false,
+          "help": "Bearer tokens for HTTP APIs that server entity scripts and Agent scripts call. A <code>fetch</code>, <code>XMLHttpRequest</code> or <code>Audio.playStream</code> request whose URL is under a row's URL prefix, made by a script whose URL is under the row's script prefix, is sent with <code>Authorization: Bearer &lt;token&gt;</code>, unless the script sets its own <code>Authorization</code> header. The token is never visible to scripts, and only the entity script server and Agents receive it.<br/>Under a prefix means the same scheme, host and port, and a path that starts with the prefix's path: end a prefix with <code>/</code>. URL prefixes must be <code>https</code>, or <code>http</code> on a loopback host; script prefixes may also be <code>atp</code>. Where several rows apply, the longest URL prefix wins. A redirect away from the URL prefix ends the request.<br/>Changes apply to running scripts from their next request. To change a row's prefixes, delete it and add it again with its token.",
+          "columns": [
+            {
+              "name": "url_prefix",
+              "label": "URL Prefix",
+              "placeholder": "https://<host>/api/",
+              "can_set": true
+            },
+            {
+              "name": "token",
+              "label": "Token",
+              "type": "password",
+              "can_set": true
+            },
+            {
+              "name": "script_prefix",
+              "label": "Script Prefix",
+              "placeholder": "https://<host>/scripts/",
+              "can_set": true
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "broadcasting",
       "label": "Broadcasting",
       "restart": false,

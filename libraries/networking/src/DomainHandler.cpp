@@ -28,6 +28,7 @@
 #include "DomainAccountManager.h"
 #include "SockAddr.h"
 #include "NodeList.h"
+#include "ScriptCredentials.h"
 #include "udt/Packet.h"
 #include "udt/PacketHeaders.h"
 #include "NLPacket.h"
@@ -451,7 +452,11 @@ void DomainHandler::processSettingsPacketList(QSharedPointer<ReceivedMessage> pa
     _settingsObject = QJsonDocument::fromJson(data).object();
     
     if (!_settingsObject.isEmpty()) {
-        qCDebug(networking) << "Received domain settings: \n" << _settingsObject;
+        QJsonObject loggedSettings = _settingsObject;
+        if (loggedSettings.contains(ScriptCredentials::SETTINGS_GROUP)) {
+            loggedSettings[ScriptCredentials::SETTINGS_GROUP] = "(not logged)";
+        }
+        qCDebug(networking) << "Received domain settings: \n" << loggedSettings;
     }
 
     emit settingsReceived(_settingsObject);

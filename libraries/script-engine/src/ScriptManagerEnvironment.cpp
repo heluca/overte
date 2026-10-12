@@ -30,6 +30,20 @@ QUrl ScriptManager::currentSandboxURL() const {
     return _currentSandboxURL;
 }
 
+// An ES module environment's loaded URLs count as they do for ScriptPermissions: a trusted script that imports code
+// from elsewhere shares its bindings with that code
+QList<QUrl> ScriptManager::scriptCredentialScope() const {
+    const QUrl sandboxURL = currentSandboxURL();
+    QList<QUrl> scope { sandboxURL.isEmpty() ? QUrl(_fileNameString) : sandboxURL };
+    auto environment = _engine->currentEnvironment();
+    if (environment && !environment->classic) {
+        for (const QString& url : environment->loadedURLs()) {
+            scope.append(QUrl(url));
+        }
+    }
+    return scope;
+}
+
 // Classic code run for an entity or sandbox gets an environment that carries them, so that a promise continuation that
 // resumes outside this call still has them: after awaiting a promise settled from the event loop (fetch()) or by
 // another script's handler. An entity keeps one until it unloads, and the current one is reused for nested calls.

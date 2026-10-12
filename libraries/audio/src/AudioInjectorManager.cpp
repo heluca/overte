@@ -277,13 +277,14 @@ AudioInjectorPointer AudioInjectorManager::playSound(const AudioDataPointer& aud
     return injector;
 }
 
-AudioInjectorPointer AudioInjectorManager::playStream(const QUrl& url, const AudioInjectorOptions& options) {
+AudioInjectorPointer AudioInjectorManager::playStream(const QUrl& url, const AudioInjectorOptions& options,
+                                                     const AudioStreamCredential& credential) {
     if (_shouldStop) {
         qCDebug(audio) << "AudioInjectorManager::playStream asked to thread injector but is shutting down.";
         return nullptr;
     }
 
-    auto stream = AudioStreamSource::create(url, options.stereo ? AudioConstants::STEREO : AudioConstants::MONO);
+    auto stream = AudioStreamSource::create(url, options.stereo ? AudioConstants::STEREO : AudioConstants::MONO, credential);
     if (!stream) {
         return nullptr;
     }

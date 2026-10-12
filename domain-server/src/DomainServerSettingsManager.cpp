@@ -38,6 +38,7 @@
 #include <SettingHelpers.h>
 #include <FingerprintUtils.h>
 #include <ModerationFlags.h>
+#include <ScriptCredentials.h>
 
 #include "DomainServerNodeData.h"
 #include "NodePermissions.h"
@@ -57,6 +58,11 @@ const QString DESCRIPTION_BACKUP_FLAG_KEY = "backup";
 const QString SETTING_DESCRIPTION_TYPE_KEY = "type";
 const QString DESCRIPTION_COLUMNS_KEY = "columns";
 const QString CONTENT_SETTING_FLAG_KEY = "content_setting";
+// A setting held for assignment clients alone: sent to a requester the gatekeeper admitted as an assignment client of the
+// requested type, and to the settings page with its password columns masked
+const QString DESCRIPTION_ASSIGNMENT_ONLY_KEY = "assignment-only";
+const QString PASSWORD_COLUMN_TYPE = "password";
+const QString PASSWORD_COLUMN_MASK = "******";
 static const QString SPLIT_MENU_GROUPS_DOMAIN_SETTINGS_KEY = "domain_settings";
 static const QString SPLIT_MENU_GROUPS_CONTENT_SETTINGS_KEY = "content_settings";
 
@@ -192,7 +198,21 @@ void DomainServerSettingsManager::processSettingsRequestPacket(QSharedPointer<Re
     Assignment::Type type;
     message->readPrimitive(&type);
 
-    QJsonObject responseObject = settingsResponseObjectForType(QString::number(type));
+    // The request is unsourced and names its own type, and Interface asks as an AgentType, so the type alone does not
+    // say who is asking
+    const SockAddr& sender = message->getSenderSockAddr();
+    auto nodeList = DependencyManager::get<LimitedNodeList>();
+    bool isAssignment = nodeList->nodeMatchingPredicate([&](const SharedNodePointer& node) {
+        return node->getPermissions().isAssignment && Assignment::typeForNodeType(node->getType()) == type &&
+            node->getActiveSocket() && *node->getActiveSocket() == sender;
+    });
+
+    sendSettings(type, isAssignment ? Authenticated : NotAuthenticated, sender);
+}
+
+void DomainServerSettingsManager::sendSettings(Assignment::Type type, SettingsRequestAuthentication authentication,
+                                               const SockAddr& destination) {
+    QJsonObject responseObject = settingsResponseObjectForType(QString::number(type), authentication);
     auto json = QJsonDocument(responseObject).toJson();
 
     auto packetList = NLPacketList::create(PacketType::DomainSettings, QByteArray(), true, true);
@@ -200,7 +220,22 @@ void DomainServerSettingsManager::processSettingsRequestPacket(QSharedPointer<Re
     packetList->write(json);
 
     auto nodeList = DependencyManager::get<LimitedNodeList>();
-    nodeList->sendPacketList(std::move(packetList), message->getSenderSockAddr());
+    nodeList->sendPacketList(std::move(packetList), destination);
+}
+
+// Assignment clients ask for their settings once, as they connect. The script credentials change without a restart, so
+// the assignment clients that run scripts get their settings again.
+void DomainServerSettingsManager::resendSettingsToScriptAssignments() {
+    std::vector<std::pair<Assignment::Type, SockAddr>> destinations;
+    DependencyManager::get<LimitedNodeList>()->eachMatchingNode([](const SharedNodePointer& node) {
+        return node->getPermissions().isAssignment && node->getActiveSocket() &&
+            (node->getType() == NodeType::Agent || node->getType() == NodeType::EntityScriptServer);
+    }, [&destinations](const SharedNodePointer& node) {
+        destinations.emplace_back(Assignment::typeForNodeType(node->getType()), *node->getActiveSocket());
+    });
+    for (const auto& destination : destinations) {
+        sendSettings(destination.first, Authenticated, destination.second);
+    }
 }
 
 void DomainServerSettingsManager::setupConfigMap(const QString& userConfigFilename) {
@@ -1225,6 +1260,7 @@ bool DomainServerSettingsManager::handleAuthenticatedHTTPRequest(HTTPConnection 
                 apiRefreshGroupInformation();
                 emit updateNodePermissions();
                 emit settingsUpdated();
+                resendSettingsToScriptAssignments();
             }
 
             return true;
@@ -1464,6 +1500,75 @@ bool DomainServerSettingsManager::restoreSettingsFromObject(QJsonObject settings
     }
 }
 
+static QStringList passwordColumns(const QJsonObject& settingDescription) {
+    QStringList columns;
+    for (const QJsonValue& column : settingDescription[DESCRIPTION_COLUMNS_KEY].toArray()) {
+        if (column.toObject()[SETTING_DESCRIPTION_TYPE_KEY].toString() == PASSWORD_COLUMN_TYPE) {
+            columns.append(column.toObject()[DESCRIPTION_NAME_KEY].toString());
+        }
+    }
+    return columns;
+}
+
+// The settings page shows a table's password columns masked, and posts the mask back for rows it did not add
+static QJsonValue maskPasswordColumns(const QJsonValue& table, const QJsonObject& settingDescription) {
+    const QStringList columns = passwordColumns(settingDescription);
+    if (columns.isEmpty() || !table.isArray()) {
+        return table;
+    }
+    QJsonArray masked;
+    for (const QJsonValue& row : table.toArray()) {
+        QJsonObject rowObject = row.toObject();
+        for (const QString& column : columns) {
+            if (!rowObject[column].toString().isEmpty()) {
+                rowObject[column] = PASSWORD_COLUMN_MASK;
+            }
+        }
+        masked.append(rowObject);
+    }
+    return masked;
+}
+
+// A posted row that carries the mask keeps the password of a saved row whose other columns are all the same; a row whose
+// other columns changed loses it, so a secret is never moved to where a row now points without being entered again
+static QJsonArray restorePasswordColumns(const QJsonArray& posted, const QVariantList& saved,
+                                         const QJsonObject& settingDescription) {
+    const QStringList columns = passwordColumns(settingDescription);
+    if (columns.isEmpty()) {
+        return posted;
+    }
+    QVariantList unclaimed = saved;
+    QJsonArray restored;
+    for (const QJsonValue& row : posted) {
+        QJsonObject rowObject = row.toObject();
+        bool isMasked = std::any_of(columns.begin(), columns.end(), [&rowObject](const QString& column) {
+            return rowObject[column].toString() == PASSWORD_COLUMN_MASK;
+        });
+        if (isMasked) {
+            auto match = std::find_if(unclaimed.begin(), unclaimed.end(), [&](const QVariant& savedRow) {
+                QJsonObject savedObject = QJsonObject::fromVariantMap(savedRow.toMap());
+                for (const QString& name : rowObject.keys()) {
+                    if (!columns.contains(name) && savedObject[name] != rowObject[name]) {
+                        return false;
+                    }
+                }
+                return true;
+            });
+            QJsonObject savedObject = match != unclaimed.end() ? QJsonObject::fromVariantMap(match->toMap()) : QJsonObject();
+            for (const QString& column : columns) {
+                if (rowObject[column].toString() == PASSWORD_COLUMN_MASK) {
+                    rowObject[column] = savedObject[column].toString();
+                }
+            }
+            if (match != unclaimed.end()) {
+                unclaimed.erase(match);
+            }
+        }
+        restored.append(rowObject);
+    }
+    return restored;
+}
+
 QJsonObject DomainServerSettingsManager::settingsResponseObjectForType(const QString& typeValue,
                                                                        SettingsRequestAuthentication authentication,
                                                                        DomainSettingsInclusion domainSettingsInclusion,
@@ -1508,7 +1613,10 @@ QJsonObject DomainServerSettingsManager::settingsResponseObjectForType(const QSt
                 bool includedInBackups = !settingObject.contains(DESCRIPTION_BACKUP_FLAG_KEY)
                     || settingObject[DESCRIPTION_BACKUP_FLAG_KEY].toBool();
 
-                if (!settingObject[VALUE_HIDDEN_FLAG_KEY].toBool() && (settingsBackupFlag != ForBackup || includedInBackups)) {
+                bool isAssignmentOnly = settingObject[DESCRIPTION_ASSIGNMENT_ONLY_KEY].toBool();
+
+                if (!settingObject[VALUE_HIDDEN_FLAG_KEY].toBool() && (settingsBackupFlag != ForBackup || includedInBackups)
+                    && (!isAssignmentOnly || authentication == Authenticated)) {
                     QJsonArray affectedTypesArray = settingObject[AFFECTED_TYPES_JSON_KEY].toArray();
                     if (affectedTypesArray.isEmpty()) {
                         affectedTypesArray = groupObject[AFFECTED_TYPES_JSON_KEY].toArray();
@@ -1547,6 +1655,10 @@ QJsonObject DomainServerSettingsManager::settingsResponseObjectForType(const QSt
                                 }
                             } else {
                                 result = QJsonValue::fromVariant(variantValue);
+                            }
+
+                            if (queryType.isNull()) {
+                                result = maskPasswordColumns(result, settingObject);
                             }
 
                             if (!groupKey.isEmpty()) {
@@ -1677,7 +1789,8 @@ void DomainServerSettingsManager::updateSetting(const QString& key, const QJsonV
     } else if (newValue.isArray()) {
         // we just assume array is replacement
         // TODO: we still need to recurse here with the description in case values in the array have special types
-        settingMap[key] = newValue.toArray().toVariantList();
+        settingMap[key] = restorePasswordColumns(newValue.toArray(), settingMap.value(key).toList(), settingDescription)
+            .toVariantList();
     }
 
     sortPermissions();
@@ -1822,7 +1935,8 @@ bool DomainServerSettingsManager::recurseJSONObjectAndOverwriteSettings(const QJ
                     updateSetting(settingKey, settingValue, *thisMap, matchingDescriptionObject);
 
                     if ((rootKey != SECURITY_ROOT_KEY && rootKey != BROADCASTING_KEY &&
-                         rootKey != DESCRIPTION_ROOT_KEY && rootKey != WIZARD_KEY) ||
+                         rootKey != DESCRIPTION_ROOT_KEY && rootKey != WIZARD_KEY &&
+                         rootKey != ScriptCredentials::SETTINGS_GROUP) ||
                         settingKey == AC_SUBNET_ALLOWLIST_KEY) {
                         needRestart = true;
                     }

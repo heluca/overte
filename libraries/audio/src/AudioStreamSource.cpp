@@ -30,7 +30,7 @@
 // mixer's never grows the delay
 static const int MAX_BUFFERED_FRAMES = 20;  // 200 ms
 
-AudioStreamSourcePointer AudioStreamSource::create(const QUrl& url, int numChannels) {
+AudioStreamSourcePointer AudioStreamSource::create(const QUrl& url, int numChannels, const AudioStreamCredential& credential) {
     auto resourceManager = DependencyManager::get<ResourceManager>();
     const QUrl normalizedURL = resourceManager->normalizeURL(url);
     // The network access manager would also read file:, qrc: and ftp: URLs, letting a script stream a host file into
@@ -41,14 +41,17 @@ AudioStreamSourcePointer AudioStreamSource::create(const QUrl& url, int numChann
                          << normalizedURL.toDisplayString(QUrl::RemoveUserInfo | QUrl::RemoveQuery);
         return nullptr;
     }
-    AudioStreamSourcePointer source(new AudioStreamSource(normalizedURL, numChannels), &QObject::deleteLater);
+    AudioStreamSourcePointer source(
+        new AudioStreamSource(normalizedURL, numChannels, normalizedURL == url ? credential : AudioStreamCredential()),
+        &QObject::deleteLater);
     source->moveToThread(resourceManager->getThread());
     return source;
 }
 
-AudioStreamSource::AudioStreamSource(const QUrl& url, int numChannels) :
+AudioStreamSource::AudioStreamSource(const QUrl& url, int numChannels, const AudioStreamCredential& credential) :
     _url(url),
-    _numChannels(numChannels)
+    _numChannels(numChannels),
+    _credential(credential)
 {
 }
 
@@ -109,10 +112,28 @@ void AudioStreamSource::sendRequest() {
     // A live stream has no end to cache
     request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::AlwaysNetwork);
     request.setAttribute(QNetworkRequest::CacheSaveControlAttribute, false);
+    if (!_credential.authorization.isEmpty()) {
+        request.setRawHeader("Authorization", _credential.authorization);
+        // Qt sends every request header on to a redirect target; onRedirected() decides instead
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
+    }
 
     _reply = NetworkAccessManager::getInstance().get(request);
     connect(_reply, &QNetworkReply::readyRead, this, &AudioStreamSource::onReadyRead);
     connect(_reply, &QNetworkReply::finished, this, &AudioStreamSource::onFinished);
+    if (!_credential.authorization.isEmpty()) {
+        connect(_reply, &QNetworkReply::redirected, this, &AudioStreamSource::onRedirected);
+    }
+}
+
+void AudioStreamSource::onRedirected(const QUrl& target) {
+    if (_credential.appliesTo(target)) {
+        emit _reply->redirectAllowed();
+        return;
+    }
+    qCWarning(audio) << "Audio stream" << _url.toDisplayString(QUrl::RemoveUserInfo | QUrl::RemoveQuery)
+                     << "was redirected outside the URL prefix of its script credential; stopping it";
+    _reply->abort();
 }
 
 void AudioStreamSource::onReadyRead() {

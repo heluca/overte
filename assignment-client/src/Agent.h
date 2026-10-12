@@ -17,6 +17,7 @@
 #include <memory>
 #include <vector>
 
+#include <QtCore/QJsonObject>
 #include <QtCore/QObject>
 #include <QtCore/QSharedPointer>
 #include <QtCore/QUrl>
@@ -79,6 +80,7 @@ public slots:
     Q_INVOKABLE virtual void stop() override;
 
 private slots:
+    void handleSettings(const QJsonObject& settingsObject);
     void requestScript();
     void scriptRequestFinished();
     void executeScript();

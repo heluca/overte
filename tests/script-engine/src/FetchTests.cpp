@@ -10,6 +10,8 @@
 //
 
 #include <QTcpServer>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QTemporaryFile>
 
 #include "FetchTests.h"
@@ -19,6 +21,7 @@
 #include "ResourceManager.h"
 #include "ResourceRequestObserver.h"
 #include "ScriptCache.h"
+#include "ScriptCredentials.h"
 #include "ScriptEngines.h"
 #include "StatTracker.h"
 
@@ -32,6 +35,7 @@ void FetchTests::initTestCase() {
     DependencyManager::set<ResourceRequestObserver>();
     DependencyManager::set<StatTracker>();
     DependencyManager::set<ScriptInitializers>();
+    DependencyManager::set<ScriptCredentials>();
 }
 
 static ScriptManagerPointer makeManager(const QString& source, const QString& filename) {
@@ -399,4 +403,59 @@ void FetchTests::testFetchClosureArrayBuffer() {
     QVERIFY(runFetchScript("closure.run();", "testFetchClosureArrayBuffer.js", printed, errors, true, closureSource));
     QCOMPARE(errors, QStringList());
     QCOMPARE(printed, QString("7 8 9|"));
+}
+
+// The credential's URL prefix is the server's /api/, for scripts under its /scripts/trusted/
+static void setTestCredential(const QString& base) {
+    DependencyManager::get<ScriptCredentials>()->setFromSettings(QJsonArray { QJsonObject {
+        { "url_prefix", base + "/api/" }, { "token", "t0k-en" }, { "script_prefix", base + "/scripts/trusted/" } } });
+}
+
+static const QString CREDENTIAL_TEST_REQUESTS =
+    "var results = [];\n"
+    "function text(response) { return response.text(); }\n"
+    "function record(value) { results.push(value); }\n"
+    "function failure(error) { results.push(error.name + ': ' + error.message); }\n"
+    "fetch(BASE + '/api/auth').then(text).then(record)\n"
+    "    .then(function() { return fetch(BASE + '/api/auth', { headers: { authorization: 'Bearer own' } }); })\n"
+    "    .then(text).then(record)\n"
+    "    .then(function() { return fetch(BASE + '/auth'); }).then(text).then(record)\n"
+    "    .then(function() { return fetch(BASE + '/api/redirect-in'); }).then(text).then(record)\n"
+    "    .then(function() { return fetch(BASE + '/api/redirect-out'); }).then(text).then(record, failure)\n"
+    "    .then(function() {\n"
+    "        return fetch(BASE + '/api/redirect-out', { headers: { Authorization: 'Bearer own' } });\n"
+    "    }).then(text).then(record, failure)\n"
+    "    .then(function() { print(results.join('|')); Script.stop(true); });\n";
+
+void FetchTests::testFetchScriptCredential() {
+    FetchTestServer server;
+    setTestCredential(server.base());
+    QString script = "var BASE = '" + server.base() + "';\n" + CREDENTIAL_TEST_REQUESTS;
+
+    QString printed;
+    QStringList errors;
+    bool ran = runFetchScript(script, server.base() + "/scripts/trusted/piano.js", printed, errors);
+    DependencyManager::get<ScriptCredentials>()->setFromSettings(QJsonArray());
+    QVERIFY(ran);
+    QCOMPARE(errors, QStringList());
+    // The credential goes to the URL prefix, a header of the script's own wins, and the credential follows a redirect
+    // that stays under the prefix but not one that leaves it. Qt itself sends every request header on to a redirect
+    // target, as the script's own header to /auth shows.
+    QCOMPARE(printed, QString("Bearer t0k-en|Bearer own|none|Bearer t0k-en|"
+        "TypeError: fetch failed: fetch: " + server.base() + "/api/redirect-out: redirected outside the URL prefix of its "
+        "script credential|Bearer own"));
+}
+
+void FetchTests::testFetchScriptCredentialOtherScript() {
+    FetchTestServer server;
+    setTestCredential(server.base());
+    QString script = "var BASE = '" + server.base() + "';\n" + CREDENTIAL_TEST_REQUESTS;
+
+    QString printed;
+    QStringList errors;
+    bool ran = runFetchScript(script, server.base() + "/scripts/other/piano.js", printed, errors);
+    DependencyManager::get<ScriptCredentials>()->setFromSettings(QJsonArray());
+    QVERIFY(ran);
+    QCOMPARE(errors, QStringList());
+    QCOMPARE(printed, QString("none|Bearer own|none|none|none|Bearer own"));
 }

@@ -94,6 +94,14 @@ private:
                 status = "400 Bad Request";
                 extra = "Content-Type: application/json\r\n";
                 content = "{\"error\": \"bad\"}";
+            } else if (path == "/api/auth" || path == "/auth") {
+                content = headers.value("authorization", "none");
+            } else if (path == "/api/redirect-in") {
+                status = "302 Found";
+                extra = "Location: /api/auth\r\n";
+            } else if (path == "/api/redirect-out") {
+                status = "302 Found";
+                extra = "Location: /auth\r\n";
             } else if (path == "/badheader") {
                 extra = "X(bad): 1\r\n";
             } else if (path == "/hang") {

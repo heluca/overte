@@ -38,6 +38,7 @@
 #include <ResourceCache.h>
 #include <ResourceScriptingInterface.h>
 #include <ScriptCache.h>
+#include <ScriptCredentials.h>
 #include <ScriptEngine.h>
 #include <ScriptEngines.h>
 #include <ScriptManager.h>
@@ -109,6 +110,8 @@ Agent::Agent(ReceivedMessage& message) :
 
     DependencyManager::set<ModelFormatRegistry>();
     DependencyManager::set<ModelCache>();
+
+    DependencyManager::set<ScriptCredentials>();
 
     // Needed to ensure the creation of the DebugDraw instance on the main thread
     DebugDraw::getInstance();
@@ -194,6 +197,7 @@ void Agent::run() {
     auto nodeList = DependencyManager::get<NodeList>();
 
     connect(&nodeList->getDomainHandler(), &DomainHandler::connectedToDomain, this, &Agent::requestScript);
+    connect(&nodeList->getDomainHandler(), &DomainHandler::settingsReceived, this, &Agent::handleSettings);
 
     ThreadedAssignment::commonInit(AGENT_LOGGING_NAME, NodeType::Agent);
 
@@ -211,6 +215,10 @@ void Agent::run() {
         NodeType::AudioMixer, NodeType::AvatarMixer, NodeType::EntityServer,
         NodeType::MessagesMixer, NodeType::AssetServer, NodeType::EntityScriptServer
     });
+}
+
+void Agent::handleSettings(const QJsonObject& settingsObject) {
+    ScriptCredentials::loadDomainSettings(settingsObject);
 }
 
 void Agent::requestScript() {
@@ -869,6 +877,7 @@ void Agent::aboutToFinish() {
     DependencyManager::destroy<ScriptCache>();
     DependencyManager::destroy<SoundCache>();
     DependencyManager::destroy<AnimationCache>();
+    DependencyManager::destroy<ScriptCredentials>();
 
     DependencyManager::destroy<recording::Deck>();
     DependencyManager::destroy<recording::Recorder>();
