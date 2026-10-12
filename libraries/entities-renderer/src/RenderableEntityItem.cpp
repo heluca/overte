@@ -33,6 +33,7 @@
 #include "RenderableZoneEntityItem.h"
 #include "RenderableMaterialEntityItem.h"
 #include "RenderableCanvasEntityItem.h"
+#include "RenderableGaussianSplatEntityItem.h"
 
 #include "RenderPipelines.h"
 
@@ -492,6 +493,10 @@ EntityRenderer::Pointer EntityRenderer::addToScene(EntityTreeRenderer& renderer,
 
         case Type::Canvas:
             result = make_renderer<CanvasEntityRenderer>(entity);
+            break;
+
+        case Type::GaussianSplat:
+            result = make_renderer<GaussianSplatEntityRenderer>(entity);
             break;
 
         default:

@@ -1,0 +1,30 @@
+<@include gpu/Config.slh@>
+<$VERSION_HEADER$>
+//  <$_SCRIBE_FILENAME$>
+//  Generated on <$_SCRIBE_DATE$>
+//
+//  Copyright 2026 Overte e.V.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//  SPDX-License-Identifier: Apache-2.0
+//
+
+INPUT(0, vec4, _splatColor);
+INPUT(1, vec3, _splatConic);
+INPUT(2, vec2, _splatOffset);
+
+// The deferred transparent pass and the forward pass both draw into a single colour target at location 0.
+OUTPUT(0, vec4, _fragColor0);
+
+void main(void) {
+    vec2 d = _splatOffset;
+    float power = -0.5 * (_splatConic.x * d.x * d.x + _splatConic.z * d.y * d.y) - _splatConic.y * d.x * d.y;
+    // Capped below 1 as in the reference renderer, so a dense core never hides everything behind it in one layer.
+    float alpha = min(0.99, _splatColor.a * exp(power));
+    if (alpha < 1.0 / 255.0) {
+        discard;
+    }
+    // Premultiplied: the pipeline blends ONE, INV_SRC_ALPHA, back to front.
+    _fragColor0 = vec4(_splatColor.rgb * alpha, alpha);
+}

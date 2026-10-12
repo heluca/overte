@@ -1,0 +1,114 @@
+<@include gpu/Config.slh@>
+<$VERSION_HEADER$>
+//  <$_SCRIBE_FILENAME$>
+//  Generated on <$_SCRIBE_DATE$>
+//
+//  Copyright 2026 Overte e.V.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//  SPDX-License-Identifier: Apache-2.0
+//
+
+<@include gpu/Color.slh@>
+<@include gpu/Transform.slh@>
+<$declareStandardTransform()$>
+
+<@include gaussianSplat.slh@>
+<$declareSplatBuffer()$>
+
+UNIFORM_BUFFER(0, splatParamsBuffer) {
+    vec4 _splatParams;  // x: entity alpha
+};
+
+// Per instance, in back-to-front order: which record of the splat buffer this quad draws.
+INPUT(GPU_ATTR_POSITION, uint, _inSplatIndex);
+
+OUTPUT(0, vec4, _splatColor);   // linear rgb, alpha
+OUTPUT(1, vec3, _splatConic);   // inverse of the 2D covariance (xx, xy, yy), in 1 / pixels^2
+OUTPUT(2, vec2, _splatOffset);  // pixels from the splat centre, y up
+
+// Added to the 2D covariance diagonal, as in the reference renderer: keeps sub-pixel splats one pixel wide.
+const float SPLAT_LOW_PASS = 0.3;
+const float SPLAT_EXTENT_SIGMA = 3.0;
+// Pixels. Bounds the fill cost of splats that pass very close to the eye.
+const float SPLAT_MAX_RADIUS = 1024.0;
+const float SPLAT_MIN_ALPHA = 1.0 / 255.0;
+// Metres in front of the eye. Closer splats would blow up the Jacobian; the near plane clips them anyway.
+const float SPLAT_MIN_DEPTH = 0.01;
+
+void main(void) {
+    TransformCamera cam = getTransformCamera();
+    TransformObject obj = getTransformObject();
+
+    Splat splat = getSplat(int(_inSplatIndex));
+    float alpha = splat.color.a * _splatParams.x;
+
+    vec4 positionMS = vec4(splat.position, 1.0);
+    vec4 positionES;
+    <$transformModelToEyePos(cam, obj, positionMS, positionES)$>
+    float depth = -positionES.z;
+
+    if (alpha < SPLAT_MIN_ALPHA || depth < SPLAT_MIN_DEPTH) {
+        // All four corners at one point: a degenerate strip rasterizes nothing.
+        gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+        _splatColor = vec4(0.0);
+        _splatConic = vec3(0.0);
+        _splatOffset = vec2(0.0);
+        return;
+    }
+
+    vec2 viewportSize = cam._viewport.zw;
+    if (cam._stereoInfo.x > 0.0) {
+        // Split-screen stereo: the viewport spans both eyes, the projection covers one.
+        viewportSize.x *= 0.5;
+    }
+    vec2 projectionScale = vec2(cam._projection[0][0], cam._projection[1][1]);
+    vec2 focal = 0.5 * viewportSize * projectionScale;
+
+    // EWA splatting: project Sigma = (R S)(R S)^T through the Jacobian of the perspective divide at the splat centre.
+    // The lateral slope is clamped like the reference renderer, so splats far off-screen do not get huge Jacobians.
+    vec2 slopeLimit = 1.3 * (vec2(1.0) + abs(vec2(cam._projection[2][0], cam._projection[2][1]))) / projectionScale;
+    vec2 slope = clamp(positionES.xy / depth, -slopeLimit, slopeLimit);
+    mat3 jacobian = mat3(
+        focal.x / depth, 0.0, 0.0,
+        0.0, focal.y / depth, 0.0,
+        focal.x * slope.x / depth, focal.y * slope.y / depth, 0.0);
+    // Model to eye rotation and scale; the model matrix carries the entity's scale-to-fit.
+    mat3 modelToEye = mat3(cam._view) * mat3(obj._model);
+    mat3 rotation = splat_rotationMatrix(normalize(splat.rotation));
+    mat3 rotationScale = mat3(rotation[0] * splat.scale.x, rotation[1] * splat.scale.y, rotation[2] * splat.scale.z);
+    mat3 toPixels = jacobian * modelToEye * rotationScale;
+    mat3 covariance = toPixels * transpose(toPixels);
+
+    float a = covariance[0][0] + SPLAT_LOW_PASS;
+    float b = covariance[0][1];
+    float c = covariance[1][1] + SPLAT_LOW_PASS;
+    float determinant = a * c - b * b;
+    _splatConic = vec3(c, -b, a) / determinant;
+
+    float mid = 0.5 * (a + c);
+    float spread = length(vec2(0.5 * (a - c), b));
+    float lambda1 = mid + spread;
+    float lambda2 = max(mid - spread, 0.0);
+    // Of the two equivalent eigenvector forms, take the one whose terms do not cancel.
+    vec2 major = (a >= c) ? vec2(lambda1 - c, b) : vec2(b, lambda1 - a);
+    vec2 axis1 = dot(major, major) > 0.0 ? normalize(major) : vec2(1.0, 0.0);
+    vec2 axis2 = vec2(-axis1.y, axis1.x);
+    float radius1 = min(SPLAT_EXTENT_SIGMA * sqrt(lambda1), SPLAT_MAX_RADIUS);
+    float radius2 = min(SPLAT_EXTENT_SIGMA * sqrt(lambda2), SPLAT_MAX_RADIUS);
+
+    // TRIANGLE_STRIP corners 0..3: (-1,-1), (1,-1), (-1,1), (1,1).
+    vec2 corner = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1)) * 2.0 - 1.0;
+    vec2 offset = corner.x * radius1 * axis1 + corner.y * radius2 * axis2;
+    _splatOffset = offset;
+
+    vec4 positionCS = cam._projection * vec4(positionES.xyz, 1.0);
+    positionCS.xy += offset * (2.0 / viewportSize) * positionCS.w;
+    <$transformStereoClipSpace(positionCS)$>
+    gl_Position = positionCS;
+
+    // TODO(stage 5): haze. DrawHaze runs before transparents, so splats need computeHazeColor (graphics/Haze.slh)
+    // mixed in here, with the key light and haze buffers web_browser.slf uses.
+    _splatColor = vec4(color_sRGBToLinear(splat.color.rgb), alpha);
+}

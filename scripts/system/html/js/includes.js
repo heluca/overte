@@ -28,5 +28,6 @@ const ENTITY_TYPE_ICON = {
     Web: "q",
     Zone: "o",
     Empty: "n",
+    GaussianSplat: "&#xe004;",
     Multiple: "&#xe000;",
 };

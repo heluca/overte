@@ -40,6 +40,7 @@
 #include "CanvasEntityItem.h"
 #include "EmptyEntityItem.h"
 #include "ScriptEntityItem.h"
+#include "GaussianSplatEntityItem.h"
 
 QMap<EntityTypes::EntityType, QString> EntityTypes::_typeToNameMap;
 QMap<QString, EntityTypes::EntityType> EntityTypes::_nameToTypeMap;
@@ -70,6 +71,7 @@ REGISTER_ENTITY_TYPE(Sound)
 REGISTER_ENTITY_TYPE(Canvas)
 REGISTER_ENTITY_TYPE(Empty)
 REGISTER_ENTITY_TYPE(Script)
+REGISTER_ENTITY_TYPE(GaussianSplat)
 
 bool EntityTypes::typeIsValid(EntityType type) {
     return type > EntityType::Unknown && type <= EntityType::NUM_TYPES;

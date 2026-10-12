@@ -336,3 +336,6 @@ Empty
 Script
 enum:SCRIPT_URL prop:scriptURL type:QString default:"" urlPermission common,
 enum:SCRIPT_ENABLED prop:enabled type:bool default:true,
+GaussianSplat
+enum:ALPHA prop:alpha type:float default:ENTITY_ITEM_DEFAULT_ALPHA min:0.0f max:1.0f common renderProp,
+enum:SPLAT_URL prop:splatURL type:QString default:"" urlPermission renderProp,

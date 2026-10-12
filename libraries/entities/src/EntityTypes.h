@@ -98,6 +98,8 @@ public:
      *       <td>{@link Entities.EntityProperties-Empty|EntityProperties-Empty}</td></tr>
      *     <tr><td><code>"Script"</code></td><td>Starts an entity script on its parent.</td>
      *       <td>{@link Entities.EntityProperties-Script|EntityProperties-Script}</td></tr>
+     *     <tr><td><code>"GaussianSplat"</code></td><td>A captured scene rendered as 3D Gaussian splats.</td>
+     *       <td>{@link Entities.EntityProperties-GaussianSplat|EntityProperties-GaussianSplat}</td></tr>
      *   </tbody>
      * </table>
      * @typedef {string} Entities.EntityType
@@ -125,6 +127,7 @@ public:
         Canvas,
         Empty,
         Script,
+        GaussianSplat,
         NUM_TYPES
     } EntityType;
 

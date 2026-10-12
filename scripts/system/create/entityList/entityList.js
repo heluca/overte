@@ -251,7 +251,8 @@ var EntityListTool = function(shouldUseEditTabletApp, selectionManager) {
             PROFILE("getMultipleProperties", function () {
                 var multipleProperties = Entities.getMultipleEntityProperties(ids, ['position', 'name', 'type', 'locked',
                     'visible', 'renderInfo', 'modelURL', 'materialURL', 'imageURL', 'script', 'serverScripts',
-                    'skybox.url', 'ambientLight.url', 'soundURL', 'scriptURL', 'created', 'lastEdited', 'entityHostType']);
+                    'skybox.url', 'ambientLight.url', 'soundURL', 'scriptURL', 'splatURL', 'created', 'lastEdited',
+                    'entityHostType']);
                 for (var i = 0; i < multipleProperties.length; i++) {
                     var properties = multipleProperties[i];
 
@@ -267,6 +268,8 @@ var EntityListTool = function(shouldUseEditTabletApp, selectionManager) {
                             url = properties.soundURL;
                         } else if (properties.type === "Script") {
                             url = properties.scriptURL;
+                        } else if (properties.type === "GaussianSplat") {
+                            url = properties.splatURL;
                         }
                         //print("Global object before getParentState call: " + JSON.stringify(globalThis));
                         var parentStatus = that.createApp.getParentState(ids[i]);

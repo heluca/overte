@@ -1,0 +1,139 @@
+//
+//  Copyright 2026 Overte e.V.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//  SPDX-License-Identifier: Apache-2.0
+//
+
+#include "GaussianSplatEntityItem.h"
+
+#include <glm/gtx/transform.hpp>
+
+#include <BillboardMode.h>
+
+#include "EntityItemProperties.h"
+
+EntityItemPointer GaussianSplatEntityItem::factory(const EntityItemID& entityID, const EntityItemProperties& properties) {
+    Pointer entity(new GaussianSplatEntityItem(entityID), [](GaussianSplatEntityItem* ptr) { ptr->deleteLater(); });
+    entity->setProperties(properties);
+    return entity;
+}
+
+GaussianSplatEntityItem::GaussianSplatEntityItem(const EntityItemID& entityItemID) : EntityItem(entityItemID) {
+    _type = EntityTypes::GaussianSplat;
+}
+
+EntityItemProperties GaussianSplatEntityItem::getProperties(const EntityPropertyFlags& desiredProperties, bool allowEmptyDesiredProperties) const {
+    EntityItemProperties properties = EntityItem::getProperties(desiredProperties, allowEmptyDesiredProperties); // get the properties from our base class
+
+@GaussianSplat_ENTITY_COPY_TO@
+
+    withReadLock([&] {
+        properties.setNaturalDimensions(_naturalDimensions);
+    });
+
+    return properties;
+}
+
+bool GaussianSplatEntityItem::setSubClassProperties(const EntityItemProperties& properties) {
+    bool somethingChanged = false;
+
+@GaussianSplat_ENTITY_SET_FROM@
+
+    return somethingChanged;
+}
+
+EntityPropertyFlags GaussianSplatEntityItem::getEntityProperties(EncodeBitstreamParams& params) const {
+    EntityPropertyFlags requestedProperties = EntityItem::getEntityProperties(params);
+
+@GaussianSplat_REQUESTED_PROPS@
+
+    return requestedProperties;
+}
+
+void GaussianSplatEntityItem::appendSubclassData(OctreePacketData* packetData, EncodeBitstreamParams& params,
+                                                 EntityTreeElementExtraEncodeDataPointer entityTreeElementExtraEncodeData,
+                                                 EntityPropertyFlags& requestedProperties,
+                                                 EntityPropertyFlags& propertyFlags,
+                                                 EntityPropertyFlags& propertiesDidntFit,
+                                                 int& propertyCount,
+                                                 OctreeElement::AppendState& appendState) const {
+
+    bool successPropertyFits = true;
+
+@GaussianSplat_ENTITY_APPEND@
+
+}
+
+int GaussianSplatEntityItem::readEntitySubclassDataFromBuffer(const unsigned char* data, int bytesLeftToRead,
+                                                              ReadBitstreamToTreeParams& args,
+                                                              EntityPropertyFlags& propertyFlags, bool overwriteLocalData,
+                                                              bool& somethingChanged) {
+
+    int bytesRead = 0;
+    const unsigned char* dataAt = data;
+
+@GaussianSplat_ENTITY_READ@
+
+    return bytesRead;
+}
+
+void GaussianSplatEntityItem::debugDump() const {
+    qCDebug(entities) << "GaussianSplatEntityItem id:" << getEntityItemID() << "---------------------------------------------";
+    qCDebug(entities) << "    name:" << _name;
+    qCDebug(entities) << "    position:" << debugTreeVector(getWorldPosition());
+    qCDebug(entities) << "    dimensions:" << debugTreeVector(getScaledDimensions());
+    qCDebug(entities) << "    editedAgo:" << debugTime(getLastEdited(), usecTimestampNow());
+    qCDebug(entities) << "    pointer:" << this;
+
+@GaussianSplat_ENTITY_DEBUG@
+
+}
+
+void GaussianSplatEntityItem::setNaturalDimension(const glm::vec3& naturalDimensions) const {
+    withWriteLock([&] {
+        _naturalDimensions = naturalDimensions;
+    });
+}
+
+bool GaussianSplatEntityItem::isInsidePickBox(const glm::vec3& point, const glm::vec3& viewFrustumPos,
+                                              glm::quat& rotation) const {
+    // The same entity-frame box EntityTreeElement::evalDetailedRayIntersection tests the pick against.
+    glm::vec3 position = getWorldPosition();
+    BillboardMode billboardMode = getBillboardMode();
+    glm::quat orientation = billboardMode == BillboardMode::NONE ? getWorldOrientation() : getLocalOrientation();
+    rotation = BillboardModeHelpers::getBillboardRotation(position, orientation, billboardMode, viewFrustumPos,
+                                                          getRotateForPicking());
+    glm::mat4 worldToEntityMatrix = glm::inverse(glm::translate(position) * glm::mat4_cast(rotation));
+    glm::vec3 dimensions = getScaledDimensions();
+    AABox entityFrameBox(-(dimensions * getRegistrationPoint()) + getPivot(), dimensions);
+    return entityFrameBox.contains(glm::vec3(worldToEntityMatrix * glm::vec4(point, 1.0f)));
+}
+
+bool GaussianSplatEntityItem::findDetailedRayIntersection(const glm::vec3& origin, const glm::vec3& direction,
+                                                          const glm::vec3& viewFrustumPos, OctreeElementPointer& element,
+                                                          float& distance, BoxFace& face, glm::vec3& surfaceNormal,
+                                                          QVariantMap& extraInfo, bool precisionPicking) const {
+    // Keeps the box hit the caller already computed. The caller copies a detailed hit's normal back unrotated, so the
+    // entity-frame box normal is rotated to world here.
+    glm::quat rotation;
+    if (isInsidePickBox(origin, viewFrustumPos, rotation)) {
+        return false;
+    }
+    surfaceNormal = rotation * surfaceNormal;
+    return true;
+}
+
+bool GaussianSplatEntityItem::findDetailedParabolaIntersection(const glm::vec3& origin, const glm::vec3& velocity,
+                                                               const glm::vec3& acceleration, const glm::vec3& viewFrustumPos,
+                                                               OctreeElementPointer& element, float& parabolicDistance,
+                                                               BoxFace& face, glm::vec3& surfaceNormal,
+                                                               QVariantMap& extraInfo, bool precisionPicking) const {
+    glm::quat rotation;
+    if (isInsidePickBox(origin, viewFrustumPos, rotation)) {
+        return false;
+    }
+    surfaceNormal = rotation * surfaceNormal;
+    return true;
+}

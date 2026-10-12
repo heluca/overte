@@ -43,6 +43,7 @@
 #include <DomainAccountManager.h>
 #include <EntityScriptServerLogClient.h>
 #include <FramebufferCache.h>
+#include <splat/SplatCache.h>
 #include <gl/GLHelpers.h>
 #include <GPUIdent.h>
 #include <graphics-scripting/GraphicsScriptingInterface.h>
@@ -348,6 +349,7 @@ Application::~Application() {
     DependencyManager::destroy<TextureCache>();
     DependencyManager::destroy<ModelCacheScriptingInterface>();
     DependencyManager::destroy<ModelCache>();
+    DependencyManager::destroy<SplatCache>();
     DependencyManager::destroy<ModelFormatRegistry>();
     DependencyManager::destroy<ScriptCache>();
     DependencyManager::destroy<SoundCacheScriptingInterface>();
@@ -926,6 +928,7 @@ void Application::reloadResourceCaches() {
     DependencyManager::get<SoundCache>()->refreshAll();
     DependencyManager::get<MaterialCache>()->refreshAll();
     DependencyManager::get<ModelCache>()->refreshAll();
+    DependencyManager::get<SplatCache>()->refreshAll();
     ShaderCache::instance().refreshAll();
     DependencyManager::get<TextureCache>()->refreshAll();
     DependencyManager::get<recording::ClipCache>()->refreshAll();

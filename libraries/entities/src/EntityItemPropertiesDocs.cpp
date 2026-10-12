@@ -198,6 +198,7 @@
  * @see {@link Entities.EntityProperties-Box|EntityProperties-Box}
  * @see {@link Entities.EntityProperties-Canvas|EntityProperties-Canvas}
  * @see {@link Entities.EntityProperties-Empty|EntityProperties-Empty}
+ * @see {@link Entities.EntityProperties-GaussianSplat|EntityProperties-GaussianSplat}
  * @see {@link Entities.EntityProperties-Gizmo|EntityProperties-Gizmo}
  * @see {@link Entities.EntityProperties-Grid|EntityProperties-Grid}
  * @see {@link Entities.EntityProperties-Image|EntityProperties-Image}
@@ -1048,6 +1049,26 @@
  * ]);
  *
  * Entities.canvasCommit(canvas);
+ */
+
+/*@jsdoc
+ * The <code>"GaussianSplat"</code> {@link Entities.EntityType|EntityType} displays a scene captured as 3D Gaussian splats.
+ * It has properties in addition to the common {@link Entities.EntityProperties|EntityProperties}.
+ * <p>Gaussian splat entities never collide, whatever their <code>collisionless</code> value, so floors and walls that
+ * avatars should walk on need separate collision entities.</p>
+ *
+ * @typedef {object} Entities.EntityProperties-GaussianSplat
+ * @property {Vec3} dimensions=0.1,0.1,0.1 - The dimensions of the entity.
+ * @property {string} splatURL="" - The URL of the splat file to display.
+ * @property {number} alpha=1 - The opacity of the splats.
+ * @example <caption>Create a Gaussian splat entity.</caption>
+ * var splat = Entities.addEntity({
+ *     type: "GaussianSplat",
+ *     position: Vec3.sum(MyAvatar.position, Vec3.multiplyQbyV(MyAvatar.orientation, { x: 0, y: 0, z: -2 })),
+ *     dimensions: { x: 1, y: 1, z: 1 },
+ *     splatURL: "https://<host>/<path>/scene.ply",
+ *     lifetime: 300  // Delete after 5 minutes.
+ * });
  */
 
 /*@jsdoc

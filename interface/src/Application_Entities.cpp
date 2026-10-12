@@ -21,6 +21,7 @@
 #include <recording/ClipCache.h>
 #include <RenderableEntityItem.h>
 #include <SoundCache.h>
+#include <splat/SplatCache.h>
 #include <QSaveFile>
 
 #include "InterfaceLogging.h"
@@ -324,6 +325,7 @@ void Application::clearDomainOctreeDetails(bool clearAll) {
     DependencyManager::get<SoundCache>()->clearUnusedResources();
     DependencyManager::get<MaterialCache>()->clearUnusedResources();
     DependencyManager::get<ModelCache>()->clearUnusedResources();
+    DependencyManager::get<SplatCache>()->clearUnusedResources();
     ShaderCache::instance().clearUnusedResources();
     DependencyManager::get<TextureCache>()->clearUnusedResources();
     DependencyManager::get<recording::ClipCache>()->clearUnusedResources();
