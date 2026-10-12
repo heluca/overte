@@ -105,8 +105,10 @@ the avatar's orientation, and seat 1 from the -z edge):
   seat 0's edge, and each player has a dark square at their near-left corner.
 - `GT.Pc r<row>c<col>`: one model per piece, collisionless, not grabbable, and ignoring picks
   (`ignorePickIntersection`) so a click on a piece lands on its tile. Checkers men are the red and
-  black checker models; a king is the same model drawn two and a half times as tall. A move edits the
-  piece entities (position, model, size) rather than deleting and adding them.
+  black checker models; a king is the same model stretched to two and a half times the height. A
+  move edits the piece entities rather than deleting and adding them: the moving piece's entity
+  goes to its landing square (and changes model or size when crowned), the captured pieces'
+  entities are deleted.
 - `GT.Seat0` and `GT.Seat1`: seat buttons at each player's edge, to their right, reading "Play"
   and the side's name ("Play Black", "Play Red" for checkers).
 
@@ -146,10 +148,11 @@ so one player cannot act for another.
 | `newGame` | `[]` | The game is `over` and the caller is seated. A rematch, as below |
 
 Rematches follow the game. Connect Four alternates the first move: the same seats, and whoever
-moved second moves first. In checkers (and chess) side 0 always moves first and the players swap
-seats instead. Either way the change happens on `newGame` and when a new opponent joins someone
-who has just played (so the player who stays changes colour in checkers, and the newcomer gets
-the colour the stayer had). An emptied table starts over: seat 0 moves first and nobody swaps.
+moved second moves first, on `newGame` and also when a new opponent joins someone who has just
+played. In checkers (and chess) side 0 always moves first, and a rematch between the same two
+players (`newGame`) swaps their seats instead. A new opponent joining a player who has just
+finished takes the seat they chose (or the free one), and nobody swaps. An emptied table starts
+over: seat 0 moves first.
 
 A refused call changes nothing and sends a `rejected` message (below). Calls without a caller ID
 (the null UUID, as from a script on the server itself) are refused.
@@ -294,7 +297,7 @@ sender ID is whatever the sending client wrote.
      the piece finally lands on. If two different jump paths end there, that square turns yellow
      too and the squares the paths go through next light up green: click the one you mean (again,
      until only one path is left). Clicking another of your pieces selects it instead; clicking
-     anything else clears the selection.
+     anything else (another square, another entity, or nothing) clears the selection.
 
 Click your own seat button again to leave. In a game in progress leaving resigns, so the first
 click only announces "Click your seat again within 5 s to resign the game", and a second click
@@ -323,7 +326,10 @@ name:
   for again every second; a highlight whose target is deleted moves to the one that replaces it.
 - On an 8x8 board the board's own instance also takes the clicks on the tiles: it connects to the
   global `Entities.mousePressOnEntity` signal and keeps the presses on this board's `GT.Sq` and
-  `GT.Pc` children (primary button only). That signal comes from a desktop mouse press
+  `GT.Pc` children (primary button only); a primary press on any other entity, or
+  `Entities.mousePressOffEntity` (a press on no entity), clears the selection. If the board's game
+  changes (the referee reloaded with another `game`), the click handling is rebuilt for it, or
+  dropped when the new game is not played on 8x8. That signal comes from a desktop mouse press
   (`EntityTreeRenderer::mousePressEvent`) and from a hand-controller laser trigger, which the
   pointer system emits as `PointerManager::triggerBeginEntity` and `EntityTreeRenderer` forwards to
   `mousePressOnEntity`. So one client instance serves the 64 tiles instead of 64 scripted tiles
@@ -413,7 +419,7 @@ notation; until it is registered, `"chess"` falls back to Connect Four.
 
 - Humans have no draw or rematch button (above).
 - A timeout is a loss even when the winner could not mate.
-- Checkers kings are drawn as a taller checker, not a stacked pair of models.
+- Checkers kings are drawn as a stretched checker, not a stacked pair of models.
 
 ### Development
 
