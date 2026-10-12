@@ -35,7 +35,7 @@ export const DEFAULT_GAME = "connect4";
  * @typedef {Connect4Entry | GridEntry} Entry
  */
 
-// The checker model is a flat disc; a king is drawn as a stack, taller than a man.
+// The checker model is a flat disc; a king is the same model stretched taller than a man.
 const CHECKER_MAN = { x: 0.8, y: 0.14, z: 0.8 };
 const CHECKER_KING = { x: 0.8, y: 0.36, z: 0.8 };
 /** @type {Record<string, PieceLook>} */

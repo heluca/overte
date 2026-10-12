@@ -62,11 +62,18 @@ export class GridClient {
         this.boardID = boardID;
         this.cells = cells;
         this.onPress = (/** @type {Uuid} */ id, /** @type {PointerEvent} */ event) => this.press(id, event);
+        this.onPressOff = () => this.clear();
         Entities.mousePressOnEntity.connect(this.onPress);
+        Entities.mousePressOffEntity.connect(this.onPressOff);
     }
 
     stop() {
         Entities.mousePressOnEntity.disconnect(this.onPress);
+        Entities.mousePressOffEntity.disconnect(this.onPressOff);
+        if (this.retryTimer !== null) {
+            Script.clearTimeout(this.retryTimer);
+            this.retryTimer = null;
+        }
         this.picker.setChoices([]);
         this.show();
     }
@@ -90,7 +97,8 @@ export class GridClient {
     }
 
     /**
-     * Any click in the domain arrives here; only this board's squares and pieces count.
+     * Any click in the domain arrives here. One on this board's squares and pieces goes to the
+     * picker; any other clears the selection.
      * @param {Uuid} id
      * @param {PointerEvent} event
      */
@@ -101,6 +109,7 @@ export class GridClient {
         const properties = Entities.getEntityProperties(id, ["name", "parentID"]);
         const cell = properties.parentID === this.boardID ? cellOf(properties.name || "") : null;
         if (!cell) {
+            this.clear();
             return;
         }
         const move = this.picker.click(cell);
@@ -108,6 +117,14 @@ export class GridClient {
             Entities.callEntityServerMethod(this.boardID, "move", [move]);
         }
         this.show();
+    }
+
+    /** Drops the selection, after a click off this board's squares (or off every entity). */
+    clear() {
+        if (this.picker.prefix.length) {
+            this.picker.reset();
+            this.show();
+        }
     }
 
     /**

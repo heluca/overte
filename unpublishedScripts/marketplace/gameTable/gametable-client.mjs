@@ -123,7 +123,8 @@ export default class GameTableClient {
     highlights = new Map();
     /** @type {number[]} */ wanted = [];
     /** @type {number | null} */ retryTimer = null;
-    /** @type {GridClient | null} the 8x8 board's clicks and highlights, once its state shows one */ grid = null;
+    /** @type {GridClient | null} the 8x8 board's clicks and highlights, while its state shows one */ grid = null;
+    gridGame = "";
     resignUntil = 0;
 
     /** @param {Uuid} entityID */
@@ -254,12 +255,21 @@ export default class GameTableClient {
         this.shown = status;
         this.seated = mine >= 0;
         const myTurn = state.phase === "playing" && mine >= 0 && state.toMove === mine;
-        const entry = gameEntry(state.game).entry;
+        const game = gameEntry(state.game);
+        // The board's game can change when its referee reloads
+        if (this.grid && this.gridGame !== game.name) {
+            this.grid.stop();
+            this.grid = null;
+        }
+        const entry = game.entry;
         if (entry.layout === "grid") {
             if (!this.grid) {
                 this.grid = new GridClient(this.boardID, entry.cells);
+                this.gridGame = game.name;
             }
             this.grid.update(state, myTurn);
+            // Column highlights left from a Connect Four game on this board
+            this.highlight([]);
         } else {
             this.highlight(myTurn && Array.isArray(state.legal) ? state.legal : []);
         }

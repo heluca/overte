@@ -42,6 +42,7 @@ function fakeEngine(gameTable = projection()) {
         subscribed: new Set(),
         handlers: [],
         pressHandlers: [],
+        offHandlers: [],
         timers: new Map(),
         Entities: {
             addEntity(properties, hostType) {
@@ -69,6 +70,10 @@ function fakeEngine(gameTable = projection()) {
             mousePressOnEntity: {
                 connect(handler) { engine.pressHandlers.push(handler); },
                 disconnect(handler) { engine.pressHandlers = engine.pressHandlers.filter(h => h !== handler); }
+            },
+            mousePressOffEntity: {
+                connect(handler) { engine.offHandlers.push(handler); },
+                disconnect(handler) { engine.offHandlers = engine.offHandlers.filter(h => h !== handler); }
             }
         },
         Messages: {
@@ -102,6 +107,10 @@ function fakeEngine(gameTable = projection()) {
         // A click anywhere in the domain, as Entities.mousePressOnEntity reports it
         press(id, event = PRIMARY) {
             engine.pressHandlers.forEach(handler => handler(id, event));
+        },
+        // A click on no entity at all
+        pressOff() {
+            engine.offHandlers.forEach(handler => handler());
         },
         highlights() {
             return [...entities.values()].filter(entity => (entity.name || "").startsWith("GT.Highlight "));
@@ -388,16 +397,54 @@ test("on a checkers board, clicks on the squares select a piece and play a move"
         assert.equal(h.parentID, squares.get(h.name.slice("GT.Highlight ".length)));
     });
     assert.notDeepEqual(shown.find(h => h.name.endsWith("r2c5")).color, shown.find(h => h.name.endsWith("r3c4")).color);
-    // Not the primary button, another entity, another board's square: ignored
+    // Not the primary button: ignored
     engine.press(squares.get("r3c4"), { isPrimaryButton: false });
-    engine.press(BOARD);
-    engine.press(engine.Entities.addEntity({ name: "GT.Sq r3c4", parentID: "{another-board}" }));
+    assert.equal(engine.highlights().length, 3);
+    // Anything off this board's squares and pieces clears the selection: the board itself,
+    // another board's square, or no entity at all
+    const elsewhere = [
+        () => engine.press(BOARD),
+        () => engine.press(engine.Entities.addEntity({ name: "GT.Sq r3c4", parentID: "{another-board}" })),
+        () => engine.pressOff()
+    ];
+    elsewhere.forEach(click => {
+        engine.press(piece);
+        assert.equal(engine.highlights().length, 3);
+        click();
+        assert.equal(engine.highlights().length, 0);
+    });
     assert.deepEqual(engine.calls, []);
+    engine.press(piece);
     engine.press(squares.get("r3c4"));
     assert.deepEqual(engine.calls, [{ entityID: BOARD, method: "move", params: ["11-15"] }]);
     assert.equal(engine.highlights().length, 0);
     board.unload();
     assert.equal(engine.pressHandlers.length, 0);
+    assert.equal(engine.offHandlers.length, 0);
+});
+
+test("the board's game changing drops the 8x8 click handling, or rebuilds it", () => {
+    const engine = fakeEngine(checkersState({ phase: "playing", seats: SEATED, toMove: 0, legal: OPENING }));
+    const squares = tiles(engine);
+    const board = load(BOARD);
+    const grid = board.grid;
+    engine.press(squares.get("r2c5"));
+    assert.equal(engine.highlights().length, 3);
+    // The same game again keeps the instance
+    engine.deliver(CHANNEL, { type: "state", ...checkersState({ phase: "playing", seats: SEATED, toMove: 0, legal: OPENING }) });
+    assert.equal(board.grid, grid);
+    // The referee reloads as Connect Four: no more square clicks, no grid highlights
+    columns(engine);
+    engine.deliver(CHANNEL, { type: "state", ...projection({ phase: "playing", seats: SEATED, toMove: 0, legal: [3] }) });
+    assert.equal(board.grid, null);
+    assert.equal(engine.pressHandlers.length, 0);
+    assert.equal(engine.offHandlers.length, 0);
+    assert.deepEqual(engine.highlights().map(h => h.name), ["GT.Highlight 3"]);
+    // And back to checkers: a fresh one
+    engine.deliver(CHANNEL, { type: "state", ...checkersState({ phase: "playing", seats: SEATED, toMove: 0, legal: OPENING }) });
+    assert.notEqual(board.grid, null);
+    assert.notEqual(board.grid, grid);
+    assert.equal(engine.pressHandlers.length, 1);
 });
 
 test("on a checkers board, nothing is selectable while it is not the user's turn", () => {
