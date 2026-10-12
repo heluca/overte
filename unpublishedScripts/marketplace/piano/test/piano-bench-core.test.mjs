@@ -6,15 +6,15 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
-//  The bench's pure logic: configuration, the sit and stand poses from the bench's joints, the
-//  seat lease and the stand-up gesture.
+//  The bench's client-side pure logic: configuration, the sit and stand poses from the bench's
+//  joints, and the stand-up gesture.
 //
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-    parseBenchConfig, rotate, yawOnly, sitPose, standPose, SeatLease, StandGesture,
-    DEFAULT_HIPS_ABOVE_SEAT, DEFAULT_STAND_HOLD_MS, DEFAULT_LEASE_MS
+    parseBenchConfig, rotate, yawOnly, sitPose, standPose, StandGesture,
+    DEFAULT_HIPS_ABOVE_SEAT, DEFAULT_STAND_HOLD_MS
 } from "../piano-bench-core.mjs";
 
 const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
@@ -39,7 +39,7 @@ function assertSameRotation(actual, expected) {
 }
 
 test("parseBenchConfig: defaults without a pianoBench object", () => {
-    const expected = { hipsAboveSeat: DEFAULT_HIPS_ABOVE_SEAT, standHoldMs: DEFAULT_STAND_HOLD_MS, leaseMs: DEFAULT_LEASE_MS };
+    const expected = { hipsAboveSeat: DEFAULT_HIPS_ABOVE_SEAT, standHoldMs: DEFAULT_STAND_HOLD_MS };
     for (const userData of ["", "not json", "[]", JSON.stringify({ piano: {} }), JSON.stringify({ pianoBench: null })]) {
         assert.deepEqual(parseBenchConfig(userData), { config: expected, problems: [] }, userData);
     }
@@ -49,10 +49,9 @@ test("parseBenchConfig: takes values in range and reports the rest", () => {
     const { config, problems } = parseBenchConfig(JSON.stringify({
         pianoBench: { hipsAboveSeat: 0.08, standHoldMs: "fast", leaseMs: 1000 }
     }));
-    assert.deepEqual(config, { hipsAboveSeat: 0.08, standHoldMs: DEFAULT_STAND_HOLD_MS, leaseMs: DEFAULT_LEASE_MS });
-    assert.equal(problems.length, 2);
+    assert.deepEqual(config, { hipsAboveSeat: 0.08, standHoldMs: DEFAULT_STAND_HOLD_MS }, "leaseMs is the server's");
+    assert.equal(problems.length, 1);
     assert.match(problems[0], /pianoBench\.standHoldMs must be a number from 0 to 5000, got "fast"; using 500/);
-    assert.match(problems[1], /pianoBench\.leaseMs .* got 1000; using 15000/);
 });
 
 test("rotate: a quarter turn about +Y takes -Z (forward) to -X (left)", () => {
@@ -92,21 +91,6 @@ test("standPose: on the stand_up joint raised to the avatar's position height, s
     const pose = standPose({ x: 0, y: 0, z: 1.9 }, IDENTITY, 0.92);
     assertClose(pose.position, { x: 0, y: 0.92, z: 1.9 });
     assertSameRotation(pose.rotation, IDENTITY);
-});
-
-test("SeatLease: one holder; renewals extend it; it lapses; release frees it", () => {
-    const lease = new SeatLease(15_000);
-    assert.equal(lease.claim("alice", 0), true);
-    assert.equal(lease.claim("bob", 1000), false, "taken");
-    assert.equal(lease.claim("alice", 10_000), true, "renewal");
-    assert.equal(lease.claim("bob", 24_999), false, "renewed until 25 s");
-    assert.equal(lease.holderAt(24_999), "alice");
-    assert.equal(lease.holderAt(25_000), null);
-    assert.equal(lease.claim("bob", 25_000), true, "lapsed");
-    assert.equal(lease.release("alice"), false, "only the holder releases");
-    assert.equal(lease.holderAt(25_001), "bob");
-    assert.equal(lease.release("bob"), true);
-    assert.equal(lease.claim("alice", 25_002), true);
 });
 
 test("StandGesture: a key held long enough, once armed by a release", () => {

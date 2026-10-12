@@ -6,16 +6,16 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
-//  The piano bench's logic without the engine: its userData configuration, where the avatar's
-//  hips go on the seat and where it stands up, the one-sitter lease the bench's server script
-//  holds, and the held-key stand-up gesture. No engine globals, so it runs under Node.
+//  The piano bench's client-side logic without the engine: its userData configuration, where
+//  the avatar's hips go on the seat and where it stands up, and the held-key stand-up gesture.
+//  No engine globals, so it runs under Node. The seat lease is the server script's, in
+//  piano-bench-entity.js.
 //
 
 import { parseObject } from "./piano-core.mjs";
 
 export const DEFAULT_HIPS_ABOVE_SEAT = 0.06;
 export const DEFAULT_STAND_HOLD_MS = 500;
-export const DEFAULT_LEASE_MS = 15_000;
 
 /** @typedef {{ x: number, y: number, z: number }} Vector */
 /** @typedef {{ x: number, y: number, z: number, w: number }} Rotation */
@@ -24,13 +24,11 @@ export const DEFAULT_LEASE_MS = 15_000;
  * @typedef {object} BenchConfig
  * @property {number} hipsAboveSeat how far the hips sit above the `seat` joint, as a fraction of the avatar's height
  * @property {number} standHoldMs how long a movement key must be held to stand up
- * @property {number} leaseMs how long a seat stays claimed without a renewal
  */
 
 const LIMITS = {
     hipsAboveSeat: [0, 0.3, DEFAULT_HIPS_ABOVE_SEAT],
-    standHoldMs: [0, 5000, DEFAULT_STAND_HOLD_MS],
-    leaseMs: [3000, 120_000, DEFAULT_LEASE_MS]
+    standHoldMs: [0, 5000, DEFAULT_STAND_HOLD_MS]
 };
 
 /**
@@ -122,55 +120,6 @@ export function standPose(standPosition, seatRotation, feetToPosition) {
         position: { x: standPosition.x, y: standPosition.y + feetToPosition, z: standPosition.z },
         rotation: yawOnly(seatRotation)
     };
-}
-
-/**
- * One sitter at a time. The bench's server script holds this; a claim is granted when the seat
- * is free, its lease ran out, or the caller already holds it (a renewal).
- */
-export class SeatLease {
-    /** @type {string | null} */ holder = null;
-    expiresAt = 0;
-
-    /** @param {number} leaseMs */
-    constructor(leaseMs) {
-        this.leaseMs = leaseMs;
-    }
-
-    /**
-     * @param {string} caller session ID
-     * @param {number} now
-     * @returns {boolean} whether the caller now holds the seat
-     */
-    claim(caller, now) {
-        if (this.holder !== null && this.holder !== caller && now < this.expiresAt) {
-            return false;
-        }
-        this.holder = caller;
-        this.expiresAt = now + this.leaseMs;
-        return true;
-    }
-
-    /**
-     * @param {string} caller
-     * @returns {boolean} whether the caller held the seat
-     */
-    release(caller) {
-        if (this.holder !== caller) {
-            return false;
-        }
-        this.holder = null;
-        this.expiresAt = 0;
-        return true;
-    }
-
-    /**
-     * @param {number} now
-     * @returns {string | null} who holds the seat
-     */
-    holderAt(now) {
-        return this.holder !== null && now < this.expiresAt ? this.holder : null;
-    }
 }
 
 /**
