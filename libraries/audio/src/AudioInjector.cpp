@@ -108,11 +108,17 @@ void AudioInjector::finishLocalInjection() {
 }
 
 void AudioInjector::finish() {
+    // AudioClient finishes the local injection again once it sees the cleared local buffer; finished must fire once
+    bool alreadyFinished = false;
     withWriteLock([&] {
+        alreadyFinished = (_state & AudioInjectorState::Finished) == AudioInjectorState::Finished;
         _state |= AudioInjectorState::LocalInjectionFinished;
         _state |= AudioInjectorState::NetworkInjectionFinished;
         _state |= AudioInjectorState::Finished;
     });
+    if (alreadyFinished) {
+        return;
+    }
     emit finished();
     _localBuffer = nullptr;
     if (_stream) {

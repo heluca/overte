@@ -32,8 +32,16 @@ static const int MAX_BUFFERED_FRAMES = 20;  // 200 ms
 
 AudioStreamSourcePointer AudioStreamSource::create(const QUrl& url, int numChannels) {
     auto resourceManager = DependencyManager::get<ResourceManager>();
-    AudioStreamSourcePointer source(new AudioStreamSource(resourceManager->normalizeURL(url), numChannels),
-                                    &QObject::deleteLater);
+    const QUrl normalizedURL = resourceManager->normalizeURL(url);
+    // The network access manager would also read file:, qrc: and ftp: URLs, letting a script stream a host file into
+    // the mixer
+    const QString scheme = normalizedURL.scheme();
+    if (scheme != HIFI_URL_SCHEME_HTTP && scheme != HIFI_URL_SCHEME_HTTPS) {
+        qCWarning(audio) << "Audio stream URL must be http or https:"
+                         << normalizedURL.toDisplayString(QUrl::RemoveUserInfo | QUrl::RemoveQuery);
+        return nullptr;
+    }
+    AudioStreamSourcePointer source(new AudioStreamSource(normalizedURL, numChannels), &QObject::deleteLater);
     source->moveToThread(resourceManager->getThread());
     return source;
 }

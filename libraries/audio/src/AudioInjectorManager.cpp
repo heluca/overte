@@ -284,6 +284,9 @@ AudioInjectorPointer AudioInjectorManager::playStream(const QUrl& url, const Aud
     }
 
     auto stream = AudioStreamSource::create(url, options.stereo ? AudioConstants::STEREO : AudioConstants::MONO);
+    if (!stream) {
+        return nullptr;
+    }
     AudioInjectorPointer injector(new AudioInjector(stream, options), &AudioInjector::deleteLater);
     injector->moveToThread(_thread);
     injector->inject(&AudioInjectorManager::threadInjector);

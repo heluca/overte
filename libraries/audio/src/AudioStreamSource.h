@@ -35,6 +35,7 @@ public:
     enum Consumer { Network = 0, Local, NumConsumers };
     enum class Frame { Audio, Silence, Ended };
 
+    // Null unless the URL is http or https
     static AudioStreamSourcePointer create(const QUrl& url, int numChannels);
     ~AudioStreamSource();
 
