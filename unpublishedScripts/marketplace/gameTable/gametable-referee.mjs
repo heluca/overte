@@ -45,7 +45,7 @@ function parseObject(text) {
 }
 
 export default class GameTableReferee {
-    remotelyCallable = ["join", "move", "leave", "state", "newGame"];
+    remotelyCallable = ["join", "move", "leave", "state", "newGame", "draw"];
 
     // Set in preload, which the engine calls before any other method.
     /** @type {Uuid} */ entityID;
@@ -119,7 +119,7 @@ export default class GameTableReferee {
         this.core.join(caller, params[0], params[1]);
     }
 
-    /** @param {Uuid} _id @param {string[]} params [column] */
+    /** @param {Uuid} _id @param {string[]} params [move] in the game's notation */
     move(_id, params) {
         const caller = Script.remoteCallerID;
         this.core.move(caller, params[0]);
@@ -137,6 +137,11 @@ export default class GameTableReferee {
     newGame() {
         const caller = Script.remoteCallerID;
         this.core.newGame(caller);
+    }
+
+    draw() {
+        const caller = Script.remoteCallerID;
+        this.core.draw(caller);
     }
 
     /** @param {object} state */

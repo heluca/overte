@@ -27,16 +27,32 @@ import * as connect4 from "./connect4.mjs";
 export const PROTOCOL_VERSION = 1;
 export const DEFAULT_TIMEOUTS = { turnTimeoutS: 180, waitTimeoutS: 600, overIdleS: 300 };
 export const NAME_LIMIT = 32;
+export const MOVE_TEXT_LIMIT = 64;
 
 const MIN_TIMEOUT_S = 5;
 const MAX_TIMEOUT_S = 86400;
 const COUNTDOWN_STEP_S = 5;
 const NULL_ID = /^\{?0{8}-0{4}-0{4}-0{4}-0{12}\}?$/;
 /** @type {Record<string, string>} */
-const REASON_TEXT = {
+const WIN_TEXT = {
     four: "four in a row",
+    checkmate: "checkmate"
+};
+// Said of the loser.
+/** @type {Record<string, string>} */
+const LOSS_TEXT = {
     timeout: "out of time",
-    resign: "resigned"
+    resign: "resigned",
+    "no moves": "has no moves"
+};
+/** @type {Record<string, string>} */
+const DRAW_TEXT = {
+    agreement: "by agreement",
+    repetition: "threefold repetition",
+    "forty-move": "forty-move rule",
+    "fifty-move": "fifty-move rule",
+    stalemate: "stalemate",
+    material: "insufficient material"
 };
 
 /**
@@ -125,6 +141,7 @@ export class RefereeCore {
     /** @type {Move[]} */ history = [];
     /** @type {Result | null} */ result = null;
     /** @type {string | null} */ gameId = null;
+    /** @type {number | null} the seat whose draw offer stands */ drawOffer = null;
     /** @type {number | null} */ turnDeadline = null;
     /** @type {number | null} */ seatDeadline = null;
     /** @type {number | null} */ idleDeadline = null;
@@ -148,7 +165,10 @@ export class RefereeCore {
         this.phase = "waiting";
         /** @type {(Seat | null)[]} */
         this.seats = [null, null];
+        // Alternating games: the seat that moves first in the next game. Swapping games: whether
+        // the next game swaps the seats, which it does once a game has been played at the table.
         this.firstSeat = 0;
+        this.swapSeats = false;
         this.lastText = "";
     }
 
@@ -159,6 +179,7 @@ export class RefereeCore {
         this.history = [];
         this.result = null;
         this.gameId = null;
+        this.drawOffer = null;
         this.turnDeadline = null;
         this.seatDeadline = null;
         this.idleDeadline = null;
@@ -174,6 +195,7 @@ export class RefereeCore {
         this.seats = [null, null];
         this.phase = "waiting";
         this.firstSeat = 0;
+        this.swapSeats = false;
         this.resetTable();
     }
 
@@ -249,18 +271,50 @@ export class RefereeCore {
         if (seat !== this.toMove) {
             return this.reject(caller, "move", "not your turn");
         }
-        const played = this.rules.play(this.game, text);
+        const capped = typeof text === "string" ? text.slice(0, MOVE_TEXT_LIMIT) : "";
+        const played = this.rules.play(this.game, capped);
         if ("error" in played) {
             return this.reject(caller, "move", played.error);
         }
         this.game = played.state;
         this.moveNo++;
         this.history.push(played.move);
+        if (this.drawOffer === 1 - seat) {
+            // Moving declines the opponent's offer
+            this.drawOffer = null;
+        }
         const over = this.rules.outcome(this.game);
         if (over) {
             this.end(over.winner, over.reason, over.line);
         } else {
             this.turnDeadline = this.world.now() + this.turnTimeoutMs;
+            this.changed();
+        }
+        return true;
+    }
+
+    /**
+     * Offers a draw, or accepts the opponent's standing offer, which ends the game drawn. An
+     * offer stands until the game ends or the opponent moves; offering again is a no-op.
+     * @param {string | undefined} caller
+     * @returns {boolean}
+     */
+    draw(caller) {
+        this.expire();
+        if (!isCaller(caller)) {
+            return this.reject(caller, "draw", "no caller id");
+        }
+        if (this.phase !== "playing") {
+            return this.reject(caller, "draw", this.phase === "over" ? "game over" : "game not started");
+        }
+        const seat = this.seatOf(caller);
+        if (seat < 0) {
+            return this.reject(caller, "draw", "not seated");
+        }
+        if (this.drawOffer === 1 - seat) {
+            this.end(null, "agreement", null);
+        } else if (this.drawOffer === null) {
+            this.drawOffer = seat;
             this.changed();
         }
         return true;
@@ -310,7 +364,8 @@ export class RefereeCore {
     }
 
     /**
-     * A rematch with the same seats; the first move alternates between games.
+     * A rematch with the same players: the first move alternates between games, or (REMATCH
+     * "swap") the players swap seats.
      * @param {string | undefined} caller
      * @returns {boolean}
      */
@@ -333,7 +388,7 @@ export class RefereeCore {
     /** Called about once a second: the deadlines, then the countdown. */
     tick() {
         if (!this.expire() && this.statusText() !== this.lastText) {
-            this.draw();
+            this.redraw();
         }
     }
 
@@ -396,6 +451,7 @@ export class RefereeCore {
             legal: legacy ? legal.map(Number) : legal,
             last: last && (legacy ? lastDisc(last) : lastMove(last)),
             result: copyResult(this.result),
+            drawOffer: playing ? this.drawOffer : null,
             turnDeadline: playing ? this.turnDeadline : null,
             channel: this.channel,
             ...this.rules.extra(this.game)
@@ -413,7 +469,8 @@ export class RefereeCore {
         if (this.phase === "playing") {
             const left = Math.max(0, Math.ceil(((this.turnDeadline ?? 0) - this.world.now()) / 1000));
             const shown = Math.ceil(left / COUNTDOWN_STEP_S) * COUNTDOWN_STEP_S;
-            return `${this.rules.SEAT_NAMES[this.toMove]} to move (move ${this.moveNo + 1}, ${shown} s)`;
+            const offer = this.drawOffer === null ? "" : `; ${this.rules.SEAT_NAMES[this.drawOffer]} offers a draw`;
+            return `${this.rules.SEAT_NAMES[this.toMove]} to move (move ${this.moveNo + 1}, ${shown} s)${offer}`;
         }
         if (this.phase === "over" && this.result) {
             return this.resultLine(this.result) + "; newGame to play again";
@@ -429,10 +486,14 @@ export class RefereeCore {
      */
     resultLine(result) {
         if (result.winner === null) {
-            return result.reason === "draw" ? "Draw" : "Game abandoned";
+            if (result.reason === "abandoned") {
+                return "Game abandoned";
+            }
+            return result.reason === "draw" ? "Draw" : `Draw (${DRAW_TEXT[result.reason] || result.reason})`;
         }
         const names = this.rules.SEAT_NAMES;
-        const why = result.reason === "four" ? REASON_TEXT.four : names[1 - result.winner] + " " + REASON_TEXT[result.reason];
+        const why = WIN_TEXT[result.reason]
+            || names[1 - result.winner] + " " + (LOSS_TEXT[result.reason] || result.reason);
         return `${names[result.winner]} wins (${why})`;
     }
 
@@ -451,8 +512,16 @@ export class RefereeCore {
         this.resetTable();
         this.phase = "playing";
         this.gameId = this.tableId + ":" + now;
-        this.game = this.rules.newGame(this.firstSeat);
-        this.firstSeat = 1 - this.firstSeat;
+        if (this.rules.REMATCH === "swap") {
+            if (this.swapSeats) {
+                this.seats.reverse();
+            }
+            this.swapSeats = true;
+            this.game = this.rules.newGame(0);
+        } else {
+            this.game = this.rules.newGame(this.firstSeat);
+            this.firstSeat = 1 - this.firstSeat;
+        }
         this.turnDeadline = now + this.turnTimeoutMs;
     }
 
@@ -480,6 +549,7 @@ export class RefereeCore {
     finish(winnerSeat, reason, line) {
         this.phase = "over";
         this.result = { winner: winnerSeat, reason, line };
+        this.drawOffer = null;
         this.turnDeadline = null;
         this.idleDeadline = this.world.now() + this.overIdleMs;
         return { type: "over", gameId: this.gameId, result: copyResult(this.result), seats: this.seatList() };
@@ -505,11 +575,11 @@ export class RefereeCore {
     /** @private */
     changed() {
         this.world.publish(this.projection());
-        this.draw();
+        this.redraw();
     }
 
     /** @private */
-    draw() {
+    redraw() {
         this.lastText = this.statusText();
         this.world.render({ text: this.lastText, board: this.rules.rows(this.game), line: copyResult(this.result)?.line ?? null });
     }

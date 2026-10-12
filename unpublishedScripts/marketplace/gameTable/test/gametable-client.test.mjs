@@ -22,7 +22,7 @@ const CAROL = "{cccccccc-0000-4000-8000-000000000003}";
 function projection(fields = {}) {
     return {
         v: 1, game: "connect4", gameId: null, phase: "waiting", seats: [null, null], toMove: null, moveNo: 0,
-        rows: Array(6).fill("......."), legal: [], last: null, result: null, turnDeadline: null,
+        rows: Array(6).fill("......."), legal: [], last: null, result: null, drawOffer: null, turnDeadline: null,
         channel: CHANNEL, ...fields
     };
 }
@@ -321,4 +321,19 @@ test("unload unsubscribes, disconnects and removes the highlights", () => {
     // A column target's unload has nothing to undo
     load(engine.child("GT.Col2")).unload();
     assert.equal(engine.handlers.length, 0);
+});
+
+test("a draw offer is announced to the players, and a draw by agreement says so", () => {
+    const engine = fakeEngine();
+    load(BOARD);
+    engine.deliver(CHANNEL, { type: "state", ...projection({ phase: "playing", seats: SEATED, toMove: 0, drawOffer: 1 }) });
+    assert.equal(engine.announced.at(-1), "Your turn (Red); Black offers a draw");
+    engine.deliver(CHANNEL, { type: "state", ...projection({ phase: "playing", seats: SEATED, toMove: 0, drawOffer: 0 }) });
+    assert.equal(engine.announced.at(-1), "Your turn (Red); your draw offer stands");
+    engine.deliver(CHANNEL, { type: "state", ...projection({
+        phase: "over", seats: SEATED, result: { winner: null, reason: "agreement", line: null }
+    }) });
+    assert.equal(engine.announced.at(-1), "Draw (by agreement)");
+    engine.deliver(CHANNEL, { type: "rejected", to: ME, method: "draw", reason: "game over" });
+    assert.equal(engine.announced.at(-1), "Draw offer refused: game over");
 });

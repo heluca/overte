@@ -36,9 +36,15 @@ const RESIGN_CONFIRM_TEXT = "Click your seat again within 5 s to resign the game
 const NOT_SEATED_TEXT = "You are not seated at the game table";
 const OFFLINE_TEXT = "Game table: the referee is not running";
 /** @type {Record<string, string>} */
-const METHOD_TEXT = { join: "Seat refused", move: "Move refused", leave: "Leave refused", newGame: "New game refused" };
+const METHOD_TEXT = {
+    join: "Seat refused", move: "Move refused", leave: "Leave refused", newGame: "New game refused", draw: "Draw offer refused"
+};
 /** @type {Record<string, string>} */
-const REASON_TEXT = { four: "four in a row", timeout: "on time", resign: "by resignation" };
+const REASON_TEXT = {
+    four: "four in a row", timeout: "on time", resign: "by resignation", checkmate: "checkmate", "no moves": "no moves left",
+    agreement: "by agreement", repetition: "threefold repetition", "forty-move": "forty-move rule",
+    "fifty-move": "fifty-move rule", stalemate: "stalemate", material: "insufficient material"
+};
 
 /**
  * @param {unknown} text
@@ -80,16 +86,21 @@ function statusFor(state, mine) {
     }
     const seats = /** @type {({ name: string } | null)[]} */ (state.seats);
     if (state.phase === "playing") {
+        const offer = state.drawOffer === 1 - mine ? "; " + SEAT_NAMES[1 - mine] + " offers a draw"
+            : state.drawOffer === mine ? "; your draw offer stands" : "";
         if (state.toMove === mine) {
-            return "Your turn (" + SEAT_NAMES[mine] + ")";
+            return "Your turn (" + SEAT_NAMES[mine] + ")" + offer;
         }
         const opponent = seats[state.toMove];
-        return "Waiting for " + (opponent ? opponent.name : SEAT_NAMES[state.toMove]) + " to move";
+        return "Waiting for " + (opponent ? opponent.name : SEAT_NAMES[state.toMove]) + " to move" + offer;
     }
     if (state.phase === "over" && state.result) {
         const { winner, reason } = state.result;
         if (winner === null) {
-            return reason === "draw" ? "Draw" : "Game abandoned";
+            if (reason === "abandoned") {
+                return "Game abandoned";
+            }
+            return reason === "draw" ? "Draw" : "Draw (" + (REASON_TEXT[reason] || reason) + ")";
         }
         return (winner === mine ? "You win" : "You lose") + " (" + (REASON_TEXT[reason] || reason) + ")";
     }

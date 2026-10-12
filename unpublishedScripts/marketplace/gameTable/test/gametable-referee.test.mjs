@@ -98,7 +98,7 @@ function loaded(engine) {
 }
 
 test("the remotely callable methods are exactly the referee API", () => {
-    assert.deepEqual(new GameTableReferee().remotelyCallable, ["join", "move", "leave", "state", "newGame"]);
+    assert.deepEqual(new GameTableReferee().remotelyCallable, ["join", "move", "leave", "state", "newGame", "draw"]);
 });
 
 test("preload publishes into userData without losing other keys and creates one status Text", () => {
@@ -351,4 +351,15 @@ test("an unknown game in the config logs a warning and plays Connect Four", () =
     assert.ok(engine.printed.some(line => /unknown game "go", playing connect4/.test(line)));
     assert.equal(engine.projection().game, "connect4");
     assert.equal(engine.named("GT.Col0").length, 1);
+});
+
+test("draw offers come from Script.remoteCallerID and agreement ends the game", () => {
+    const engine = fakeEngine();
+    const referee = loaded(engine);
+    engine.call(referee, ALICE, "join", ["Alice"]);
+    engine.call(referee, BOB, "join", ["Bob"]);
+    engine.call(referee, BOB, "draw");
+    assert.equal(engine.projection().drawOffer, 1);
+    engine.call(referee, ALICE, "draw");
+    assert.deepEqual(engine.projection().result, { winner: null, reason: "agreement", line: null });
 });
