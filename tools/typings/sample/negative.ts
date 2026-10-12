@@ -63,3 +63,9 @@ Assets.getAsset("/games/saved.json", () => {}).then(print);
 
 // @ts-expect-error Script.remoteCallerID is read-only; only the engine sets it.
 Script.remoteCallerID = "caller-id";
+
+// @ts-expect-error playStream takes the stream's URL as a string.
+Audio.playStream(new URL("http://127.0.0.1:8000/pcm"));
+
+// @ts-expect-error stereo is a boolean, not a channel count.
+Audio.playStream("http://127.0.0.1:8000/pcm", { stereo: 2 });

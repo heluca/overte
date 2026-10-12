@@ -41,6 +41,9 @@ public:
         const qint64 callerId = -1,
         const QString& extra = "");
 
+    // The thread requests run on; an object that reads a QNetworkReply as it arrives lives here for the event loop
+    QThread* getThread() { return &_thread; }
+
     void init();
     void cleanup();
 

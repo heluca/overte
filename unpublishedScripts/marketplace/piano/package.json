@@ -1,0 +1,11 @@
+{
+    "name": "overte-piano",
+    "private": true,
+    "description": "Piano for Overte: a serverScripts speaker for an Orpheus synthesizer that mirrors its playback status, and the client entity script that shows it. Node runs the tests only; it is never a runtime dependency.",
+    "license": "Apache-2.0",
+    "type": "module",
+    "scripts": {
+        "test": "node --test \"test/*.test.mjs\"",
+        "typecheck": "node ../../../tools/typings/node_modules/typescript/bin/tsc -p tsconfig.json && node ../../../tools/typings/node_modules/typescript/bin/tsc -p tsconfig.client.json"
+    }
+}

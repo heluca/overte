@@ -83,6 +83,17 @@ ScriptAudioInjector* AudioScriptingInterface::playSound(SharedSoundPointer sound
     }
 }
 
+ScriptAudioInjector* AudioScriptingInterface::playStream(const QString& url, const AudioInjectorOptions& injectorOptions) {
+    AudioInjectorOptions optionsCopy = injectorOptions;
+    optionsCopy.ambisonic = false;
+
+    auto injector = DependencyManager::get<AudioInjectorManager>()->playStream(QUrl(url), optionsCopy);
+    if (!injector) {
+        return nullptr;
+    }
+    return new ScriptAudioInjector(injector);
+}
+
 void AudioScriptingInterface::setStereoInput(bool stereo) {
     if (_localAudioInterface) {
         QMetaObject::invokeMethod(_localAudioInterface, "setIsStereoInput", Q_ARG(bool, stereo));
