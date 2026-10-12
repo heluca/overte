@@ -26,7 +26,7 @@ static QJsonObject row(const QString& urlPrefix, const QString& token, const QSt
 }
 
 static QByteArray lookup(const ScriptCredentials& credentials, const QString& request, const QUrl& script = SCRIPT) {
-    return credentials.authorizationFor(QUrl(request), script);
+    return credentials.authorizationFor(QUrl(request), QList<QUrl> { script });
 }
 
 void ScriptCredentialsTests::testUrlPrefix() {
@@ -57,6 +57,35 @@ void ScriptCredentialsTests::testUrlPrefix() {
     QCOMPARE(lookup(credentials, "https://api.example/v1/%2e%2e/admin"), QByteArray());
     QCOMPARE(lookup(credentials, "https://api.example/v1/..%2fadmin"), QByteArray());
     QCOMPARE(lookup(credentials, "https://api.example/v1/..."), QByteArray("Bearer t1"));
+    // A backslash, literal or encoded, separates segments for some servers
+    QCOMPARE(lookup(credentials, "https://api.example/v1/..%5Cadmin"), QByteArray());
+    QCOMPARE(lookup(credentials, "https://api.example/v1/..\\admin"), QByteArray());
+    QCOMPARE(lookup(credentials, "https://api.example/v1%5C..%5Cadmin"), QByteArray());
+}
+
+void ScriptCredentialsTests::testSegmentBoundary() {
+    ScriptCredentials credentials;
+    credentials.setFromSettings(QJsonArray {
+        row("https://api.example/api", "no-slash"),
+        row("https://other.example/api/", "slash"),
+        row("https://lib.example/", "scripts", "https://scripts.example/heluca"),
+    });
+
+    QCOMPARE(lookup(credentials, "https://api.example/api"), QByteArray("Bearer no-slash"));
+    QCOMPARE(lookup(credentials, "https://api.example/api/status"), QByteArray("Bearer no-slash"));
+    QCOMPARE(lookup(credentials, "https://api.example/apix"), QByteArray());
+    QCOMPARE(lookup(credentials, "https://api.example/api.json"), QByteArray());
+    QCOMPARE(lookup(credentials, "https://api.example/api%5Cstatus"), QByteArray());
+    QCOMPARE(lookup(credentials, "https://other.example/api/status"), QByteArray("Bearer slash"));
+    QCOMPARE(lookup(credentials, "https://other.example/api"), QByteArray());
+
+    // A script prefix without a trailing slash on a shared host stops at the segment too
+    QCOMPARE(lookup(credentials, "https://lib.example/x", QUrl("https://scripts.example/heluca/piano.js")),
+             QByteArray("Bearer scripts"));
+    QCOMPARE(lookup(credentials, "https://lib.example/x", QUrl("https://scripts.example/helucaevil/piano.js")),
+             QByteArray());
+    QCOMPARE(lookup(credentials, "https://lib.example/x", QUrl("https://scripts.example/heluca%5Cpiano.js")),
+             QByteArray());
 }
 
 void ScriptCredentialsTests::testLoopbackHttpOnly() {

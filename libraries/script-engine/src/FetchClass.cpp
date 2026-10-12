@@ -157,7 +157,7 @@ void registerFetchGlobals(ScriptEngine* engine, bool allowLocalFiles) {
     natives.setProperty("decodeText", engine->newFunction(decodeText, 1));
     natives.setProperty("encodeText", engine->newFunction(encodeText, 1));
 
-    ScriptValue install = engine->evaluate(fetchPrelude(), "(fetch)");
+    ScriptValue install = engine->evaluate(fetchPrelude(), FETCH_PRELUDE_NAME);
     if (!install.isFunction()) {
         qCCritical(scriptengine) << "fetch prelude did not evaluate to a function, fetch() is unavailable:" << install.toString();
         return;

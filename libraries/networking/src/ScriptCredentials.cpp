@@ -13,6 +13,7 @@
 
 #include <algorithm>
 
+#include <QtCore/QRegularExpression>
 #include <QtNetwork/QHostAddress>
 
 #include "NetworkLogging.h"
@@ -38,10 +39,19 @@ static bool isLoopbackHost(const QString& host) {
     return !address.isNull() && address.isLoopback();
 }
 
-// A server may decode and resolve dot segments before routing, so a path that only reads as under a prefix is refused
+// A server may decode and resolve dot segments, and take a backslash for a slash, before routing, so a path that only
+// reads as under a prefix is refused
 static bool hasNormalPath(const QUrl& url) {
-    const QStringList segments = url.path(QUrl::FullyDecoded).split('/');
+    const QStringList segments = url.path(QUrl::FullyDecoded).split(QRegularExpression("[/\\\\]"));
     return !segments.contains(".") && !segments.contains("..");
+}
+
+// On a segment boundary: /api covers /api and /api/x but not /apix
+static bool isPathUnder(const QString& path, const QString& prefixPath) {
+    if (prefixPath.endsWith('/')) {
+        return path.startsWith(prefixPath);
+    }
+    return path == prefixPath || path.startsWith(prefixPath + '/');
 }
 
 static QString pathOf(const QUrl& url) {
@@ -82,7 +92,7 @@ bool ScriptCredentials::isUnder(const QUrl& url, const Prefix& prefix) {
     return scheme == prefix.scheme
         && url.host().compare(prefix.host, Qt::CaseInsensitive) == 0
         && url.port(defaultPort(scheme)) == prefix.port
-        && pathOf(url).startsWith(prefix.path);
+        && isPathUnder(pathOf(url), prefix.path);
 }
 
 void ScriptCredentials::setFromSettings(const QJsonArray& rows) {

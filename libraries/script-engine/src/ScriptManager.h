@@ -1557,7 +1557,8 @@ public:
 
     /**
      * @brief The script URLs a script credential must cover for the code that is running: the entity script's URL or the
-     * script's own, and every URL loaded into an ES module environment. Script thread only.
+     * script's own, every script frame on the stack, and every URL loaded into an ES module environment. A frame without
+     * a name, or no script frame at all, adds an empty URL, which is under no prefix. Script thread only.
      *
      * @return QList<QUrl> Script URLs for ScriptCredentials
      */

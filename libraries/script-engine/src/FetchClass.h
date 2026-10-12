@@ -46,8 +46,9 @@ class ResourceRequest;
  * <code>"AbortError"</code>.</p>
  * <p>In server entity scripts and Agent scripts, an <code>http:</code> or <code>https:</code> request that sets no
  * <code>Authorization</code> header gets the domain's script credential for it, if there is one: the domain settings
- * hold bearer tokens, each for requests under a URL prefix made by scripts under a script prefix. The token is added as
- * the request leaves and is never visible to the script. A redirect away from the credential's URL prefix rejects with a
+ * hold bearer tokens, each for requests under a URL prefix made by scripts under a script prefix. The script prefix must
+ * cover the calling script, every script whose code is on the call stack and every module the script imported. The token
+ * is added as the request leaves and is never visible to the script. A redirect away from the credential's URL prefix rejects with a
  * <code>TypeError</code> rather than send the token on. A script that sets its own <code>Authorization</code> header
  * sends that instead.</p>
  * @function fetch
@@ -309,6 +310,8 @@ void registerFetchGlobals(ScriptEngine* engine, bool allowLocalFiles);
 
 /// The script half of fetch(), in FetchPrelude.cpp: a function that takes the native transport and returns the globals
 QString fetchPrelude();
+/// The name fetchPrelude() is compiled with, which its stack frames carry
+inline const QString FETCH_PRELUDE_NAME { "(fetch)" };
 
 #endif // overte_FetchClass_h
 

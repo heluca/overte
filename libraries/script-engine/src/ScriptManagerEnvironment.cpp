@@ -14,6 +14,7 @@
 
 #include "ScriptManager.h"
 
+#include "FetchClass.h"
 #include "ScriptEnvironment.h"
 
 EntityItemID ScriptManager::currentEntityIdentifier() const {
@@ -30,8 +31,11 @@ QUrl ScriptManager::currentSandboxURL() const {
     return _currentSandboxURL;
 }
 
-// An ES module environment's loaded URLs count as they do for ScriptPermissions: a trusted script that imports code
-// from elsewhere shares its bindings with that code
+// Entity scripts share one realm, so a script's environment does not say whose code is running: another script's
+// replacement for a built-in runs in it when the script calls that built-in. Every script frame on the stack counts, by
+// the name it was compiled with, as ScriptPermissions does for module code; a frame without a name (an embedded entity
+// script, new Function) is under no prefix, and neither is a call with no script frame at all. An ES module
+// environment's loaded URLs count too: a script that imports code from elsewhere shares its bindings with that code.
 QList<QUrl> ScriptManager::scriptCredentialScope() const {
     const QUrl sandboxURL = currentSandboxURL();
     QList<QUrl> scope { sandboxURL.isEmpty() ? QUrl(_fileNameString) : sandboxURL };
@@ -40,6 +44,16 @@ QList<QUrl> ScriptManager::scriptCredentialScope() const {
         for (const QString& url : environment->loadedURLs()) {
             scope.append(QUrl(url));
         }
+    }
+    bool hasScriptFrame = false;
+    for (const QString& frame : _engine->getCurrentScriptURLs(true)) {
+        if (frame != FETCH_PRELUDE_NAME) {
+            scope.append(QUrl(frame));
+            hasScriptFrame = true;
+        }
+    }
+    if (!hasScriptFrame) {
+        scope.append(QUrl());
     }
     return scope;
 }

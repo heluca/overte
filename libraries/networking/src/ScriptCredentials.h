@@ -29,9 +29,10 @@
 /// ask this store for an Authorization header; nothing here is reachable from script code. Thread-safe.
 ///
 /// A row applies to a request when the request URL is under its url_prefix and every script URL is under its
-/// script_prefix. Under a prefix means the same scheme, host (in any case) and port, and a path that starts with the
-/// prefix's path, case-sensitively. A URL with user info or with "." or ".." path segments is under no prefix. The row
-/// with the longest url_prefix path wins, then the one with the longest script_prefix path.
+/// script_prefix. Under a prefix means the same scheme, host (in any case) and port, and a path under the prefix's path,
+/// case-sensitively and on a segment boundary: "/api" covers "/api" and "/api/x" but not "/apix", and "/api/" covers
+/// "/api/x". A URL with user info or with "." or ".." path segments, also percent-encoded or between backslashes, is
+/// under no prefix. The row with the longest url_prefix path wins, then the one with the longest script_prefix path.
 class ScriptCredentials : public Dependency {
     SINGLETON_DEPENDENCY
 
@@ -46,9 +47,6 @@ public:
 
     /// <code>"Bearer &lt;token&gt;"</code> for a request made by code loaded from all of the script URLs, or empty
     QByteArray authorizationFor(const QUrl& request, const QList<QUrl>& scripts) const;
-    QByteArray authorizationFor(const QUrl& request, const QUrl& script) const {
-        return authorizationFor(request, QList<QUrl>{ script });
-    }
 
     /// authorizationFor() of the process's store, or empty in a process that has none, such as Interface
     static QByteArray find(const QUrl& request, const QList<QUrl>& scripts);

@@ -18,6 +18,7 @@ class ScriptCredentialsTests : public QObject {
     Q_OBJECT
 private slots:
     void testUrlPrefix();
+    void testSegmentBoundary();
     void testLoopbackHttpOnly();
     void testScriptScope();
     void testLongestMatch();
