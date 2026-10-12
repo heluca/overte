@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
     parseConfig, withStatus, statusOf, compactStatus, pollDelay, Backoff, formatDuration, formatStatus, formatSongs,
-    parseDisplayURL, displayGeometry, parseDisplayEvent,
+    parseDisplayURL, parseDisplayGeometry, parseDisplayEvent,
     DEFAULT_VOLUME, ACTIVE_POLL_MS, IDLE_POLL_MS
 } from "../piano-core.mjs";
 
@@ -149,15 +149,47 @@ test("parseDisplayURL: an http(s) page with no default and no placeholders", () 
     }
 });
 
-test("displayGeometry: the 0.30 x 0.17 m desk glass at 720 page pixels, at any piano scale", () => {
+test("parseDisplayGeometry: by default the desk face, 1600 page pixels wide, scaled with the piano", () => {
     for (const width of [1.48, 0.74, undefined]) {
-        const { dimensions, dpi } = displayGeometry(width === undefined ? undefined : { x: width });
+        const { geometry, problems, source } = parseDisplayGeometry("", width === undefined ? undefined : { x: width });
         const scale = width === undefined ? 1 : width / 1.48;
-        assert.ok(Math.abs(dimensions.x - 0.30 * scale) < 1e-9 && Math.abs(dimensions.y - 0.17 * scale) < 1e-9);
-        assert.equal(Math.round(dimensions.x * 39.3701 * dpi), 720);
-        assert.equal(Math.round(dimensions.y * 39.3701 * dpi), 408);
+        assertNear(geometry.dimensions, { x: 0.80 * scale, y: 0.275 * scale, z: 0.01 });
+        assertNear(geometry.localPosition, { x: 0, y: 0.0275 * scale, z: 0.013 * scale });
+        assert.equal(Math.round(geometry.dimensions.x * 39.3701 * geometry.dpi), 1600);
+        assert.equal(Math.round(geometry.dimensions.y * 39.3701 * geometry.dpi), 550);
+        assert.deepEqual(problems, []);
+        assert.equal(source, "null");
     }
 });
+
+test("parseDisplayGeometry: piano.display overrides any key; bad values are reported and defaulted", () => {
+    const display = { width: 0.6, offset: { y: 0.05 }, pagePixelsWide: 1200 };
+    const { geometry, problems, source } = parseDisplayGeometry(JSON.stringify({ piano: { display } }), { x: 1.48 });
+    assertNear(geometry.dimensions, { x: 0.6, y: 0.275, z: 0.01 });
+    assertNear(geometry.localPosition, { x: 0, y: 0.05, z: 0.013 });
+    assert.equal(Math.round(0.6 * 39.3701 * geometry.dpi), 1200);
+    assert.deepEqual(problems, []);
+    assert.equal(source, JSON.stringify(display));
+
+    const bad = parseDisplayGeometry(JSON.stringify({ piano: { display: {
+        width: -1, height: "tall", offset: { x: 5, z: 0.02 }, pagePixelsWide: 10_000
+    } } }), undefined);
+    assertNear(bad.geometry.dimensions, { x: 0.80, y: 0.275, z: 0.01 });
+    assertNear(bad.geometry.localPosition, { x: 0, y: 0.0275, z: 0.02 });
+    assert.equal(bad.problems.length, 4);
+    assert.match(bad.problems.join("\n"), /piano\.display\.width must be a number from 0\.05 to 3, got -1; using 0\.8/);
+    assert.match(bad.problems.join("\n"), /piano\.display\.offset\.x must be a number from -1 to 1, got 5/);
+
+    assert.match(parseDisplayGeometry(JSON.stringify({ piano: { display: 3 } }), undefined).problems[0],
+        /piano\.display must be an object, got 3; using the defaults/);
+});
+
+/** @param {Record<string, number>} actual @param {Record<string, number>} expected */
+function assertNear(actual, expected) {
+    for (const key of Object.keys(expected)) {
+        assert.ok(Math.abs(actual[key] - expected[key]) < 1e-9, key + ": " + actual[key] + " != " + expected[key]);
+    }
+}
 
 test("parseDisplayEvent: the page's messages, exactly as piano-display.html sends them", () => {
     // Captured from the page in headless Chrome with a stub EventBridge, every button clicked

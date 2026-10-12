@@ -170,12 +170,14 @@ can come from there, `displayURL` cannot.
 | Key | Where | Meaning |
 | --- | --- | --- |
 | `piano.displayURL` | piano `userData` | The desk display page, `http://` or `https://`. No default: without it the sitter sits but gets no display, the label stays, and the log says why. Read when the piano's client script loads |
+| `piano.display` | piano `userData` | Optional size and place of the display, every key optional: `{"width": 0.80, "height": 0.275, "offset": {"x": 0, "y": 0.0275, "z": 0.013}, "pagePixelsWide": 1600}` (the defaults). Metres at the piano's natural size, `offset` from `anchor_desk_screen` in its frame. Ranges: width 0.05 to 3, height 0.05 to 2, offset -1 to 1 each, pagePixelsWide 200 to 4096. Reread every second: an open display follows a change within a second |
 | `pianoBench.hipsAboveSeat` | bench `userData` | How far the hips sit above `seat`, as a fraction of the avatar's height. Default 0.06 (0.105 m for a 1.75 m avatar), 0 to 0.3 |
 | `pianoBench.standHoldMs` | bench `userData` | How long a movement key must be held to stand up. Default 500, 0 to 5000 |
 | `pianoBench.leaseMs` | bench `userData` | How long the seat stays taken without a renewal. Default 15000, 3000 to 120000. Read by the server script, which sends it with each grant |
 
-A value out of range is logged and replaced by its default. Both scripts read `userData` once,
-when they load.
+A value out of range is logged (once per change) and replaced by its default. The bench's
+scripts and `piano.displayURL` are read once, when the scripts load; `piano.display` is
+reread with the status every second.
 
 **Sitting.** A primary click on the bench (the mouse, or a hand controller's trigger with the
 laser on it: the controller pointers report the trigger as the primary button,
@@ -218,22 +220,31 @@ reloads, the sitter's next renewal claims the seat again.
 **The desk display.** Once seated, the bench calls the piano's client script
 (`Entities.callEntityMethod(piano, "openDisplay")`, a local call; the method is not in
 `remotelyCallable`, so the server cannot call it). It adds a local Web entity, `Piano.Display`,
-seen by the sitter only, parented to the piano at `anchor_desk_screen` with zero offset and
-rotation: the anchor's +Z points out of the desk at the player, and a Web entity's face is its
-+Z (the yaw billboard turns +Z to the camera, `interface/src/Application_Setup.cpp` 1763-1768).
-It is the 0.30 x 0.17 m glass panel, scaled with the piano, at the dpi that makes the page
-720 x 408 pixels (a Web entity is its dimensions in inches times `dpi` pixels,
-`RenderableWebEntityItem.cpp` 453-457). `wantsKeyboardFocus` is off, so the movement keys still
+seen by the sitter only, parented to the piano at `anchor_desk_screen` with identity rotation:
+the anchor's +Z points out of the desk at the player, and a Web entity's face is its +Z (the
+yaw billboard turns +Z to the camera, `interface/src/Application_Setup.cpp` 1763-1768). By
+default it covers the whole face of the music desk, the score included. Measured in
+`salon-grand.glb` in the anchor's frame, the desk board spans x -0.41 to 0.41 with its face at
+z -0.0045, the ledge stands proud below y -0.12, the board's top is at y 0.175, and the score
+reaches z 0.0099. So the display is 0.80 x 0.275 m (10 mm inside the edges, above the ledge),
+centred at y 0.0275, and 13 mm in front of the anchor (3 mm in front of the score). All of it
+scales with the piano. The dpi makes the page `pagePixelsWide` pixels across (a Web entity is
+its dimensions in inches times `dpi` pixels, `RenderableWebEntityItem.cpp` 453-457); that sets
+sharpness only, since the page scales itself to the viewport. Changing `piano.display` while
+someone sits edits the open display in place. `wantsKeyboardFocus` is off, so the movement keys still
 reach the avatar. The sitter's floating status label hides while the display is up; everyone
 else still sees theirs. Standing up deletes the display and shows the label again.
 
-`piano-display.html` is self-contained (no external fonts, scripts or images) and is a
-**wireframe**: placeholder now-playing, progress, a transport row (previous, play/pause, stop,
+`piano-display.html` is self-contained (no external fonts, scripts or images). It is laid out
+in rem on a 50 x 17.1875 rem canvas, the 0.80 x 0.275 m desk face, so 1 rem (body text) is
+16 mm on the desk and the title 28 mm, legible from the bench at 0.6 to 0.7 m; the root font
+size fits that canvas to the viewport, so another size or aspect scales rather than crops.
+It is a **wireframe**: placeholder now-playing, progress, a transport row (previous, play/pause, stop,
 next, replay, after Orpheus's `/api/playback/*` routes), a song list (`play-song`), and status
 indicators. A button sends `{"type": "piano-display", "action": "next"}` (and `songId` for
 `play-song`) with `EventBridge.emitWebEvent`; the piano's client script prints it and answers
 `{"type": "piano-display-ack", ...}` with `Entities.emitScriptEvent`, which the page shows in
-its footer. Nothing reaches Orpheus yet. Opened in a desktop browser, the page says it has no
+its status bar. Nothing reaches Orpheus yet. Opened in a desktop browser, the page says it has no
 EventBridge and logs the events to the console.
 
 ## Trying it with a mock Orpheus
@@ -266,15 +277,13 @@ npm run typecheck   # tsc twice: the server scripts and the client scripts again
 
 ## Not verified yet
 
-- The bench and the display have not run in Interface. Not seen: `beginSit` with the hips over
-  `seat` (whether 0.06 of the height puts the thighs on the cushion, and the hands at the keys),
-  `endSit` on `stand_up`, the drive-key stand-up,
-  the lease round trip (the classic server script has run only in a Node `vm`, not on an
-  upstream entity script server), `callEntityMethod` between the two `.mjs` client scripts, the Web
-  entity's face and fit on the desk glass, EventBridge in a Web entity page, and the hand
-  controller trigger on the bench. The bench's joints are taken from the spec, not read from a
-  loaded model. The page was rendered and its buttons clicked in headless Chrome with a stub
-  EventBridge.
+- Seen in Interface (fork build, Daybreak, at bcb58d1df0): clicking the bench sits the avatar
+  correctly on the seat, facing the keys, and the desk display appears; at the old 0.30 x 0.17 m
+  size it was too small to read, which the desk-face default replaces. Not yet seen: the new
+  size and its legibility from the bench, the live re-tune through `piano.display`, `endSit`
+  on `stand_up`, the drive-key stand-up, the lease against a second visitor, the buttons'
+  round trip over EventBridge, and the hand controller trigger. The page was rendered and its
+  buttons clicked in headless Chrome with a stub EventBridge.
 
 - Nothing here has run in an Overte domain: not the stream through `Audio.playStream`, the
   position following, the reconnects, `fetch` in the entity script server, the client label or
