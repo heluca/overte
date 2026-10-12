@@ -208,19 +208,22 @@ protected:
      * finishes, triggering {@link AudioInjector.finished}, when the response ends or fails, or when it is stopped, which closes
      * the connection. Reconnecting is up to the script: call <code>Audio.playStream</code> again from the
      * <code>finished</code> handler.</p>
+     * <p>Only <code>http://</code> and <code>https://</code> URLs are played; any other URL returns <code>null</code>.</p>
      * <p>The <code>loop</code>, <code>secondOffset</code> and <code>pitch</code> options have no effect on a stream, nor does
      * {@link AudioInjector.restart}. Changing <code>position</code>, <code>orientation</code> or <code>volume</code> with
      * {@link AudioInjector.setOptions} applies while the stream plays.</p>
      * @function Audio.playStream
-     * @param {string} url - The URL of the stream, usually <code>http://</code> or <code>https://</code>.
+     * @param {string} url - The <code>http://</code> or <code>https://</code> URL of the stream.
      * @param {AudioInjector.AudioInjectorOptions} [injectorOptions={}] - Configures where and how the audio injector plays the
      *     stream.
-     * @returns {AudioInjector} The audio injector that plays the stream.
+     * @returns {AudioInjector} The audio injector that plays the stream, or <code>null</code> if the URL is not
+     *     <code>http://</code> or <code>https://</code>.
      * @example <caption>Play a live stream at an entity's position, reconnecting when the stream ends.</caption>
      * // Server entity script.
      * (function () {
      *     var STREAM_URL = "http://127.0.0.1:8000/pcm";  // Replace with the URL of your stream.
      *     var injector = null;
+     *     var reconnect = null;
      *     var stopped = false;
      *
      *     function play(entityID) {
@@ -228,7 +231,8 @@ protected:
      *         injector = Audio.playStream(STREAM_URL, { position: position, volume: 0.8 });
      *         injector.finished.connect(function () {
      *             if (!stopped) {
-     *                 Script.setTimeout(function () {
+     *                 reconnect = Script.setTimeout(function () {
+     *                     reconnect = null;
      *                     play(entityID);
      *                 }, 1000);
      *             }
@@ -238,6 +242,9 @@ protected:
      *     this.preload = play;
      *     this.unload = function () {
      *         stopped = true;
+     *         if (reconnect) {
+     *             Script.clearTimeout(reconnect);
+     *         }
      *         if (injector) {
      *             injector.stop();
      *         }
