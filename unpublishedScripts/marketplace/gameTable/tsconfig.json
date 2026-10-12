@@ -16,7 +16,6 @@
     },
     "files": [
         "../../../tools/typings/dist/overte-server-entity.d.ts",
-        "overte-server-entity-extras.d.ts",
         "connect4.mjs",
         "referee-core.mjs",
         "gametable-referee.mjs"

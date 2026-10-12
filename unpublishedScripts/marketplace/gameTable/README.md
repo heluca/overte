@@ -256,12 +256,10 @@ npm run typecheck   # tsc twice: the referee against the server entity declarati
 ```
 
 `typecheck` needs the declarations built first: `npm ci && npm run build` in `tools/typings`.
-`overte-server-entity-extras.d.ts` is a stop-gap. It declares the two things the generated
-declarations lack: `Script.remoteCallerID` (typed `string | undefined`) and `import.meta.url`.
-The real fix is a `remoteCallerID` property in the `Script` JSDoc in
-`libraries/script-engine/src/ScriptManagerScriptingInterface.h`, where it appears today only as a
-`@param` of `callEntityScriptMethod`, plus an `ImportMeta` declaration from
-`tools/typings/generate.js` (heluca/overte#40). Delete the file when that lands.
+`Script.remoteCallerID` and `import.meta.url` come from those generated declarations: a
+`remoteCallerID` property on the `Script` JSDoc in
+`libraries/script-engine/src/ScriptManagerScriptingInterface.h` and an `ImportMeta` declaration
+from `tools/typings/generate.js` (heluca/overte#46). No local stop-gap typings are needed.
 
 ## The original physics table
 
