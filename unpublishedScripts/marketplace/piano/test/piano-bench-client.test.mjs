@@ -128,7 +128,7 @@ function loaded() {
 function seated(engine) {
     const client = loaded();
     client.clickDownOnEntity(BENCH, CLICK);
-    client.seatGranted();
+    client.seatGranted(BENCH, ["15000"]);
     engine.serverCalls.length = 0;
     engine.localCalls.length = 0;
     return client;
@@ -161,17 +161,17 @@ test("granted: hips over the seat joint facing the bench's -Z, and the piano ope
     const engine = fakeEngine();
     const client = loaded();
     client.clickDownOnEntity(BENCH, CLICK);
-    client.seatGranted();
+    client.seatGranted(BENCH, ["15000"]);
     assert.equal(engine.avatar.sits.length, 1);
     const { position, rotation } = engine.avatar.sits[0];
     assertNear(position, { x: 0, y: 0.5 + 1.8 * 0.06, z: 1.6 });
     assertSameRotation(rotation, BENCH_ROTATION);
     assert.deepEqual(engine.localCalls, [{ id: PIANO, method: "openDisplay", params: [] }]);
     assert.equal(engine.MyAvatar.onLoadComplete.handlers.size, 1);
-    // The lease is renewed a third of the way through
+    // The lease the server granted is renewed a third of the way through
     engine.advance(5000);
     assert.equal(engine.calls("claim"), 2);
-    client.seatGranted();
+    client.seatGranted(BENCH, ["15000"]);
     assert.equal(engine.avatar.sits.length, 1, "a renewal does not sit again");
 });
 
@@ -207,7 +207,7 @@ test("no answer: the request times out; a late grant gives the seat back", () =>
     client.clickDownOnEntity(BENCH, CLICK);
     engine.advance(3000);
     assert.match(engine.printed.join("\n"), /did not answer; is serverScripts set\?/);
-    client.seatGranted();
+    client.seatGranted(BENCH, ["15000"]);
     assert.equal(engine.avatar.sits.length, 0);
     assert.equal(engine.calls("release"), 1);
 });
@@ -287,4 +287,15 @@ test("a bench with no piano parent says so once", () => {
     const engine = fakeEngine({ parentID: "{00000000-0000-0000-0000-000000000000}" });
     loaded();
     assert.match(engine.printed.join("\n"), /not parented to a piano/);
+});
+
+test("the renewal follows the lease the server grants", () => {
+    const engine = fakeEngine();
+    const client = loaded();
+    client.clickDownOnEntity(BENCH, CLICK);
+    client.seatGranted(BENCH, ["6000"]);
+    engine.advance(1950);
+    assert.equal(engine.calls("claim"), 1);
+    engine.advance(100);
+    assert.equal(engine.calls("claim"), 2);
 });

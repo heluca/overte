@@ -18,7 +18,6 @@
         "../../../tools/typings/dist/overte-server-entity.d.ts",
         "piano-core.mjs",
         "piano-entity.mjs",
-        "piano-bench-core.mjs",
-        "piano-bench-entity.mjs"
+        "piano-bench-entity.js"
     ]
 }

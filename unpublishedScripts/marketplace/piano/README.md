@@ -12,13 +12,15 @@ wireframe whose buttons reach the client script and stop there.
 | `piano-entity.mjs` | entity script server | The piano's `serverScripts`: plays the stream at the entity, mirrors the status into `userData`, answers `status` and `list` |
 | `piano-client.mjs` | Interface | The piano's client `script`: a floating local Text above the piano with the status, the song list on a click, and the desk display for the sitter |
 | `piano-bench-core.mjs` | anywhere | Pure logic for the bench: its `userData`, the sit and stand poses, the seat lease, the stand-up gesture |
-| `piano-bench-entity.mjs` | entity script server | The bench's `serverScripts`: one sitter at a time, on a lease |
+| `piano-bench-entity.js` | entity script server | The bench's `serverScripts`, a classic script: one sitter at a time, on a lease |
 | `piano-bench-client.mjs` | Interface | The bench's client `script`: sits and stands the avatar, asks the piano to open and close the desk display |
 | `piano-display.html` | the desk display | The page on the music desk: a wireframe of the future controls, placeholder data |
 
 The modules need the fork's ES module support for entity scripts (`.mjs` `serverScripts` and
 `script` with `export default class`). Imports are relative, so the `.mjs` files must be served
-from the same directory.
+from the same directory. The bench's server script is a classic `.js` entity script on purpose,
+so the bench works on a domain whose entity script server is upstream Overte, which loads no
+`.mjs`; the bench's client script still needs a fork-built Interface.
 
 ## Placing a piano
 
@@ -152,21 +154,25 @@ Entities.addEntity({
     dimensions: { x: 0.918, y: 0.490, z: 0.380 },
     shapeType: "box",
     script: "https://<asset-host>/piano/piano-bench-client.mjs",
-    serverScripts: "https://<asset-host>/piano/piano-bench-entity.mjs",
+    serverScripts: "https://<asset-host>/piano/piano-bench-entity.js",
     userData: JSON.stringify({ pianoBench: {} })  // every key is optional
 });
 ```
 
 On an existing pair, set the same properties in Create: on the piano, add `displayURL` to the
 `piano` object in `userData`; on the bench, `parentID` the piano, `script`
-`.../piano-bench-client.mjs` and `serverScripts` `.../piano-bench-entity.mjs`.
+`.../piano-bench-client.mjs` and `serverScripts` `.../piano-bench-entity.js`.
+
+The display page must be served as `text/html`. raw.githubusercontent.com serves every file as
+`text/plain` with `nosniff`, so a Web entity would show the page's source: the `.mjs` scripts
+can come from there, `displayURL` cannot.
 
 | Key | Where | Meaning |
 | --- | --- | --- |
 | `piano.displayURL` | piano `userData` | The desk display page, `http://` or `https://`. No default: without it the sitter sits but gets no display, the label stays, and the log says why. Read when the piano's client script loads |
 | `pianoBench.hipsAboveSeat` | bench `userData` | How far the hips sit above `seat`, as a fraction of the avatar's height. Default 0.06 (0.105 m for a 1.75 m avatar), 0 to 0.3 |
 | `pianoBench.standHoldMs` | bench `userData` | How long a movement key must be held to stand up. Default 500, 0 to 5000 |
-| `pianoBench.leaseMs` | bench `userData` | How long the seat stays taken without a renewal. Default 15000, 3000 to 120000 |
+| `pianoBench.leaseMs` | bench `userData` | How long the seat stays taken without a renewal. Default 15000, 3000 to 120000. Read by the server script, which sends it with each grant |
 
 A value out of range is logged and replaced by its default. Both scripts read `userData` once,
 when they load.
@@ -200,7 +206,7 @@ script unloads.
 
 **One sitter.** The bench's server script holds the seat on a lease: `claim` is granted when
 the seat is free, its lease ran out, or the caller holds it, and the sitter's client renews it
-every third of `leaseMs`. The answer goes back with `Entities.callEntityClientMethod` as
+every third of the lease the grant carries. The answer goes back with `Entities.callEntityClientMethod` as
 `seatGranted` or `seatRefused`; a refused renewal stands the sitter up. A crashed or departed
 sitter frees the seat after `leaseMs`. The caller is `Script.remoteCallerID`, which the engine
 stamps from the sending session, so nobody can sit someone else down or release their seat.
@@ -263,7 +269,8 @@ npm run typecheck   # tsc twice: the server scripts and the client scripts again
 - The bench and the display have not run in Interface. Not seen: `beginSit` with the hips over
   `seat` (whether 0.06 of the height puts the thighs on the cushion, and the hands at the keys),
   `endSit` on `stand_up`, the drive-key stand-up,
-  the lease round trip, `callEntityMethod` between the two `.mjs` client scripts, the Web
+  the lease round trip (the classic server script has run only in a Node `vm`, not on an
+  upstream entity script server), `callEntityMethod` between the two `.mjs` client scripts, the Web
   entity's face and fit on the desk glass, EventBridge in a Web entity page, and the hand
   controller trigger on the bench. The bench's joints are taken from the spec, not read from a
   loaded model. The page was rendered and its buttons clicked in headless Chrome with a stub

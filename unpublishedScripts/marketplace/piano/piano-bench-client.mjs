@@ -7,7 +7,7 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 //  The piano bench's client entity script, run by Interface for each visitor. A click on the
-//  bench asks its server script (piano-bench-entity.mjs) for the seat; when granted, the avatar
+//  bench asks its server script (piano-bench-entity.js) for the seat; when granted, the avatar
 //  sits with the engine's own sit (MyAvatar.beginSit) with its hips over the bench's `seat`
 //  joint, facing the keyboard, and the piano's client script opens the desk display. Clicking
 //  again, or holding a movement key, stands the avatar up at the bench's `stand_up` joint.
@@ -26,6 +26,8 @@ const WATCH_MS = 100;
 // beginSit is queued to Interface's main thread, so the seated state and the avatar's position
 // lag the call; the checks that end the sit wait this long
 const SETTLE_MS = 1000;
+// Used only if a grant carries no lease; piano-bench-entity.js always sends one
+const FALLBACK_LEASE_MS = 15000;
 // The hips are pinned; an avatar this far from the pin was moved away (a teleport, a go-to)
 const MOVED_AWAY_DISTANCE = 0.5;
 // The Create app's flag: a click while editing selects the bench, it does not sit
@@ -104,9 +106,10 @@ export default class PianoBenchClient {
         }, REPLY_TIMEOUT_MS);
     }
 
-    // Called by the bench's server script in answer to `claim`.
+    // Called by the bench's server script in answer to `claim`, with the lease in milliseconds.
 
-    seatGranted() {
+    /** @param {Uuid} _id @param {string[]} params [leaseMs] */
+    seatGranted(_id, params) {
         if (this.seated) {
             return; // a renewal
         }
@@ -117,7 +120,8 @@ export default class PianoBenchClient {
         }
         this.pending = false;
         this.clearReplyTimer();
-        this.sit();
+        const leaseMs = Number(params && params[0]);
+        this.sit(leaseMs > 0 ? leaseMs : FALLBACK_LEASE_MS);
     }
 
     seatRefused() {
@@ -131,7 +135,8 @@ export default class PianoBenchClient {
         print("Piano bench " + this.entityID + ": someone is already sitting here");
     }
 
-    sit() {
+    /** @param {number} leaseMs */
+    sit(leaseMs) {
         const seat = this.joint(SEAT_JOINT);
         if (seat === null) {
             Entities.callEntityServerMethod(this.entityID, "release", []);
@@ -145,8 +150,9 @@ export default class PianoBenchClient {
         this.hipsPin = pose.position;
         this.settleUntil = Date.now() + SETTLE_MS;
         this.gesture = new StandGesture(this.config.standHoldMs);
+        // Renewed a third of the way through, so one lost renewal does not lose the seat
         this.renewTimer = Script.setInterval(() => Entities.callEntityServerMethod(this.entityID, "claim", []),
-            this.config.leaseMs / 3);
+            leaseMs / 3);
         this.watchTimer = Script.setInterval(() => this.watch(), WATCH_MS);
         // A new avatar model or scale would leave the hips pinned at the old avatar's height
         MyAvatar.onLoadComplete.connect(this.standUpHandler);
