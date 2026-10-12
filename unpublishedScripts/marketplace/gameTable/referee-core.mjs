@@ -23,6 +23,7 @@
 //
 
 import * as connect4 from "./connect4.mjs";
+import { statusText } from "./status-text.mjs";
 
 export const PROTOCOL_VERSION = 1;
 export const DEFAULT_TIMEOUTS = { turnTimeoutS: 180, waitTimeoutS: 600, overIdleS: 300 };
@@ -31,30 +32,7 @@ export const MOVE_TEXT_LIMIT = 64;
 
 const MIN_TIMEOUT_S = 5;
 const MAX_TIMEOUT_S = 86400;
-const COUNTDOWN_STEP_S = 5;
 const NULL_ID = /^\{?0{8}-0{4}-0{4}-0{4}-0{12}\}?$/;
-/** @type {Record<string, string>} */
-const WIN_TEXT = {
-    four: "four in a row",
-    checkmate: "checkmate"
-};
-// Said of the loser.
-/** @type {Record<string, string>} */
-const LOSS_TEXT = {
-    timeout: "out of time",
-    resign: "resigned",
-    "no moves": "has no moves"
-};
-/** @type {Record<string, string>} */
-const DRAW_TEXT = {
-    agreement: "by agreement",
-    repetition: "threefold repetition",
-    "forty-move": "forty-move rule",
-    "fifty-move": "fifty-move rule",
-    stalemate: "stalemate",
-    material: "insufficient material"
-};
-
 /**
  * @param {string} tableId
  * @returns {string} the Messages channel a table publishes on
@@ -460,41 +438,17 @@ export class RefereeCore {
 
     /** @returns {string} the status board, monospace, as shown on the table's Text child */
     statusText() {
-        const names = this.seats.map((seat, i) => this.rules.SEAT_NAMES[i] + ": " + (seat ? seat.name : "(empty)"));
-        return [names.join("   "), this.statusLine(), this.rules.render(this.game)].join("\n");
-    }
-
-    /** @private */
-    statusLine() {
-        if (this.phase === "playing") {
-            const left = Math.max(0, Math.ceil(((this.turnDeadline ?? 0) - this.world.now()) / 1000));
-            const shown = Math.ceil(left / COUNTDOWN_STEP_S) * COUNTDOWN_STEP_S;
-            const offer = this.drawOffer === null ? "" : `; ${this.rules.SEAT_NAMES[this.drawOffer]} offers a draw`;
-            return `${this.rules.SEAT_NAMES[this.toMove]} to move (move ${this.moveNo + 1}, ${shown} s)${offer}`;
-        }
-        if (this.phase === "over" && this.result) {
-            return this.resultLine(this.result) + "; newGame to play again";
-        }
-        const seated = this.seats.filter(Boolean).length;
-        const waiting = seated === 0 ? "Waiting for players" : "Waiting for an opponent";
-        return this.result ? this.resultLine(this.result) + ". " + waiting : waiting;
-    }
-
-    /**
-     * @private
-     * @param {Result} result
-     */
-    resultLine(result) {
-        if (result.winner === null) {
-            if (result.reason === "abandoned") {
-                return "Game abandoned";
-            }
-            return result.reason === "draw" ? "Draw" : `Draw (${DRAW_TEXT[result.reason] || result.reason})`;
-        }
-        const names = this.rules.SEAT_NAMES;
-        const why = WIN_TEXT[result.reason]
-            || names[1 - result.winner] + " " + (LOSS_TEXT[result.reason] || result.reason);
-        return `${names[result.winner]} wins (${why})`;
+        return statusText({
+            names: this.rules.SEAT_NAMES,
+            seats: this.seats,
+            phase: this.phase,
+            toMove: this.toMove,
+            moveNo: this.moveNo,
+            secondsLeft: Math.max(0, Math.ceil(((this.turnDeadline ?? 0) - this.world.now()) / 1000)),
+            drawOffer: this.drawOffer,
+            result: this.result,
+            board: this.rules.render(this.game)
+        });
     }
 
     /**
