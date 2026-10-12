@@ -7,8 +7,9 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 //  The 8x8 board, for the referee: a Box lying flat, its local +y face the playing surface,
-//  with 64 square tiles across local x and z, the pieces standing on them, the status Text
-//  above the far edge and a seat button at each player's edge. Seat 0 plays from the +z edge
+//  with 64 square tiles across local x and z, the pieces standing on them, the status display
+//  above the far edge and a seat button at each player's edge (layout-controls.mjs builds those
+//  two). Seat 0 plays from the +z edge
 //  (the rezzer's side when the board is rezzed with the avatar's orientation), seat 1 from -z.
 //
 //  The tiles carry no script: the board's own client instance takes their clicks from the
@@ -16,36 +17,53 @@
 //  click on a piece lands on its tile.
 //
 
-import { STATUS_NAME } from "./layout-connect4.mjs";
+import { TableControls, statusSize, seatSize } from "./layout-controls.mjs";
 
 export const SIZE = 8;
 export const SQUARE_PREFIX = "GT.Sq ";
 export const PIECE_PREFIX = "GT.Pc ";
-const SEAT_NAMES = ["GT.Seat0", "GT.Seat1"];
 const EMPTY = ".";
 const TILE_HEIGHT = 0.004;
 const LIGHT = { red: 226, green: 210, blue: 176 };
 const DARK = { red: 96, green: 60, blue: 38 };
-const STATUS_SIZE = { x: 1.0, y: 0.45, z: 0.01 };
+// The seat buttons are their reference size on a board with squares this wide (the README's),
+// and scale with the squares; the status display is as wide as the board.
+const REFERENCE_PITCH = 0.6 / SIZE;
 // Clear of the board, so a player at either edge sees the pieces under it.
 const STATUS_RISE = 0.25;
-const STATUS_LINE_HEIGHT = 0.03;
-const SEAT_SIZE = { x: 0.16, y: 0.06, z: 0.01 };
+// Seats, turn and result, eight rows, a locked board's warning (two lines) and one line to
+// spare for a long line that wraps
+const STATUS_LINES = 13;
 const SEAT_GAP = 0.02;
-const SEAT_LINE_HEIGHT = 0.03;
-// A half turn about y: seat 1's button reads from the -z edge.
-const HALF_TURN = { x: 0, y: 1, z: 0, w: 0 };
-/** @type {Record<string, { backgroundColor: Color, textColor: Color }>} */
-const SEAT_COLORS = {
-    Black: { backgroundColor: { red: 15, green: 15, blue: 15 }, textColor: { red: 240, green: 240, blue: 240 } },
-    Red: { backgroundColor: { red: 190, green: 30, blue: 30 }, textColor: { red: 240, green: 240, blue: 240 } },
-    White: { backgroundColor: { red: 235, green: 235, blue: 228 }, textColor: { red: 20, green: 20, blue: 20 } }
+// The colour of each side's pieces, for its seat button's token and the turn lamp
+/** @type {Record<string, Color>} */
+const SIDE_COLORS = {
+    Black: { red: 30, green: 30, blue: 32 },
+    Red: { red: 175, green: 28, blue: 28 },
+    White: { red: 238, green: 234, blue: 222 }
+};
+// A walnut frame with brass fittings, round a dark green screen
+const WALNUT = { red: 74, green: 46, blue: 28 };
+const BRASS = { red: 190, green: 152, blue: 80 };
+/** @type {import("./layout-controls.mjs").ControlsLook} */
+const CONTROLS_LOOK = {
+    bezel: WALNUT,
+    screen: { red: 18, green: 42, blue: 30 },
+    text: { red: 240, green: 232, blue: 212 },
+    title: { red: 232, green: 200, blue: 128 },
+    titleFont: "Timeless",
+    ring: BRASS,
+    plate: WALNUT,
+    glow: { red: 255, green: 196, blue: 92 },
+    cap: BRASS,
+    label: { red: 44, green: 28, blue: 16 },
+    labelFont: "Timeless"
 };
 
 /**
  * @typedef {{ model: string, size: Vec3 }} PieceLook model relative to the referee's directory;
  *     size in square widths
- * @typedef {{ rules: { SEAT_NAMES: string[] }, rowZeroSide: number, pieces: Record<string, PieceLook> }} GridGame
+ * @typedef {{ rules: { GAME: string, SEAT_NAMES: string[] }, rowZeroSide: number, pieces: Record<string, PieceLook> }} GridGame
  * @typedef {{ from: number[], to: number[], captured?: number[][],
  *     castle?: { rookFrom: number[], rookTo: number[] } }} MoveCells the move just played, as
  *     the rules report it (checkers and chess); cells are [row, col]
@@ -173,6 +191,8 @@ export class GridLayout {
         this.base = base;
         this.game = game;
         this.clientURL = base + "gametable-client.mjs";
+        const sides = game.rules.SEAT_NAMES.map(name => ({ name, color: SIDE_COLORS[name] || SIDE_COLORS.Black }));
+        this.controls = new TableControls(boardID, this.clientURL, CONTROLS_LOOK, sides, game.rules.GAME.toUpperCase());
         this.tileNames = [];
         for (let row = 0; row < SIZE; row++) {
             for (let col = 0; col < SIZE; col++) {
@@ -180,7 +200,7 @@ export class GridLayout {
             }
         }
         // The children there is exactly one of, created by the referee if none turns up.
-        this.fixedNames = [STATUS_NAME, ...this.tileNames, ...SEAT_NAMES];
+        this.fixedNames = [...this.controls.names, ...this.tileNames];
     }
 
     /**
@@ -219,65 +239,53 @@ export class GridLayout {
     }
 
     /**
+     * @returns {import("./layout-controls.mjs").Placement} the status display over the far (-z)
+     *     edge, each seat button at its player's edge, to their right, standing on the table
+     */
+    get placement() {
+        const { x: width, y: height, z: depth } = this.dimensions;
+        const scale = this.pitch / REFERENCE_PITCH;
+        const status = statusSize(width, STATUS_LINES);
+        const plate = seatSize(scale);
+        const seatAt = (/** @type {number} */ side) => ({
+            position: {
+                x: side * (width / 2 - plate.x / 2),
+                y: plate.y / 2 - height / 2,
+                z: side * (depth / 2 + SEAT_GAP * scale + plate.z / 2)
+            },
+            facing: side
+        });
+        return {
+            status: {
+                centre: { x: 0, y: height / 2 + STATUS_RISE * scale + status.height / 2, z: -depth / 2 },
+                width: status.width,
+                lines: STATUS_LINES
+            },
+            // Seat 0 plays from the +z edge
+            seats: [seatAt(1), seatAt(-1)],
+            scale
+        };
+    }
+
+    /**
      * @param {string} name one of fixedNames
      * @returns {Entities.EntityProperties} the child to create
      */
     fixedProperties(name) {
-        const { x: width, y: height, z: depth } = this.dimensions;
+        if (this.controls.has(name)) {
+            return this.controls.properties(name, this.placement);
+        }
+        // A tile
         const tile = this.tileNames.indexOf(name);
-        if (tile >= 0) {
-            const row = Math.floor(tile / SIZE);
-            const col = tile % SIZE;
-            return {
-                type: "Box",
-                name,
-                parentID: this.boardID,
-                localPosition: this.position(row, col, TILE_HEIGHT / 2),
-                dimensions: { x: width / SIZE, y: TILE_HEIGHT, z: depth / SIZE },
-                color: (row + col) % 2 === 0 ? LIGHT : DARK,
-                collisionless: true,
-                grab: { grabbable: false }
-            };
-        }
-        const seat = SEAT_NAMES.indexOf(name);
-        if (seat >= 0) {
-            const label = this.game.rules.SEAT_NAMES[seat];
-            const side = seat === 0 ? 1 : -1;
-            return {
-                type: "Text",
-                name,
-                parentID: this.boardID,
-                script: this.clientURL,
-                collisionless: true,
-                grab: { grabbable: false, triggerable: true },
-                // At the player's edge, to their right, reading towards them
-                localPosition: {
-                    x: side * (width / 2 - SEAT_SIZE.x / 2),
-                    y: height / 2 + SEAT_SIZE.y / 2,
-                    z: side * (depth / 2 + SEAT_GAP + SEAT_SIZE.z / 2)
-                },
-                localRotation: seat === 0 ? { x: 0, y: 0, z: 0, w: 1 } : HALF_TURN,
-                dimensions: SEAT_SIZE,
-                lineHeight: SEAT_LINE_HEIGHT,
-                backgroundAlpha: 1,
-                unlit: true,
-                text: "Play " + label,
-                ...(SEAT_COLORS[label] || SEAT_COLORS.Black)
-            };
-        }
+        const row = Math.floor(tile / SIZE);
+        const col = tile % SIZE;
         return {
-            type: "Text",
-            name: STATUS_NAME,
+            type: "Box",
+            name,
             parentID: this.boardID,
-            localPosition: { x: 0, y: height / 2 + STATUS_RISE + STATUS_SIZE.y / 2, z: -depth / 2 },
-            dimensions: STATUS_SIZE,
-            font: "Inconsolata",
-            lineHeight: STATUS_LINE_HEIGHT,
-            textColor: { red: 240, green: 240, blue: 240 },
-            backgroundColor: { red: 20, green: 24, blue: 32 },
-            backgroundAlpha: 0.85,
-            unlit: true,
-            billboardMode: "yaw",
+            localPosition: this.position(row, col, TILE_HEIGHT / 2),
+            dimensions: { x: this.dimensions.x / SIZE, y: TILE_HEIGHT, z: this.dimensions.z / SIZE },
+            color: (row + col) % 2 === 0 ? LIGHT : DARK,
             collisionless: true,
             grab: { grabbable: false }
         };

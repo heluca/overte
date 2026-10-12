@@ -20,7 +20,8 @@
 
 import { RefereeCore, channelFor } from "./referee-core.mjs";
 import { gameEntry } from "./game-registry.mjs";
-import { Connect4Layout, STATUS_NAME } from "./layout-connect4.mjs";
+import { Connect4Layout } from "./layout-connect4.mjs";
+import { STATUS_NAME } from "./layout-controls.mjs";
 import { GridLayout } from "./layout-grid.mjs";
 
 const HERE = import.meta.url.replace(/[^/]*$/, "");
@@ -160,8 +161,26 @@ export default class GameTableReferee {
             const userData = parseObject(Entities.getEntityProperties(this.entityID, ["userData"]).userData);
             userData.gameTable = state;
             Entities.editEntity(this.entityID, { userData: JSON.stringify(userData) });
+            this.showTable(/** @type {{ seats: ({ name: string } | null)[], phase: string, toMove: number | null }} */ (state));
         }
         Messages.sendMessage(this.channel, JSON.stringify({ type: "state", ...state }));
+    }
+
+    /**
+     * Shows who sits where and whose turn it is on the seat buttons and the status lamp, editing
+     * only the children whose look changed. A locked board's look is left as it was laid out,
+     * as its colour is.
+     * @param {{ seats: ({ name: string } | null)[], phase: string, toMove: number | null }} table
+     */
+    showTable({ seats, phase, toMove }) {
+        const controls = this.layout.controls;
+        controls.update(seats, phase === "playing" ? toMove : null).forEach(name => {
+            const id = this.fixed.get(name);
+            // One not found yet takes the current look when it is adopted or created
+            if (id !== undefined) {
+                Entities.editEntity(id, controls.feedback(name));
+            }
+        });
     }
 
     /** @param {{ type: string }} event */
