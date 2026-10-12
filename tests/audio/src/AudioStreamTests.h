@@ -26,6 +26,8 @@ private slots:
     void testInjectorPlaysUntilEnd();
     void testStopClosesConnection();
     void testErrorResponseFinishes();
+    void testRejectsNonHttpUrls();
+    void testLocalBufferReadsWholeFrames();
 };
 
 #endif // overte_AudioStreamTests_h
