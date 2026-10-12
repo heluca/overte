@@ -31,9 +31,9 @@ const DARK = { red: 96, green: 60, blue: 38 };
 const REFERENCE_PITCH = 0.6 / SIZE;
 // Clear of the board, so a player at either edge sees the pieces under it.
 const STATUS_RISE = 0.25;
-// Seats, turn and result, eight rows, a locked board's warning (two lines) and one line to
-// spare for a long line that wraps
-const STATUS_LINES = 13;
+// The longest status chess can show: a locked board's warning (two lines), the seats with two
+// 32-character names (two lines), the turn or result, eight ranks and the files
+const STATUS_LINES = 14;
 const SEAT_GAP = 0.02;
 // The colour of each side's pieces, for its seat button's token and the turn lamp
 /** @type {Record<string, Color>} */

@@ -29,6 +29,7 @@ const TURN_NAME = "GT.StatusTurn";
 const PLATE = "Plate";
 const CAP = "Cap";
 const TOKEN = "Token";
+const SOCKET = "Socket";
 
 // The display is as wide as the board it serves, but no narrower than this, so its text stays
 // legible over a small board.
@@ -52,7 +53,8 @@ const SCREEN_DEPTH = 0.006;
 const TURN_DEPTH = 0.008;
 
 // The seat buttons, in metres at scale 1 (each layout's reference board): a plate, a raised
-// cap on it smaller by the rim, and on the cap a token of the seat's pieces and the label.
+// cap on it smaller by the rim, and on the cap the label and a token of the seat's pieces, set
+// in a socket of the plate's colour so a light token (chess's White) stands out on a light cap.
 const SEAT_SIZE = { x: 0.24, y: 0.08 };
 const PLATE_DEPTH = 0.014;
 const RIM = 0.008;
@@ -115,7 +117,7 @@ export class TableControls {
         this.sides = sides;
         this.title = title;
         this.names = [STATUS_NAME, FRAME_NAME, SCREEN_NAME, TITLE_NAME, LAMP_NAME, TURN_NAME,
-            ...SEAT_NAMES.flatMap(seat => [seat, seat + PLATE, seat + CAP, seat + TOKEN])];
+            ...SEAT_NAMES.flatMap(seat => [seat, seat + PLATE, seat + CAP, seat + SOCKET, seat + TOKEN])];
         // The children whose look follows the table
         this.live = [TURN_NAME, ...SEAT_NAMES.flatMap(seat => [seat, seat + PLATE])];
     }
@@ -272,7 +274,7 @@ export class TableControls {
 
     /**
      * @param {number} seat
-     * @param {string} part "", "Plate", "Cap" or "Token"
+     * @param {string} part "", "Plate", "Cap", "Socket" or "Token"
      * @param {SeatPlace} place
      * @param {number} scale
      * @returns {Entities.EntityProperties}
@@ -302,15 +304,19 @@ export class TableControls {
         if (part === CAP) {
             return { ...solid, type: "Box", localPosition: at(0, plate.z / 2 + cap.z / 2), dimensions: cap, color: look.cap };
         }
-        if (part === TOKEN) {
+        if (part === TOKEN || part === SOCKET) {
+            // The socket half the token's height, wider by half the token's padding all round
+            const socket = part === SOCKET;
+            const size = socket ? token + pad : token;
+            const depth = (socket ? TOKEN_DEPTH / 2 : TOKEN_DEPTH) * scale;
             return {
                 ...solid,
                 type: "Shape",
                 shape: "Cylinder",
-                localPosition: at(pad + token / 2 - cap.x / 2, capFront + TOKEN_DEPTH * scale / 2),
+                localPosition: at(pad + token / 2 - cap.x / 2, capFront + depth / 2),
                 localRotation: QUARTER_TURN_X,
-                dimensions: { x: token, y: TOKEN_DEPTH * scale, z: token },
-                color: this.sides[seat].color
+                dimensions: { x: size, y: depth, z: size },
+                color: socket ? look.plate : this.sides[seat].color
             };
         }
         // The label is the clickable: the client knows the seat by its name. It is the plate's

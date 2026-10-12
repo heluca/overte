@@ -17,6 +17,8 @@ import { BOARD, fakeEngine } from "./fake-engine.mjs";
 import { Connect4Layout } from "../layout-connect4.mjs";
 import { GridLayout } from "../layout-grid.mjs";
 import { GAMES } from "../game-registry.mjs";
+import { statusText } from "../status-text.mjs";
+import * as chess from "../chess.mjs";
 
 const { default: GameTableReferee } = await import("../gametable-referee.mjs");
 
@@ -36,8 +38,8 @@ const BOB = "{bbbbbbbb-0000-4000-8000-000000000002}";
 const BOARDS = [
     { label: "the README Connect Four board", layout: () => new Connect4Layout(BOARD, README, BASE_URL), lines: 11 },
     { label: "the acceptance Connect Four board", layout: () => new Connect4Layout(BOARD, LARGE, BASE_URL), lines: 11 },
-    { label: "the README checkers board", layout: () => new GridLayout(BOARD, FLAT, BASE_URL, GAMES.checkers), lines: 13 },
-    { label: "a large checkers board", layout: () => new GridLayout(BOARD, FLAT_LARGE, BASE_URL, GAMES.checkers), lines: 13 }
+    { label: "the README checkers board", layout: () => new GridLayout(BOARD, FLAT, BASE_URL, GAMES.checkers), lines: 14 },
+    { label: "a large chess board", layout: () => new GridLayout(BOARD, FLAT_LARGE, BASE_URL, GAMES.chess), lines: 14 }
 ];
 
 function close(actual, expected, message) {
@@ -111,7 +113,7 @@ for (const { label, layout: make, lines } of BOARDS) {
         assert.equal(status.backgroundAlpha, 1);
         assert.ok((status.dimensions.y - status.topMargin - status.bottomMargin) / status.lineHeight >= lines - EPSILON);
         assert.ok(status.leftMargin > 0 && status.rightMargin > 0);
-        assert.equal(title.text, layout instanceof Connect4Layout ? "CONNECT FOUR" : "CHECKERS");
+        assert.equal(title.text, layout instanceof Connect4Layout ? "CONNECT FOUR" : layout.game.rules.GAME.toUpperCase());
         assert.equal(title.alignment, "center");
         assert.equal(turn.visible, false, "no turn until a game starts");
     });
@@ -119,7 +121,8 @@ for (const { label, layout: make, lines } of BOARDS) {
     test(`${label}: a seat button's label covers it and takes the clicks; cap, token and glyphs stack towards the player`, () => {
         const layout = make();
         [0, 1].forEach(seat => {
-            const [label, plate, cap, token] = ["", "Plate", "Cap", "Token"].map(part => layout.fixedProperties("GT.Seat" + seat + part));
+            const [label, plate, cap, token, socket] = ["", "Plate", "Cap", "Token", "Socket"]
+                .map(part => layout.fixedProperties("GT.Seat" + seat + part));
             assert.equal(label.type, "Text");
             assert.match(label.script, /^https:\/\/host\/gameTable\/gametable-client\.mjs$/);
             assert.deepEqual(label.grab, { grabbable: false, triggerable: true });
@@ -127,7 +130,7 @@ for (const { label, layout: make, lines } of BOARDS) {
             assert.deepEqual([label.dimensions.x, label.dimensions.y], [plate.dimensions.x, plate.dimensions.y]);
             assert.deepEqual([label.localPosition.x, label.localPosition.y], [plate.localPosition.x, plate.localPosition.y]);
             assert.deepEqual(label.localRotation, plate.localRotation);
-            [plate, cap, token].forEach(part => {
+            [plate, cap, token, socket].forEach(part => {
                 assert.equal(part.ignorePickIntersection, true);
                 assert.equal(part.script, undefined);
                 assert.equal(part.collisionless, true);
@@ -138,12 +141,18 @@ for (const { label, layout: make, lines } of BOARDS) {
             close(out(cap) - cap.dimensions.z / 2, plate.dimensions.z / 2, "the cap sits on the plate");
             assert.ok(cap.dimensions.x < plate.dimensions.x && cap.dimensions.y < plate.dimensions.y, "a rim shows round the cap");
             close(out(token) - token.dimensions.y / 2, capFront, "the token sits on the cap");
+            // In a socket of the plate's colour, wider and lower than the token, inside the cap
+            close(out(socket) - socket.dimensions.y / 2, capFront, "the socket sits on the cap");
+            assert.deepEqual([socket.localPosition.x, socket.localPosition.y], [token.localPosition.x, token.localPosition.y]);
+            assert.ok(socket.dimensions.x > token.dimensions.x && socket.dimensions.y < token.dimensions.y);
+            assert.ok(socket.dimensions.x < cap.dimensions.y, "inside the cap");
+            assert.deepEqual(socket.color, plate.color);
             const glyphs = out(label) + GLYPHS;
             assert.ok(glyphs > capFront && glyphs < capFront + 0.002, "the label's glyphs just in front of the cap");
             // The token at the player's left, inside the cap; the label's text clear of it
             const across = facing * (token.localPosition.x - plate.localPosition.x);
             assert.ok(across < 0 && -across + token.dimensions.x / 2 < cap.dimensions.x / 2);
-            assert.ok(label.leftMargin > plate.dimensions.x / 2 + across + token.dimensions.x / 2);
+            assert.ok(label.leftMargin > plate.dimensions.x / 2 + across + socket.dimensions.x / 2);
             assert.equal(label.alignment, "center");
             assert.equal(label.verticalAlignment, "center");
         });
@@ -170,6 +179,22 @@ test("8x8 seat buttons stand on the table at each player's edge, to their right,
         const [blackToken, redToken] = ["GT.Seat0Token", "GT.Seat1Token"].map(name => layout.fixedProperties(name).color);
         assert.ok(blackToken.red < 60 && redToken.red > 150 && redToken.green < 60);
     }
+});
+
+test("a chess board: White's token stands out in its socket, and the screen holds the longest status chess can show", () => {
+    const layout = new GridLayout(BOARD, FLAT, BASE_URL, GAMES.chess);
+    assert.equal(layout.fixedProperties("GT.Seat0").text, "Play White");
+    const brightness = color => color.red + color.green + color.blue;
+    const [white, socket, cap] = ["GT.Seat0Token", "GT.Seat0Socket", "GT.Seat0Cap"].map(name => layout.fixedProperties(name).color);
+    assert.ok(brightness(white) > brightness(cap) && brightness(socket) < brightness(cap) / 2, "light token, dark socket");
+    // A locked board, two 32-character names and a draw offer late in a long game
+    const locked = "BOARD LOCKED: the game is not saved in userData. Unlock the board and reload its script.";
+    const text = locked + "\n" + statusText({ names: chess.SEAT_NAMES, seats: [{ name: "W".repeat(32) }, { name: "W".repeat(32) }],
+        phase: "playing", toMove: 0, moveNo: 299, secondsLeft: 86400, drawOffer: 1, result: null, board: chess.render(chess.newGame(0)) });
+    // Lines wrap at some 56 characters (layout-controls.mjs)
+    const lines = text.split("\n").reduce((count, line) => count + Math.max(1, Math.ceil(line.length / 56)), 0);
+    const status = layout.fixedProperties("GT.Status");
+    assert.ok(lines <= (status.dimensions.y - status.topMargin - status.bottomMargin) / status.lineHeight + EPSILON, lines + " lines");
 });
 
 test("the controls follow the table, and report only the children whose look changed", () => {
@@ -254,5 +279,5 @@ test("a board with the old plain status and seat Texts is restyled on load and g
     assert.deepEqual([engine.entities.get(seat).dimensions.x, engine.entities.get(seat).dimensions.y], [plate.x, plate.y]);
     loaded(engine);
     assert.equal(engine.entities.size, count, "a reload adds nothing");
-    [...STATUS_PARTS, ...LIVE, "GT.Seat0Cap", "GT.Seat1Token"].forEach(name => assert.equal(engine.named(name).length, 1, name));
+    [...STATUS_PARTS, ...LIVE, "GT.Seat0Cap", "GT.Seat1Token", "GT.Seat1Socket"].forEach(name => assert.equal(engine.named(name).length, 1, name));
 });

@@ -196,11 +196,15 @@ Both layouts build these from `layout-controls.mjs`; only the colours, fonts and
   The display is as wide as the board under it (the Connect Four base, the 8x8 board), but never
   narrower than 0.8 m, so its text stays legible over a small board. Everything else in it
   follows the width: a body line is 1/28 of it (some 56 characters to a line); the screen holds
-  11 lines on Connect Four and 13 on 8x8 (the seats, the turn or result, the board, a locked
-  board's warning and a line to spare for one that wraps).
-- `GT.Seat0Plate`, `GT.Seat0Cap` and `GT.Seat0Token` (and seat 1's): each seat button is a plate
-  (a Box, 0.24 x 0.08 m at scale 1), a raised cap on it, smaller by a rim that shows round it, and
-  on the cap's left a token of the seat's pieces (a flat Cylinder in their colour). The label,
+  11 lines on Connect Four (the seats, the turn or result, the board, a locked board's warning
+  and a line to spare for one that wraps) and 14 on 8x8, the longest status chess can show (a
+  locked board's warning, two 32-character names wrapping onto a second line, the turn or
+  result, eight ranks and the files).
+- `GT.Seat0Plate`, `GT.Seat0Cap`, `GT.Seat0Socket` and `GT.Seat0Token` (and seat 1's): each seat
+  button is a plate (a Box, 0.24 x 0.08 m at scale 1), a raised cap on it, smaller by a rim that
+  shows round it, and on the cap's left a token of the seat's pieces (a flat Cylinder in their
+  colour), set in a lower, wider socket of the plate's colour, so a light token (chess's White on
+  the brass cap) stands out as well as a dark one. The label,
   `GT.Seat<n>`, is a Text the size of the whole plate, just in front of the cap, with no
   background: it is the only part of the button that takes clicks (the rest ignore picks), so a
   click anywhere on the button lands on the entity the client recognises by name.
