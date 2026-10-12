@@ -6,8 +6,9 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
-//  The client entity script against fake Entities and Script globals: the local label it draws
-//  and what it asks the piano for. It must never edit the piano.
+//  The client entity script against fake Entities and Script globals: the local label it draws,
+//  what it asks the piano for, and the desk display it opens for the bench. It must never edit
+//  the piano.
 //
 
 import { test } from "node:test";
@@ -15,17 +16,27 @@ import assert from "node:assert/strict";
 
 const PIANO = "{9a40d000-0000-4000-8000-000000000000}";
 const PLAYING = { state: "playing", title: "Ode to Joy", output: "synth", progress: 50, elapsed: 8, synth: true, error: null };
+const DISPLAY_URL = "https://assets.example/piano/piano-display.html";
+const DESK_JOINT = 107;
 
-function fakeEngine(status = null) {
+function fakeEngine(status = null, { displayURL = DISPLAY_URL, joints = { anchor_desk_screen: DESK_JOINT } } = {}) {
     let nextId = 1;
     let now = 1_000_000;
+    const piano = status ? { orpheusBase: "http://orpheus.example", status } : {};
+    if (displayURL !== null) {
+        piano.displayURL = displayURL;
+    }
     const entities = new Map([[PIANO, {
-        dimensions: { x: 1.5, y: 1, z: 0.6 },
-        userData: JSON.stringify({ piano: status ? { orpheusBase: "http://orpheus.example", status } : {} })
+        dimensions: { x: 1.48, y: 1.304, z: 2.11 },
+        userData: JSON.stringify({ piano })
     }]]);
+    const webHandlers = new Set();
     const engine = {
         entities,
         serverCalls: [],
+        scriptEvents: [],
+        printed: [],
+        webHandlers,
         timers: new Map(),
         Entities: {
             addEntity(properties, hostType) {
@@ -43,7 +54,16 @@ function fakeEngine(status = null) {
                 const entity = entities.get(id) || {};
                 return Object.fromEntries(names.map(name => [name, entity[name]]));
             },
-            callEntityServerMethod(id, method, params) { engine.serverCalls.push({ id, method, params }); }
+            callEntityServerMethod(id, method, params) { engine.serverCalls.push({ id, method, params }); },
+            getJointIndex(id, name) {
+                assert.equal(id, PIANO);
+                return name in joints ? joints[name] : -1;
+            },
+            webEventReceived: {
+                connect(handler) { webHandlers.add(handler); },
+                disconnect(handler) { webHandlers.delete(handler); }
+            },
+            emitScriptEvent(id, message) { engine.scriptEvents.push({ id, message }); }
         },
         Script: {
             setInterval(callback, ms) { engine.timers.set(nextId, { callback, ms }); return nextId++; },
@@ -60,9 +80,15 @@ function fakeEngine(status = null) {
         },
         label() {
             return [...entities.values()].find(entity => entity.name === "Piano.Status");
+        },
+        display() {
+            return [...entities.entries()].find(([, entity]) => entity.name === "Piano.Display");
+        },
+        webEvent(id, message) {
+            webHandlers.forEach(handler => handler(id, message));
         }
     };
-    Object.assign(globalThis, { Entities: engine.Entities, Script: engine.Script });
+    Object.assign(globalThis, { Entities: engine.Entities, Script: engine.Script, print: text => engine.printed.push(String(text)) });
     Date.now = () => now;
     return engine;
 }
@@ -81,7 +107,7 @@ test("preload floats a local label above the piano showing the published status"
     const label = engine.label();
     assert.equal(label.hostType, "local");
     assert.equal(label.parentID, PIANO);
-    assert.ok(label.localPosition.y > 0.5);
+    assert.ok(label.localPosition.y > 0.65);
     assert.equal(label.text, "Ode to Joy\nplaying  0:08  50%");
     assert.deepEqual(engine.serverCalls, [], "a published status needs no status() call");
 });
@@ -125,4 +151,77 @@ test("unload removes the label and the refresh timer", () => {
     client.unload();
     assert.equal(engine.label(), undefined);
     assert.equal(engine.timers.size, 0);
+});
+
+test("openDisplay lays a local Web page on the desk anchor and hides the label; closeDisplay undoes both", () => {
+    const engine = fakeEngine(PLAYING);
+    const client = loaded(engine);
+    client.openDisplay();
+    client.openDisplay();
+    const displays = [...engine.entities.values()].filter(entity => entity.name === "Piano.Display");
+    assert.equal(displays.length, 1, "opened once");
+    const [, display] = engine.display();
+    assert.equal(display.hostType, "local");
+    assert.equal(display.type, "Web");
+    assert.equal(display.sourceUrl, DISPLAY_URL);
+    assert.equal(display.parentID, PIANO);
+    assert.equal(display.parentJointIndex, DESK_JOINT);
+    assert.deepEqual(display.localPosition, { x: 0, y: 0, z: 0 });
+    assert.deepEqual(display.localRotation, { x: 0, y: 0, z: 0, w: 1 });
+    assert.ok(Math.abs(display.dimensions.x - 0.30) < 1e-9 && Math.abs(display.dimensions.y - 0.17) < 1e-9);
+    assert.equal(Math.round(display.dimensions.x * 39.3701 * display.dpi), 720);
+    assert.equal(display.wantsKeyboardFocus, false, "the movement keys must still reach the avatar");
+    assert.equal(engine.label().visible, false);
+    client.closeDisplay();
+    assert.equal(engine.display(), undefined);
+    assert.equal(engine.label().visible, true);
+    assert.equal(engine.webHandlers.size, 0);
+});
+
+test("display buttons arrive as web events: printed and acknowledged; others' events ignored", () => {
+    const engine = fakeEngine(PLAYING);
+    const client = loaded(engine);
+    client.openDisplay();
+    const [displayID] = engine.display();
+    engine.webEvent(displayID, JSON.stringify({ type: "piano-display", action: "next" }));
+    engine.webEvent(displayID, JSON.stringify({ type: "piano-display", action: "play-song", songId: 3 }));
+    engine.webEvent("{someone-elses-web-entity}", JSON.stringify({ type: "piano-display", action: "stop" }));
+    engine.webEvent(displayID, "rubbish");
+    assert.deepEqual(engine.scriptEvents.map(event => [event.id, JSON.parse(event.message)]), [
+        [displayID, { type: "piano-display-ack", action: "next", songId: null }],
+        [displayID, { type: "piano-display-ack", action: "play-song", songId: 3 }]
+    ]);
+    const log = engine.printed.join("\n");
+    assert.match(log, /display next/);
+    assert.match(log, /display play-song 3/);
+    assert.match(log, /ignored display event "rubbish"/);
+    assert.deepEqual(engine.serverCalls, [], "nothing reaches Orpheus yet");
+});
+
+test("no displayURL or no desk joint: no display, the label stays, the log says why", () => {
+    let engine = fakeEngine(PLAYING, { displayURL: null });
+    let client = loaded(engine);
+    assert.match(engine.printed.join("\n"), /no desk display, piano.displayURL must be an http/);
+    client.openDisplay();
+    assert.equal(engine.display(), undefined);
+    assert.notEqual(engine.label().visible, false);
+
+    engine = fakeEngine(PLAYING, { displayURL: "https://<asset-host>/piano/piano-display.html" });
+    loaded(engine).openDisplay();
+    assert.equal(engine.display(), undefined, "a README placeholder is not a URL");
+
+    engine = fakeEngine(PLAYING, { joints: {} });
+    client = loaded(engine);
+    client.openDisplay();
+    assert.equal(engine.display(), undefined);
+    assert.match(engine.printed.join("\n"), /no anchor_desk_screen joint/);
+});
+
+test("unload closes an open display", () => {
+    const engine = fakeEngine(PLAYING);
+    const client = loaded(engine);
+    client.openDisplay();
+    client.unload();
+    assert.equal(engine.display(), undefined);
+    assert.equal(engine.webHandlers.size, 0);
 });

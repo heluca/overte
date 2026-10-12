@@ -8,7 +8,8 @@
 //
 //  The piano's logic without the engine: reading the configuration from userData, folding
 //  Orpheus's two status replies into the compact status the piano publishes, the reconnect
-//  backoff, and the text both scripts show. No engine globals, so it runs under Node.
+//  backoff, the text both scripts show, and the desk display's URL, size and button events.
+//  No engine globals, so it runs under Node.
 //
 
 export const STREAM_PATH = "/api/synth/stream.pcm";
@@ -216,4 +217,65 @@ export function formatSongs(songs, limit = SONG_LINES) {
         lines.push("+" + (songs.length - limit) + " more");
     }
     return "Songs (" + songs.length + ")\n" + lines.join("\n");
+}
+
+// The desk display: a Web entity on the music desk's glass, `anchor_desk_screen` in the salon
+// grand's joint contract (spec section 4: a 0.30 x 0.17 m panel on a model 1.480 m wide).
+export const DESK_SCREEN_SIZE = { x: 0.30, y: 0.17 };
+export const PIANO_NATURAL_WIDTH = 1.480;
+// 720 x 408 page pixels on the 0.30 x 0.17 m glass: a Web entity is dimensions in inches x dpi
+// pixels across (RenderableWebEntityItem.cpp getWindowSize), and piano-display.html is laid out
+// for that size.
+export const DISPLAY_PIXELS = { x: 720, y: 408 };
+export const DISPLAY_ACTIONS = ["previous", "pause", "stop", "next", "replay", "play-song"];
+const METERS_TO_INCHES = 39.3701;
+
+// As BASE_URL, but the page may carry a query or fragment.
+const PAGE_URL = /^https?:\/\/[A-Za-z0-9.\-[\]:]+(\/[^\s<>]*)?$/i;
+
+/**
+ * Reads `piano.displayURL`, the desk display page. It has no default: without one the sitter
+ * gets no display and the log says why.
+ * @param {unknown} userDataText
+ * @returns {{ displayURL: string } | { error: string }}
+ */
+export function parseDisplayURL(userDataText) {
+    const piano = parseObject(userDataText).piano;
+    const url = piano !== null && typeof piano === "object" ? piano.displayURL : undefined;
+    if (typeof url !== "string" || !PAGE_URL.test(url)) {
+        return { error: "piano.displayURL must be an http:// or https:// URL, got " + JSON.stringify(url) };
+    }
+    return { displayURL: url };
+}
+
+/**
+ * The display's size on a piano that may be scaled from its natural size, and the dpi that
+ * keeps the page at DISPLAY_PIXELS whatever the scale.
+ * @param {{ x: number } | undefined} pianoDimensions
+ * @returns {{ dimensions: { x: number, y: number, z: number }, dpi: number }}
+ */
+export function displayGeometry(pianoDimensions) {
+    const scale = pianoDimensions && pianoDimensions.x > 0 ? pianoDimensions.x / PIANO_NATURAL_WIDTH : 1;
+    const width = DESK_SCREEN_SIZE.x * scale;
+    return {
+        dimensions: { x: width, y: DESK_SCREEN_SIZE.y * scale, z: 0.01 },
+        dpi: DISPLAY_PIXELS.x / (width * METERS_TO_INCHES)
+    };
+}
+
+/**
+ * A button press from piano-display.html over the EventBridge:
+ * `{"type": "piano-display", "action": "next"}`, with `songId` for "play-song".
+ * @param {unknown} message
+ * @returns {{ action: string, songId: number | null } | null} null for anything else
+ */
+export function parseDisplayEvent(message) {
+    const event = parseObject(message);
+    if (event.type !== "piano-display" || !DISPLAY_ACTIONS.includes(event.action)) {
+        return null;
+    }
+    if (event.action === "play-song") {
+        return Number.isInteger(event.songId) && event.songId > 0 ? { action: event.action, songId: event.songId } : null;
+    }
+    return { action: event.action, songId: null };
 }

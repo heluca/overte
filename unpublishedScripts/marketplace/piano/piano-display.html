@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<!--
+    piano-display.html
+
+    Copyright 2026 Overte e.V.
+
+    Distributed under the Apache License, Version 2.0.
+    See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+
+    The piano's desk display, shown on the music desk to whoever sits at the piano. This is a
+    WIREFRAME of the future interface: placeholder data, and buttons that only send a web event
+    to piano-client.mjs, which prints it and acknowledges it back. Laid out for the 720 x 408
+    pixels the Web entity gets on the 0.30 x 0.17 m desk glass (piano-core.mjs DISPLAY_PIXELS).
+    Self-contained: no external fonts, scripts or images.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=720, height=408, initial-scale=1">
+<title>Piano Desk Display</title>
+<style>
+    :root {
+        --glass: #0b0d10;
+        --line: #7d8690;
+        --faint: #3a4049;
+        --text: #d9dee3;
+        --label: #8c95a0;
+        --mark: #e8ecef;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+        margin: 0;
+        width: 720px;
+        height: 408px;
+        overflow: hidden;
+        background: var(--glass);
+        color: var(--text);
+        font: 15px/1.25 "DejaVu Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+    .frame {
+        display: grid;
+        grid-template-columns: 424px 1fr;
+        grid-template-rows: 36px 1fr 30px;
+        gap: 8px;
+        width: 720px;
+        height: 408px;
+        padding: 8px;
+    }
+    /* A wireframe region: dashed outline with its name tagged on the top edge */
+    .region {
+        position: relative;
+        border: 1px dashed var(--line);
+        padding: 18px 10px 8px;
+        min-width: 0;
+    }
+    .region > .tag {
+        position: absolute;
+        top: -8px;
+        left: 8px;
+        padding: 0 4px;
+        background: var(--glass);
+        color: var(--label);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+    .status {
+        grid-column: 1 / 3;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 10px;
+    }
+    .status > .tag { top: -8px; }
+    .indicators { display: flex; gap: 18px; font-size: 13px; }
+    .indicator { display: flex; align-items: center; gap: 6px; }
+    .indicator svg { width: 12px; height: 12px; }
+    .wordmark { font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--label); }
+    .left { display: grid; grid-template-rows: 1fr auto auto; gap: 12px; min-height: 0; }
+    .title { font-size: 24px; margin: 2px 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .composer { color: var(--label); font-size: 15px; }
+    .state {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 1px 8px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        font-size: 13px;
+        text-transform: lowercase;
+    }
+    .bar { height: 10px; border: 1px solid var(--line); margin: 4px 0 6px; }
+    .bar > div { height: 100%; width: 45%; background: repeating-linear-gradient(135deg, var(--line) 0 2px, transparent 2px 6px); }
+    .times { display: flex; justify-content: space-between; font-size: 14px; color: var(--label); }
+    .buttons { display: flex; justify-content: space-between; }
+    button {
+        font: inherit;
+        color: var(--text);
+        background: transparent;
+        border: 1px solid var(--line);
+        cursor: pointer;
+    }
+    button:active { background: var(--faint); }
+    .transport button {
+        width: 72px;
+        height: 56px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        font-size: 12px;
+    }
+    .transport svg { width: 22px; height: 22px; }
+    .songs { display: flex; flex-direction: column; min-height: 0; }
+    .songs ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+    .songs button {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        text-align: left;
+        padding: 4px 8px;
+        border-color: var(--faint);
+    }
+    .songs button.current { border-color: var(--mark); border-width: 2px; padding: 3px 7px; }
+    .songs .song { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+    .songs .by { grid-column: 1; color: var(--label); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .songs .length { grid-column: 2; grid-row: 1 / 3; align-self: center; padding-left: 8px; font-size: 13px; color: var(--label); }
+    .more { margin-top: auto; padding-top: 4px; font-size: 12px; color: var(--label); }
+    .footer {
+        grid-column: 1 / 3;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 10px;
+        border: 1px solid var(--faint);
+        font-size: 12px;
+        color: var(--label);
+    }
+    .footer strong { color: var(--mark); letter-spacing: 0.1em; }
+</style>
+</head>
+<body>
+<main class="frame">
+    <section class="region status" aria-label="Status bar">
+        <span class="tag">status bar</span>
+        <span class="wordmark">Salon grand</span>
+        <span class="indicators">
+            <span class="indicator" title="Orpheus connection (placeholder)">
+                <svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="6" cy="6" r="2" fill="currentColor"/></svg>
+                <span>Orpheus: connected (placeholder)</span>
+            </span>
+            <span class="indicator" title="EventBridge to the piano's client script">
+                <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6h3M8 6h3M4 3.5h4v5H4z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                <span id="bridge">Script: checking</span>
+            </span>
+        </span>
+    </section>
+
+    <div class="left">
+        <section class="region now" aria-label="Now playing">
+            <span class="tag">now playing</span>
+            <div class="title">Gymnopedie No. 1</div>
+            <div class="composer">Erik Satie</div>
+            <span class="state">playing</span>
+        </section>
+
+        <section class="region progress" aria-label="Progress">
+            <span class="tag">progress</span>
+            <div class="bar"><div></div></div>
+            <div class="times"><span>1:24 elapsed</span><span>3:05 total</span></div>
+        </section>
+
+        <section class="region transport" aria-label="Transport">
+            <span class="tag">transport</span>
+            <div class="buttons">
+                <button data-action="previous" aria-label="Previous">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M18 5l-9 7 9 7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                    previous
+                </button>
+                <button data-action="pause" aria-label="Play or pause">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5l9 7-9 7zM15 5v14M20 5v14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                    play/pause
+                </button>
+                <button data-action="stop" aria-label="Stop">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+                    stop
+                </button>
+                <button data-action="next" aria-label="Next">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M6 5l9 7-9 7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                    next
+                </button>
+                <button data-action="replay" aria-label="Replay">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 1 0 2.1-5M5 4v4h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    replay
+                </button>
+            </div>
+        </section>
+    </div>
+
+    <section class="region songs" aria-label="Song list">
+        <span class="tag">song list</span>
+        <ul>
+            <li><button data-song="1"><span class="song">Ode to Joy</span><span class="by">Beethoven</span><span class="length">0:16</span></button></li>
+            <li><button data-song="2" class="current"><span class="song">Gymnopedie No. 1</span><span class="by">Erik Satie</span><span class="length">3:05</span></button></li>
+            <li><button data-song="3"><span class="song">Clair de Lune</span><span class="by">Debussy</span><span class="length">5:02</span></button></li>
+            <li><button data-song="4"><span class="song">Prelude in C</span><span class="by">J. S. Bach</span><span class="length">2:20</span></button></li>
+            <li><button data-song="5"><span class="song">Nocturne Op. 9 No. 2</span><span class="by">Chopin</span><span class="length">4:33</span></button></li>
+        </ul>
+        <div class="more">+7 more (scrolls)</div>
+    </section>
+
+    <footer class="footer">
+        <span><strong>WIREFRAME</strong> &middot; placeholder data &middot; buttons send a web event only</span>
+        <span id="last">no button pressed yet</span>
+    </footer>
+</main>
+<script>
+    "use strict";
+    // Interface injects EventBridge into Web entity pages; a desktop browser preview has none.
+    var bridge = typeof EventBridge !== "undefined" ? EventBridge : null;
+    var bridgeText = document.getElementById("bridge");
+    var lastText = document.getElementById("last");
+    bridgeText.textContent = bridge ? "Script: connected" : "Script: none (browser preview)";
+
+    function send(event) {
+        var message = JSON.stringify(event);
+        lastText.textContent = "sent " + event.action + (event.songId ? " " + event.songId : "");
+        if (bridge) {
+            bridge.emitWebEvent(message);
+        } else {
+            console.log("piano-display", message);
+        }
+    }
+
+    if (bridge) {
+        bridge.scriptEventReceived.connect(function (message) {
+            try {
+                var reply = JSON.parse(message);
+                if (reply && reply.type === "piano-display-ack") {
+                    lastText.textContent = "script acknowledged " + reply.action + (reply.songId ? " " + reply.songId : "");
+                }
+            } catch (e) {
+                // Not ours
+            }
+        });
+    }
+
+    document.querySelectorAll("[data-action]").forEach(function (button) {
+        button.addEventListener("click", function () {
+            send({ type: "piano-display", action: button.getAttribute("data-action") });
+        });
+    });
+    document.querySelectorAll("[data-song]").forEach(function (button) {
+        button.addEventListener("click", function () {
+            send({ type: "piano-display", action: "play-song", songId: Number(button.getAttribute("data-song")) });
+        });
+    });
+</script>
+</body>
+</html>
