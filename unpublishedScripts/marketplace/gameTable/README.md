@@ -2,7 +2,7 @@
 
 Two tables live here:
 
-- **The referee** (`*.mjs`): Connect Four and checkers refereed by the entity script server, so
+- **The referee** (`*.mjs`): Connect Four, checkers and chess refereed by the entity script server, so
   humans and AI agents can play each other through the same board. The referee owns the game;
   players only ask it to act, and it checks who is asking.
 - **The original physics table** (`*.js`, `games/`, below): checkers, chess, dominoes, dice and
@@ -12,7 +12,7 @@ Two tables live here:
 
 | File | Runs in | What it is |
 | --- | --- | --- |
-| `connect4.mjs`, `checkers.mjs` | anywhere | The rules of each game: pure functions over an immutable state, no engine globals, behind one contract (below) |
+| `connect4.mjs`, `checkers.mjs`, `chess.mjs` | anywhere | The rules of each game: pure functions over an immutable state, no engine globals, behind one contract (below) |
 | `game-registry.mjs` | anywhere | The games a board can play, by name: each game's rules, its layout, and for 8x8 games its piece models and how its notation maps to squares |
 | `referee-core.mjs` | anywhere | Seats, turns, the clock, draw offers, rematches and the published state, for any game; side effects go through an injected world adapter |
 | `status-text.mjs` | anywhere | What `GT.Status` shows |
@@ -62,11 +62,28 @@ Entities.addEntity({
 });
 ```
 
+A chess board is the same flat Box with `game: "chess"`. White (seat 0) plays from the edge
+facing the rezzer, so rank 1 is nearest you:
+
+```js
+Entities.addEntity({
+    type: "Box",
+    name: "Game Table: Chess",
+    position: Vec3.sum(MyAvatar.position, Vec3.multiply(0.8, Quat.getFront(MyAvatar.orientation))),
+    rotation: Quat.cancelOutRollAndPitch(MyAvatar.orientation),
+    dimensions: { x: 0.6, y: 0.04, z: 0.6 },
+    color: { red: 60, green: 40, blue: 25 },
+    serverScripts: "https://<asset-host>/gameTable/gametable-referee.mjs",
+    script: "https://<asset-host>/gameTable/gametable-client.mjs",
+    userData: JSON.stringify({ gameTableConfig: { game: "chess", turnTimeoutS: 600 } })
+});
+```
+
 `gameTableConfig` is read once, when the script loads:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `game` | `"connect4"` | `"connect4"` or `"checkers"`. Any other value (including `"chess"` until chess is registered in `game-registry.mjs`) logs a warning and plays Connect Four |
+| `game` | `"connect4"` | `"connect4"`, `"checkers"` or `"chess"`. Any other value logs a warning and plays Connect Four |
 | `turnTimeoutS` | 180 | How long the player to move has before forfeiting |
 | `waitTimeoutS` | 600 | How long a lone player keeps a seat |
 
@@ -107,8 +124,9 @@ the avatar's orientation, and seat 1 from the -z edge):
   (`ignorePickIntersection`) so a click on a piece lands on its tile. Checkers men are the red and
   black checker models; a king is the same model stretched to two and a half times the height. A
   move edits the piece entities rather than deleting and adding them: the moving piece's entity
-  goes to its landing square (and changes model or size when crowned), the captured pieces'
-  entities are deleted.
+  goes to its landing square (and changes model or size when crowned or promoted), the captured
+  pieces' entities are deleted, and castling moves the rook's entity too. Chess pieces are the
+  `assets/chess/lowPoly` models, White's turned half round to face Black.
 - `GT.Seat0` and `GT.Seat1`: seat buttons at each player's edge, to their right, reading "Play"
   and the side's name ("Play Black", "Play Red" for checkers).
 
@@ -140,7 +158,7 @@ so one player cannot act for another.
 
 | Method | Params | Accepted when |
 | --- | --- | --- |
-| `join` | `[name, seat?]` | The table is `waiting` and the seat is free. `seat` is `"0"` or `"1"` (Red or Black in Connect Four, Black or Red in checkers); absent or `""` takes the first free seat. Idempotent for a seated caller, whatever seat it asks for. The second join starts the game. `name` is cosmetic, at most 32 characters |
+| `join` | `[name, seat?]` | The table is `waiting` and the seat is free. `seat` is `"0"` or `"1"` (Red or Black in Connect Four, Black or Red in checkers, White or Black in chess); absent or `""` takes the first free seat. Idempotent for a seated caller, whatever seat it asks for. The second join starts the game. `name` is cosmetic, at most 32 characters |
 | `move` | `[move]` | The game is `playing`, the caller holds the seat to move, and `move` is one of `legal` in the game's notation (below). The text is cut to 64 characters before it is parsed |
 | `draw` | `[]` | The game is `playing` and the caller is seated. With the opponent's offer standing, the game ends drawn (`agreement`); otherwise the caller's offer is recorded as `drawOffer` and published. The opponent moving declines it; offering again while your own offer stands does nothing |
 | `leave` | `[]` | The caller is seated. In a game in progress the caller resigns and the opponent wins. The seat is freed and the table waits for a new opponent |
@@ -149,7 +167,7 @@ so one player cannot act for another.
 
 Rematches follow the game. Connect Four alternates the first move: the same seats, and whoever
 moved second moves first, on `newGame` and also when a new opponent joins someone who has just
-played. In checkers (and chess) side 0 always moves first, and a rematch between the same two
+played. In checkers and chess side 0 always moves first, and a rematch between the same two
 players (`newGame`) swaps their seats instead. A new opponent joining a player who has just
 finished takes the seat they chose (or the free one), and nobody swaps. An emptied table starts
 over: seat 0 moves first.
@@ -171,11 +189,17 @@ the referee notices a player has gone.
 | --- | --- | --- |
 | Connect Four | The column, exactly one digit `0`-`6` | `"3"` |
 | Checkers | PDN square numbers 1-32 (1-4 along Black's home row, 29-32 along Red's): `a-b` for a step, `axb` for a jump, every landing square for a multi-jump. Exactly `^\d{1,2}(-\d{1,2}\|(x\d{1,2})+)$`, and only as `legal` lists it | `"11-15"`, `"22x15"`, `"22x15x6"` |
+| Chess | UCI long algebraic, lowercase: from-square and to-square, castling as the king's two-square move, and a promotion with the piece's letter, which every promotion needs (`e7e8` alone is illegal). Exactly `^[a-h][1-8][a-h][1-8][qrbn]?$` | `"e2e4"`, `"e1g1"`, `"e7e8q"`, `"a2a1n"` |
 
 Checkers is English draughts (American checkers): Black (seat 0) moves first. Men move and
 capture diagonally forward, kings both ways, one square at a time (no flying kings). Capturing is
 compulsory, and a jump sequence continues while it can, though any sequence may be chosen (no
 majority rule). A man reaching the far row is crowned and the move ends there.
+
+Chess follows the FIDE Laws: White (seat 0) moves first; castling (not out of, through or into
+check, and only while the king and that rook have not moved), en passant on the very next move
+only, and promotion to a queen, rook, bishop or knight. `last.san` gives each move in standard
+algebraic notation too (`Nf3`, `exd6`, `O-O`, `e8=Q+`, `Rd8#`).
 
 ### State
 
@@ -226,20 +250,42 @@ and for checkers (after Black's `11-15`):
 }
 ```
 
+and for chess (after White's `e2e4`), with two more fields:
+
+```json
+{
+    "gameTable": {
+        "v": 1,
+        "game": "chess",
+        "phase": "playing",
+        "toMove": 1,
+        "moveNo": 1,
+        "rows": ["rnbqkbnr", "pppppppp", "........", "........", "....P...", "........", "PPPP.PPP", "RNBQKBNR"],
+        "legal": ["a7a5", "a7a6", "b7b5", "b7b6", "b8a6", "b8c6", "...", "h7h5", "h7h6"],
+        "last": { "seat": 0, "move": "e2e4", "san": "e4" },
+        "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+        "check": false,
+        "...": "the other fields as above"
+    }
+}
+```
+
 `v` stays 1 for every game: readers switch on `game`.
 
 | Field | Meaning |
 | --- | --- |
-| `game` | `"connect4"` or `"checkers"` |
+| `game` | `"connect4"`, `"checkers"` or `"chess"` |
 | `phase` | `waiting` (seats filling; may still show the last game's board and result), `playing`, `over`, or `offline` (the referee script is not running) |
-| `seats` | `null` when free. `session` is the player's session ID, which is the avatar ID other avatars see. Seat 0 is Red in Connect Four and Black in checkers; seat index and side index are the same |
+| `seats` | `null` when free. `session` is the player's session ID, which is the avatar ID other avatars see. Seat 0 is Red in Connect Four, Black in checkers and White in chess; seat index and side index are the same |
 | `toMove` | The seat to move while `playing`, else `null` |
-| `rows` | The board, top row first. Connect Four: six strings of seven, `.` empty, `R`, `B`. Checkers: eight strings of eight, Black's home row first, `.` empty or light, `b` / `r` men, `B` / `R` kings |
-| `legal` | While `playing`, else `[]`. Connect Four: the columns with room, as numbers. Checkers: the legal moves in notation, sorted as strings |
-| `last` | The last move. Connect Four: `{ seat, col, row }`, the disc and the row it landed on. Checkers: `{ seat, move }` with the move in notation |
+| `rows` | The board, top row first. Connect Four: six strings of seven, `.` empty, `R`, `B`. Checkers: eight strings of eight, Black's home row first, `.` empty or light, `b` / `r` men, `B` / `R` kings. Chess: eight strings of eight, rank 8 first (a8 to h8), FEN letters (`KQRBNP` White, `kqrbnp` Black), `.` empty |
+| `legal` | While `playing`, else `[]`. Connect Four: the columns with room, as numbers. Checkers and chess: the legal moves in notation, sorted as strings |
+| `last` | The last move. Connect Four: `{ seat, col, row }`, the disc and the row it landed on. Checkers: `{ seat, move }` with the move in notation. Chess: `{ seat, move, san }`, `san` the same move in standard algebraic notation |
 | `drawOffer` | The seat whose draw offer stands while `playing`, else `null` |
 | `result` | `null`, or `{ "winner": 0 \| 1 \| null, "reason": ..., "line": [[row, col], ...] \| null }`; `line` is Connect Four's four winning cells (the first line found, if a move made two), else `null` |
 | `turnDeadline` | Epoch milliseconds when the player to move forfeits, while `playing` |
+| `fen` | Chess only: the position in Forsyth-Edwards Notation (the en passant square after every two-square pawn move, as FEN has it) |
+| `check` | Chess only: whether the side to move is in check |
 
 `result.reason`:
 
@@ -250,13 +296,18 @@ and for checkers (after Black's `11-15`):
 | `no moves` | checkers | The side to move has no legal move (blocked, or no pieces left) and loses |
 | `repetition` | checkers | `null`: the same position, with the same side to move, for the third time |
 | `forty-move` | checkers | `null`: 80 plies without a capture or a man moving |
+| `checkmate` | chess | The side that gave mate |
+| `stalemate` | chess | `null`: the side to move has no legal move and is not in check |
+| `repetition` | chess | `null`: the same position for the third time: same placement, side to move and castling rights, and the same en passant capture, counted only when one is actually legal |
+| `fifty-move` | chess | `null`: 100 plies without a pawn move or a capture (a mate on the hundredth ply still wins) |
+| `material` | chess | `null`: neither side can mate: K v K, K+B v K, K+N v K, or K+B v K+B with the bishops on the same colour |
 | `agreement` | any | `null`: a draw offer was accepted |
 | `timeout` | any | The opponent of the player who ran out of time |
 | `resign` | any | The opponent of the player who left |
 | `abandoned` | any | `null`: the referee unloaded or died mid-game |
 
-Checkers' repetition and forty-move draws are applied automatically, because an agent has no way
-to claim one. Chess will add `checkmate`, `stalemate`, `repetition`, `fifty-move` and `material`.
+Checkers' repetition and forty-move draws, and chess's repetition and fifty-move draws, are applied
+automatically rather than claimed as FIDE has it, because an agent has no claim action.
 
 The state is output only. The referee never reads it back as input (anyone who can edit the board
 can change `userData`), and its next write repairs any change. The one exception is at load: a
@@ -278,7 +329,8 @@ sender ID is whatever the sending client wrote.
 `reason` for `rejected` is one of: `no caller id`, `table full`, `seat taken`, `seat must be 0 or 1`,
 `game not started`, `game over`, `game not over`, `not seated`, `not your turn`, `illegal move`
 (well formed but not legal), the game's notation hint when the move does not parse
-(`column must be one digit 0-6`, `move must be like 11-15 or 22x15x6`), and Connect Four's
+(`column must be one digit 0-6`, `move must be like 11-15 or 22x15x6`,
+`move must be like e2e4 or e7e8q`), and Connect Four's
 `column full`.
 
 ### Playing as a human
@@ -286,7 +338,7 @@ sender ID is whatever the sending client wrote.
 1. Rez the board with both scripts set, as above: `serverScripts` (the referee) and `script` (the
    client). Within a few seconds the status display, the click targets or tiles, the two seat
    buttons and the pieces appear.
-2. Click a seat button, "Play Red" or "Play Black" (or point a hand controller at it and pull the
+2. Click a seat button, such as "Play Red" or "Play Black" (or point a hand controller at it and pull the
    trigger). The referee seats you in that seat under your display name, unless someone already
    holds it. When both seats are taken the game starts.
 3. On your turn an announcement says "Your turn".
@@ -298,6 +350,10 @@ sender ID is whatever the sending client wrote.
      too and the squares the paths go through next light up green: click the one you mean (again,
      until only one path is left). Clicking another of your pieces selects it instead; clicking
      anything else (another square, another entity, or nothing) clears the selection.
+   - Chess: the same: click a piece, then one of its green squares. To castle, click the king and
+     then the square two along (g1 or c1, g8 or c8): the rook follows. En passant is the pawn's
+     diagonal step onto the empty square behind the pawn it takes. A pawn promoted by click
+     always becomes a queen; only an agent can under-promote (with `e7e8n` and the like).
 
 Click your own seat button again to leave. In a game in progress leaving resigns, so the first
 click only announces "Click your seat again within 5 s to resign the game", and a second click
@@ -353,7 +409,7 @@ If Interface's entity script allowlist is enabled, it must admit the client's UR
 An agent is a player like any other: its session ID is its seat. The referee neither knows nor
 cares which players are AI. From an Agent assignment client script, with `chooseMove` the agent's
 own (it picks one of `message.legal`, a column number in Connect Four and a notation string in
-checkers). The channel name comes from the board's state. The same state can arrive more than
+checkers and chess). The channel name comes from the board's state. The same state can arrive more than
 once (after `state`, a repeated `join`, a draw offer, or a refused call), so the agent plays each
 turn once:
 
@@ -391,7 +447,7 @@ agent can read the game (`look()` for `GT.Status`, `inspect_entity` for `userDat
 
 ### Adding a game
 
-A rules module exports the contract `connect4.mjs` and `checkers.mjs` implement, and the core
+A rules module exports the contract `connect4.mjs`, `checkers.mjs` and `chess.mjs` implement, and the core
 plays it without looking at the board:
 
 | Export | What it is |
@@ -403,7 +459,7 @@ plays it without looking at the board:
 | `newGame(firstSide = 0)` | A new state: plain JSON, never mutated |
 | `sideToMove(state)` | `0` or `1` |
 | `legalMoves(state)` | Sorted notation strings; `[]` once the game is over |
-| `play(state, text)` | `{ state, move }` or `{ error }` (`MOVE_HINT`, or `"illegal move"`); `move` is `{ side, notation, san?, from?, to?, path?, captured, promoted? }` with cells as `[row, col]` |
+| `play(state, text)` | `{ state, move }` or `{ error }` (`MOVE_HINT`, or `"illegal move"`); `move` is `{ side, notation, san?, from?, to?, path?, captured, promoted?, castle? }` with cells as `[row, col]`; `castle` is chess's `{ rookFrom, rookTo }` |
 | `outcome(state)` | `null`, or `{ winner, reason, line }` |
 | `rows(state)` | The board as strings, top row first |
 | `render(state)` | The board as monospace text with coordinates, for `GT.Status` |
@@ -411,14 +467,19 @@ plays it without looking at the board:
 
 Register it in `GAMES` in `game-registry.mjs`. An 8x8 game uses the `"grid"` layout and adds
 `rowZeroSide` (the side whose home row is row 0 of `rows`), `cells` (notation to the squares a
-move passes through, for the client) and `pieces` (each `rows` character's model and size in
-square widths). Chess is meant to plug in this way, with `uciCells` already there for its
-notation; until it is registered, `"chess"` falls back to Connect Four.
+move passes through, for the client) and `pieces` (each `rows` character's model, its size in
+square widths, and optionally its rotation on the board). Chess registers this way: `uciCells`
+for its notation and the `assets/chess/lowPoly` models sized from the `assets/chess/*.json`
+descriptors, White's turned half round to face Black. The layout draws from the `move` that
+`play` returns, so castling's rook (`move.castle`), the pawn taken en passant (`move.captured`)
+and a promotion's new model need nothing per game.
 
 ### Limits
 
 - Humans have no draw or rematch button (above).
-- A timeout is a loss even when the winner could not mate.
+- A timeout is a loss even when the winner could not mate (FIDE would draw a chess game lost on
+  time when the opponent has no mating material; the referee does not).
+- Chess promotion by click is always to a queen; agents can under-promote.
 - Checkers kings are drawn as a stretched checker, not a stacked pair of models.
 
 ### Development

@@ -1,7 +1,7 @@
 {
     "name": "overte-game-table",
     "private": true,
-    "description": "Game Table referee for Overte: Connect Four rules, a serverScripts referee and the client entity script for human players. Node runs the tests only; it is never a runtime dependency.",
+    "description": "Game Table referee for Overte: Connect Four, checkers and chess rules, a serverScripts referee and the client entity script for human players. Node runs the tests only; it is never a runtime dependency.",
     "license": "Apache-2.0",
     "type": "module",
     "scripts": {
