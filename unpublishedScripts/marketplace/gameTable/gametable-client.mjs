@@ -21,7 +21,8 @@
 //  shown; every action goes to the referee, which checks the caller.
 //
 
-import { SEAT_NAMES, channelFor } from "./referee-core.mjs";
+import { channelFor } from "./referee-core.mjs";
+import { gameEntry } from "./game-registry.mjs";
 
 const COLUMN = /^GT\.Col([0-6])$/;
 const SEAT = /^GT\.Seat([01])$/;
@@ -70,6 +71,7 @@ function sameSession(a, b) {
  * @returns {string}
  */
 function statusFor(state, mine) {
+    const SEAT_NAMES = gameEntry(state.game).entry.rules.SEAT_NAMES;
     if (state.phase === "offline") {
         return OFFLINE_TEXT;
     }

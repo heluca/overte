@@ -209,7 +209,7 @@ test("the sweep runs for the whole search window and deletes discs that arrive l
     engine.runTimer(referee.searchTimer);
     [...stale, duplicate].forEach(id => assert.equal(engine.entities.has(id), false));
     assert.deepEqual(engine.discs().map(disc => disc.name), ["GT.Disc r5c4"]);
-    assert.equal(engine.entities.has(referee.discs.get("r5c4").id), true);
+    assert.equal(engine.entities.has(referee.layout.discs.get("r5c4").id), true);
     // After the window it stops, and creates no second display
     engine.Script.clearTimeout(referee.searchTimer);
     referee.findChildren(0);
@@ -343,4 +343,12 @@ test("adopted children are brought back to the current layout and client script"
     assert.ok(engine.entities.get(seat).localPosition.x > 0.35);
     assert.ok(engine.entities.get(status).localPosition.y > fresh.localPosition.y);
     assert.equal(engine.entities.get(status).script, undefined);
+});
+
+test("an unknown game in the config logs a warning and plays Connect Four", () => {
+    const engine = fakeEngine(JSON.stringify({ gameTableConfig: { game: "go" } }));
+    loaded(engine);
+    assert.ok(engine.printed.some(line => /unknown game "go", playing connect4/.test(line)));
+    assert.equal(engine.projection().game, "connect4");
+    assert.equal(engine.named("GT.Col0").length, 1);
 });

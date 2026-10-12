@@ -6,8 +6,9 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
-//  The Connect Four referee without the engine: seats, turns, clock and the published
-//  projection. Every side effect goes through an injected world adapter, so the core runs
+//  The referee without the engine: seats, turns, clock and the published projection, for any
+//  game whose rules module follows the contract connect4.mjs documents (the core never looks
+//  at a board; the rules decide legality and the result). Every side effect goes through an injected world adapter, so the core runs
 //  under Node with a fake world and a fake clock:
 //
 //      now()             -> epoch milliseconds
@@ -21,11 +22,9 @@
 //  node). Nothing in a method's string arguments can name or impersonate a seat.
 //
 
-import { PIECES, newBoard, legalMoves, parseColumn, applyMove, winner, isDraw, render } from "./connect4.mjs";
+import * as connect4 from "./connect4.mjs";
 
 export const PROTOCOL_VERSION = 1;
-export const GAME = "connect4";
-export const SEAT_NAMES = ["Red", "Black"];
 export const DEFAULT_TIMEOUTS = { turnTimeoutS: 180, waitTimeoutS: 600, overIdleS: 300 };
 export const NAME_LIMIT = 32;
 
@@ -67,6 +66,24 @@ function copyResult(result) {
 }
 
 /**
+ * @param {Move} move
+ * @returns {{ seat: number, col: number, row: number }} Connect Four's `last`
+ */
+function lastDisc(move) {
+    const [row, col] = /** @type {number[]} */ (move.to);
+    return { seat: move.side, col, row };
+}
+
+/**
+ * @param {Move} move
+ * @returns {{ seat: number, move: string, san?: string }} the `last` of every other game
+ */
+function lastMove(move) {
+    return move.san === undefined ? { seat: move.side, move: move.notation }
+        : { seat: move.side, move: move.notation, san: move.san };
+}
+
+/**
  * @param {unknown} caller
  * @returns {caller is string}
  */
@@ -86,9 +103,14 @@ function cleanName(name, caller) {
 
 /**
  * @typedef {{ session: string, name: string, joinedAt: number }} Seat
- * @typedef {{ winner: number | null, reason: "four" | "draw" | "timeout" | "resign" | "abandoned",
- *     line: number[][] | null }} Result
- * @typedef {{ seat: number, col: number, row: number }} Move
+ * @typedef {{ winner: number | null, reason: string, line: number[][] | null }} Result
+ * @typedef {{ side: number, notation: string, san?: string, from?: number[], to?: number[],
+ *     path?: number[][], captured: unknown, promoted?: unknown }} Move
+ * @typedef {{ GAME: string, SEAT_NAMES: string[], REMATCH: string, MOVE_HINT: string,
+ *     newGame(firstSide?: number): any, sideToMove(state: any): number, legalMoves(state: any): string[],
+ *     play(state: any, text: unknown): { state: any, move: Move } | { error: string },
+ *     outcome(state: any): { winner: number | null, reason: string, line: number[][] | null } | null,
+ *     rows(state: any): string[], render(state: any): string, extra(state: any): object }} Rules
  * @typedef {"waiting" | "playing" | "over" | "offline"} Phase
  * @typedef {{ type: string } & Record<string, unknown>} Announcement
  * @typedef {{ now(): number, publish(state: object): void,
@@ -98,8 +120,7 @@ function cleanName(name, caller) {
 
 export class RefereeCore {
     // Game fields; resetTable() puts them back to these values.
-    board = newBoard();
-    toMove = 0;
+    /** @type {any} the rules module's state, never mutated */ game;
     moveNo = 0;
     /** @type {Move[]} */ history = [];
     /** @type {Result | null} */ result = null;
@@ -110,10 +131,13 @@ export class RefereeCore {
 
     /**
      * @param {World} world
-     * @param {{ tableId?: string, turnTimeoutS?: unknown, waitTimeoutS?: unknown, overIdleS?: unknown }} [options]
+     * @param {{ tableId?: string, rules?: Rules, turnTimeoutS?: unknown, waitTimeoutS?: unknown, overIdleS?: unknown }} [options]
      */
     constructor(world, options = {}) {
         this.world = world;
+        /** @type {Rules} */
+        this.rules = options.rules || connect4;
+        this.game = this.rules.newGame(0);
         this.tableId = options.tableId || "";
         this.channel = channelFor(this.tableId);
         this.turnTimeoutMs = seconds(options.turnTimeoutS, DEFAULT_TIMEOUTS.turnTimeoutS) * 1000;
@@ -130,8 +154,7 @@ export class RefereeCore {
 
     /** Clears the board and the last result; seats are left to the caller. */
     resetTable() {
-        this.board = newBoard();
-        this.toMove = 0;
+        this.game = this.rules.newGame(0);
         this.moveNo = 0;
         this.history = [];
         this.result = null;
@@ -141,7 +164,12 @@ export class RefereeCore {
         this.idleDeadline = null;
     }
 
-    /** @private Empties the table: no seats, a clear board, and Red moves first in the next game. */
+    /** @returns {number} the side (and seat) to move */
+    get toMove() {
+        return this.rules.sideToMove(this.game);
+    }
+
+    /** @private Empties the table: no seats, a clear board, and seat 0 moves first in the next game. */
     clearTable() {
         this.seats = [null, null];
         this.phase = "waiting";
@@ -203,10 +231,10 @@ export class RefereeCore {
 
     /**
      * @param {string | undefined} caller
-     * @param {string | undefined} column one digit 0-6
+     * @param {string | undefined} text the move in the game's notation, untrusted
      * @returns {boolean}
      */
-    move(caller, column) {
+    move(caller, text) {
         this.expire();
         if (!isCaller(caller)) {
             return this.reject(caller, "move", "no caller id");
@@ -221,24 +249,17 @@ export class RefereeCore {
         if (seat !== this.toMove) {
             return this.reject(caller, "move", "not your turn");
         }
-        const col = parseColumn(column);
-        if (col === null) {
-            return this.reject(caller, "move", "column must be one digit 0-6");
-        }
-        const played = applyMove(this.board, col, PIECES[seat]);
+        const played = this.rules.play(this.game, text);
         if ("error" in played) {
             return this.reject(caller, "move", played.error);
         }
-        this.board = played.board;
+        this.game = played.state;
         this.moveNo++;
-        this.history.push({ seat, col, row: played.row });
-        const won = winner(this.board);
-        if (won) {
-            this.end(seat, "four", won.line);
-        } else if (isDraw(this.board)) {
-            this.end(null, "draw", null);
+        this.history.push(played.move);
+        const over = this.rules.outcome(this.game);
+        if (over) {
+            this.end(over.winner, over.reason, over.line);
         } else {
-            this.toMove = 1 - seat;
             this.turnDeadline = this.world.now() + this.turnTimeoutMs;
             this.changed();
         }
@@ -359,27 +380,32 @@ export class RefereeCore {
     /** @returns {object} the state readers see, in userData and on the channel */
     projection() {
         const playing = this.phase === "playing";
+        const legal = playing ? this.rules.legalMoves(this.game) : [];
+        const last = this.history.length ? this.history[this.history.length - 1] : null;
+        // Connect Four keeps the shape it was published with: columns as numbers, the last disc's cell
+        const legacy = this.rules.GAME === connect4.GAME;
         return {
             v: PROTOCOL_VERSION,
-            game: GAME,
+            game: this.rules.GAME,
             gameId: this.gameId,
             phase: this.phase,
             seats: this.seatList(),
             toMove: playing ? this.toMove : null,
             moveNo: this.moveNo,
-            rows: this.board.slice(),
-            legal: playing ? legalMoves(this.board) : [],
-            last: this.history.length ? { ...this.history[this.history.length - 1] } : null,
+            rows: this.rules.rows(this.game),
+            legal: legacy ? legal.map(Number) : legal,
+            last: last && (legacy ? lastDisc(last) : lastMove(last)),
             result: copyResult(this.result),
             turnDeadline: playing ? this.turnDeadline : null,
-            channel: this.channel
+            channel: this.channel,
+            ...this.rules.extra(this.game)
         };
     }
 
     /** @returns {string} the status board, monospace, as shown on the table's Text child */
     statusText() {
-        const names = this.seats.map((seat, i) => SEAT_NAMES[i] + ": " + (seat ? seat.name : "(empty)"));
-        return [names.join("   "), this.statusLine(), render(this.board)].join("\n");
+        const names = this.seats.map((seat, i) => this.rules.SEAT_NAMES[i] + ": " + (seat ? seat.name : "(empty)"));
+        return [names.join("   "), this.statusLine(), this.rules.render(this.game)].join("\n");
     }
 
     /** @private */
@@ -387,7 +413,7 @@ export class RefereeCore {
         if (this.phase === "playing") {
             const left = Math.max(0, Math.ceil(((this.turnDeadline ?? 0) - this.world.now()) / 1000));
             const shown = Math.ceil(left / COUNTDOWN_STEP_S) * COUNTDOWN_STEP_S;
-            return `${SEAT_NAMES[this.toMove]} to move (move ${this.moveNo + 1}, ${shown} s)`;
+            return `${this.rules.SEAT_NAMES[this.toMove]} to move (move ${this.moveNo + 1}, ${shown} s)`;
         }
         if (this.phase === "over" && this.result) {
             return this.resultLine(this.result) + "; newGame to play again";
@@ -405,9 +431,9 @@ export class RefereeCore {
         if (result.winner === null) {
             return result.reason === "draw" ? "Draw" : "Game abandoned";
         }
-        const loser = SEAT_NAMES[1 - result.winner];
-        const why = result.reason === "four" ? REASON_TEXT.four : loser + " " + REASON_TEXT[result.reason];
-        return `${SEAT_NAMES[result.winner]} wins (${why})`;
+        const names = this.rules.SEAT_NAMES;
+        const why = result.reason === "four" ? REASON_TEXT.four : names[1 - result.winner] + " " + REASON_TEXT[result.reason];
+        return `${names[result.winner]} wins (${why})`;
     }
 
     /**
@@ -425,7 +451,7 @@ export class RefereeCore {
         this.resetTable();
         this.phase = "playing";
         this.gameId = this.tableId + ":" + now;
-        this.toMove = this.firstSeat;
+        this.game = this.rules.newGame(this.firstSeat);
         this.firstSeat = 1 - this.firstSeat;
         this.turnDeadline = now + this.turnTimeoutMs;
     }
@@ -485,6 +511,6 @@ export class RefereeCore {
     /** @private */
     draw() {
         this.lastText = this.statusText();
-        this.world.render({ text: this.lastText, board: this.board.slice(), line: copyResult(this.result)?.line ?? null });
+        this.world.render({ text: this.lastText, board: this.rules.rows(this.game), line: copyResult(this.result)?.line ?? null });
     }
 }
