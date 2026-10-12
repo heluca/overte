@@ -13,7 +13,8 @@
 //      GT.Seat<n>  a seat button: a click joins seat n, or leaves it when already seated there
 //                  (during a game, which resigns it, only on a second click within 5 s)
 //      (other)     the board itself: listens on the board's channel, announces what concerns
-//                  this user, and highlights the legal columns while it is their turn
+//                  this user, and highlights the legal columns while it is their turn; on an
+//                  8x8 board it also takes the clicks on the squares (client-grid.mjs)
 //
 //  The client holds no game state of its own: it reads the board's userData and the channel,
 //  never writes either, and edits only the local entities it creates for the highlights. Channel
@@ -23,6 +24,7 @@
 
 import { channelFor } from "./referee-core.mjs";
 import { gameEntry } from "./game-registry.mjs";
+import { GridClient } from "./client-grid.mjs";
 
 const COLUMN = /^GT\.Col([0-6])$/;
 const SEAT = /^GT\.Seat([01])$/;
@@ -121,6 +123,7 @@ export default class GameTableClient {
     highlights = new Map();
     /** @type {number[]} */ wanted = [];
     /** @type {number | null} */ retryTimer = null;
+    /** @type {GridClient | null} the 8x8 board's clicks and highlights, once its state shows one */ grid = null;
     resignUntil = 0;
 
     /** @param {Uuid} entityID */
@@ -153,6 +156,10 @@ export default class GameTableClient {
         }
         this.highlights.forEach(shown => Entities.deleteEntity(shown.id));
         this.highlights.clear();
+        if (this.grid) {
+            this.grid.stop();
+            this.grid = null;
+        }
     }
 
     /** @param {Uuid} _id @param {PointerEvent} event */
@@ -247,7 +254,15 @@ export default class GameTableClient {
         this.shown = status;
         this.seated = mine >= 0;
         const myTurn = state.phase === "playing" && mine >= 0 && state.toMove === mine;
-        this.highlight(myTurn && Array.isArray(state.legal) ? state.legal : []);
+        const entry = gameEntry(state.game).entry;
+        if (entry.layout === "grid") {
+            if (!this.grid) {
+                this.grid = new GridClient(this.boardID, entry.cells);
+            }
+            this.grid.update(state, myTurn);
+        } else {
+            this.highlight(myTurn && Array.isArray(state.legal) ? state.legal : []);
+        }
     }
 
     /**

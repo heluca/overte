@@ -22,6 +22,10 @@
         "status-text.mjs",
         "referee-core.mjs",
         "game-registry.mjs",
+        "grid-select.mjs",
+        "layout-connect4.mjs",
+        "layout-grid.mjs",
+        "client-grid.mjs",
         "gametable-client.mjs"
     ]
 }

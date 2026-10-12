@@ -22,6 +22,7 @@
         "referee-core.mjs",
         "game-registry.mjs",
         "layout-connect4.mjs",
+        "layout-grid.mjs",
         "gametable-referee.mjs"
     ]
 }

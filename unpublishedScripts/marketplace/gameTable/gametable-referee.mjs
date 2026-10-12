@@ -21,6 +21,7 @@
 import { RefereeCore, channelFor } from "./referee-core.mjs";
 import { gameEntry } from "./game-registry.mjs";
 import { Connect4Layout, STATUS_NAME } from "./layout-connect4.mjs";
+import { GridLayout } from "./layout-grid.mjs";
 
 const HERE = import.meta.url.replace(/[^/]*$/, "");
 const TICK_MS = 1000;
@@ -52,7 +53,7 @@ export default class GameTableReferee {
     /** @type {string} */ channel;
     /** @type {Vec3} */ dimensions;
     /** @type {RefereeCore} */ core;
-    /** @type {Connect4Layout} */ layout;
+    /** @type {Connect4Layout | GridLayout} */ layout;
     /** @type {number} */ timer;
     /** @type {number | null} */ searchTimer = null;
     /** @type {Map<string, Uuid>} child name -> the one child of that name */ fixed = new Map();
@@ -83,7 +84,9 @@ export default class GameTableReferee {
         if (!game.known) {
             print("Game table " + entityID + ": unknown game " + JSON.stringify(config.game) + ", playing " + game.name);
         }
-        this.layout = new Connect4Layout(entityID, this.dimensions, HERE);
+        const entry = game.entry;
+        this.layout = entry.layout === "grid" ? new GridLayout(entityID, this.dimensions, HERE, entry)
+            : new Connect4Layout(entityID, this.dimensions, HERE);
         this.core = new RefereeCore({
             now: () => Date.now(),
             publish: state => this.publish(state),
@@ -92,7 +95,7 @@ export default class GameTableReferee {
                 this.redraw();
             },
             announce: event => this.announce(event)
-        }, { tableId: entityID, rules: game.entry.rules, turnTimeoutS: config.turnTimeoutS, waitTimeoutS: config.waitTimeoutS });
+        }, { tableId: entityID, rules: entry.rules, turnTimeoutS: config.turnTimeoutS, waitTimeoutS: config.waitTimeoutS });
         this.core.start(userData.gameTable);
         this.timer = Script.setInterval(() => this.core.tick(), TICK_MS);
         this.findChildren(Date.now() + CHILD_SEARCH_MS);
@@ -169,8 +172,9 @@ export default class GameTableReferee {
      * children (the status display, the click targets and the seat buttons), delete any
      * duplicate of them, any piece this instance did not create (left by one that died without
      * unloading) and any other "GT." child (left by another game). Each fixed child is created
-     * only if none turned up. An adopted child is brought back to the current layout and client
-     * script URL, so a resized board or a moved asset host leaves nothing stale.
+     * only if none turned up. An adopted child is brought back to the current layout, look and
+     * client script URL, so a resized board, a moved asset host or a change of game leaves
+     * nothing stale.
      * @param {number} deadline
      */
     findChildren(deadline) {
@@ -183,10 +187,9 @@ export default class GameTableReferee {
                 const adopted = this.fixed.get(name);
                 if (adopted === undefined) {
                     this.fixed.set(name, id);
-                    const { localPosition, dimensions, script } =
+                    const { type, name: _name, parentID, ...current } =
                         /** @type {Partial<Entities.EntityProperties_Box>} */ (this.layout.fixedProperties(name));
-                    Entities.editEntity(id, script === undefined
-                        ? { localPosition, dimensions } : { localPosition, dimensions, script });
+                    Entities.editEntity(id, current);
                 } else if (adopted !== id) {
                     Entities.deleteEntity(id);
                 }
