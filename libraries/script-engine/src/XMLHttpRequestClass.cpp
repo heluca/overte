@@ -210,8 +210,7 @@ void XMLHttpRequestClass::send(const ScriptValue& data) {
 }
 
 void XMLHttpRequestClass::doSend() {
-    // After the metaverse token and the script's own header, either of which wins. Looked up again for the new URL when
-    // requestMetaDataChanged() follows a redirect itself.
+    // After the metaverse token and the script's own header, either of which wins
     if (!_authorization.isEmpty() || !_request.hasRawHeader("Authorization")) {
         _authorization = ScriptCredentials::find(_request.url(), _credentialScope);
         // A null value removes the header

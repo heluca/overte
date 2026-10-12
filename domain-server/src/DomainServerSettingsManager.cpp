@@ -42,6 +42,7 @@
 
 #include "DomainServerNodeData.h"
 #include "NodePermissions.h"
+#include "SettingsPasswordColumns.h"
 
 const QString SETTINGS_DESCRIPTION_RELATIVE_PATH = "/resources/describe-settings.json";
 const QString SETTINGS_PATH = "/settings";
@@ -61,8 +62,6 @@ const QString CONTENT_SETTING_FLAG_KEY = "content_setting";
 // A setting held for assignment clients alone: sent to a requester the gatekeeper admitted as an assignment client of the
 // requested type, and to the settings page with its password columns masked
 const QString DESCRIPTION_ASSIGNMENT_ONLY_KEY = "assignment-only";
-const QString PASSWORD_COLUMN_TYPE = "password";
-const QString PASSWORD_COLUMN_MASK = "******";
 static const QString SPLIT_MENU_GROUPS_DOMAIN_SETTINGS_KEY = "domain_settings";
 static const QString SPLIT_MENU_GROUPS_CONTENT_SETTINGS_KEY = "content_settings";
 
@@ -1498,75 +1497,6 @@ bool DomainServerSettingsManager::restoreSettingsFromObject(QJsonObject settings
         persistToFile();
         return true;
     }
-}
-
-static QStringList passwordColumns(const QJsonObject& settingDescription) {
-    QStringList columns;
-    for (const QJsonValue& column : settingDescription[DESCRIPTION_COLUMNS_KEY].toArray()) {
-        if (column.toObject()[SETTING_DESCRIPTION_TYPE_KEY].toString() == PASSWORD_COLUMN_TYPE) {
-            columns.append(column.toObject()[DESCRIPTION_NAME_KEY].toString());
-        }
-    }
-    return columns;
-}
-
-// The settings page shows a table's password columns masked, and posts the mask back for rows it did not add
-static QJsonValue maskPasswordColumns(const QJsonValue& table, const QJsonObject& settingDescription) {
-    const QStringList columns = passwordColumns(settingDescription);
-    if (columns.isEmpty() || !table.isArray()) {
-        return table;
-    }
-    QJsonArray masked;
-    for (const QJsonValue& row : table.toArray()) {
-        QJsonObject rowObject = row.toObject();
-        for (const QString& column : columns) {
-            if (!rowObject[column].toString().isEmpty()) {
-                rowObject[column] = PASSWORD_COLUMN_MASK;
-            }
-        }
-        masked.append(rowObject);
-    }
-    return masked;
-}
-
-// A posted row that carries the mask keeps the password of a saved row whose other columns are all the same; a row whose
-// other columns changed loses it, so a secret is never moved to where a row now points without being entered again
-static QJsonArray restorePasswordColumns(const QJsonArray& posted, const QVariantList& saved,
-                                         const QJsonObject& settingDescription) {
-    const QStringList columns = passwordColumns(settingDescription);
-    if (columns.isEmpty()) {
-        return posted;
-    }
-    QVariantList unclaimed = saved;
-    QJsonArray restored;
-    for (const QJsonValue& row : posted) {
-        QJsonObject rowObject = row.toObject();
-        bool isMasked = std::any_of(columns.begin(), columns.end(), [&rowObject](const QString& column) {
-            return rowObject[column].toString() == PASSWORD_COLUMN_MASK;
-        });
-        if (isMasked) {
-            auto match = std::find_if(unclaimed.begin(), unclaimed.end(), [&](const QVariant& savedRow) {
-                QJsonObject savedObject = QJsonObject::fromVariantMap(savedRow.toMap());
-                for (const QString& name : rowObject.keys()) {
-                    if (!columns.contains(name) && savedObject[name] != rowObject[name]) {
-                        return false;
-                    }
-                }
-                return true;
-            });
-            QJsonObject savedObject = match != unclaimed.end() ? QJsonObject::fromVariantMap(match->toMap()) : QJsonObject();
-            for (const QString& column : columns) {
-                if (rowObject[column].toString() == PASSWORD_COLUMN_MASK) {
-                    rowObject[column] = savedObject[column].toString();
-                }
-            }
-            if (match != unclaimed.end()) {
-                unclaimed.erase(match);
-            }
-        }
-        restored.append(rowObject);
-    }
-    return restored;
 }
 
 QJsonObject DomainServerSettingsManager::settingsResponseObjectForType(const QString& typeValue,
