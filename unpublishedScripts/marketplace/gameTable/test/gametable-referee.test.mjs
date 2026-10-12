@@ -13,78 +13,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const BOARD = "{b0a4d000-0000-4000-8000-000000000000}";
+import { BOARD, fakeEngine } from "./fake-engine.mjs";
+
 const ALICE = "{aaaaaaaa-0000-4000-8000-000000000001}";
 const BOB = "{bbbbbbbb-0000-4000-8000-000000000002}";
-
-function fakeEngine(boardUserData = "", locked = false, dimensions = { x: 0.7, y: 0.6, z: 0.04 }) {
-    let nextId = 1;
-    const entities = new Map([[BOARD, {
-        name: "Board", dimensions, userData: boardUserData, locked
-    }]]);
-    const engine = {
-        entities,
-        sent: [],
-        printed: [],
-        boardEdits: 0,
-        timers: new Map(),
-        Entities: {
-            addEntity(properties) {
-                const id = `{00000000-0000-4000-8000-${String(nextId++).padStart(12, "0")}}`;
-                entities.set(id, { ...properties });
-                return id;
-            },
-            editEntity(id, properties) {
-                if (id === BOARD) {
-                    engine.boardEdits++;
-                }
-                Object.assign(entities.get(id), properties);
-                return id;
-            },
-            deleteEntity(id) { entities.delete(id); },
-            getEntityProperties(id, names) {
-                const entity = entities.get(id) || {};
-                return Object.fromEntries(names.map(name => [name, entity[name]]));
-            },
-            getChildrenIDs(parentID) {
-                return [...entities].filter(([, entity]) => entity.parentID === parentID).map(([id]) => id);
-            }
-        },
-        Messages: { sendMessage(channel, message) { engine.sent.push({ channel, message: JSON.parse(message) }); } },
-        Script: {
-            remoteCallerID: undefined,
-            setInterval(callback) { engine.timers.set(nextId, callback); return nextId++; },
-            setTimeout(callback) { engine.timers.set(nextId, callback); return nextId++; },
-            clearInterval(id) { engine.timers.delete(id); },
-            clearTimeout(id) { engine.timers.delete(id); }
-        },
-        print(text) { engine.printed.push(text); },
-        // As the entity script server does: the caller id is set only while the method runs
-        call(referee, caller, method, params = []) {
-            engine.Script.remoteCallerID = caller;
-            referee[method](BOARD, params);
-            engine.Script.remoteCallerID = undefined;
-        },
-        named(name) {
-            return [...entities.values()].filter(entity => entity.name === name);
-        },
-        discs() {
-            return [...entities.values()].filter(entity => (entity.name || "").startsWith("GT.Disc "));
-        },
-        projection() { return JSON.parse(entities.get(BOARD).userData).gameTable; },
-        // A child the entity server delivers after preload has started
-        arrive(name) {
-            return engine.Entities.addEntity({ name, parentID: BOARD });
-        },
-        runTimer(id) {
-            const callback = engine.timers.get(id);
-            engine.timers.delete(id);
-            callback();
-        }
-    };
-    Object.assign(globalThis, { Entities: engine.Entities, Messages: engine.Messages, Script: engine.Script, print: engine.print });
-    return engine;
-}
 
 const { default: GameTableReferee } = await import("../gametable-referee.mjs");
 
@@ -117,7 +49,7 @@ test("preload publishes into userData without losing other keys and creates one 
     assert.deepEqual(engine.sent[0], { channel: "gametable:" + BOARD, message: { type: "state", ...userData.gameTable } });
 });
 
-test("seats come from Script.remoteCallerID and moves drop disc models on the board", () => {
+test("seats come from Script.remoteCallerID and moves drop discs on the board", () => {
     const engine = fakeEngine();
     const referee = loaded(engine);
     engine.call(referee, ALICE, "join", ["Alice"]);
@@ -129,7 +61,8 @@ test("seats come from Script.remoteCallerID and moves drop disc models on the bo
     const discs = engine.discs();
     assert.deepEqual(discs.map(disc => disc.name).sort(), ["GT.Disc r4c3", "GT.Disc r5c3"]);
     const red = discs.find(disc => disc.name === "GT.Disc r5c3");
-    assert.match(red.modelURL, /\/assets\/checkers\/red_checker\.fbx$/);
+    assert.equal(red.shape, "Cylinder");
+    assert.ok(red.color.red > 150 && red.color.green < 80);
     assert.equal(red.parentID, BOARD);
     assert.equal(red.collisionless, true);
     assert.equal(red.localPosition.x, 0);
@@ -157,19 +90,20 @@ test("a call without a caller id is refused and announced on the channel", () =>
     assert.deepEqual(engine.projection().seats, [null, null]);
 });
 
-test("the winning line is drawn larger, and a rematch clears the discs", () => {
+test("the winning line gets a ring behind each disc, and a rematch clears discs and rings", () => {
     const engine = fakeEngine();
     const referee = loaded(engine);
     engine.call(referee, ALICE, "join", ["Alice"]);
     engine.call(referee, BOB, "join", ["Bob"]);
     [0, 1, 0, 1, 0, 1, 0].forEach((col, i) => engine.call(referee, i % 2 ? BOB : ALICE, "move", [String(col)]));
-    const discs = engine.discs();
-    assert.equal(discs.length, 7);
-    const winning = discs.filter(disc => disc.name.endsWith("c0"));
-    const other = discs.find(disc => disc.name.endsWith("c1"));
-    winning.forEach(disc => assert.ok(disc.dimensions.x > other.dimensions.x));
+    assert.equal(engine.discs().length, 7);
+    const rings = () => [...engine.entities.values()].filter(entity => (entity.name || "").startsWith("GT.Win "));
+    assert.deepEqual(rings().map(ring => ring.name).sort(), ["GT.Win r2c0", "GT.Win r3c0", "GT.Win r4c0", "GT.Win r5c0"]);
+    rings().forEach(ring => assert.equal(ring.parentID, BOARD));
+    assert.equal(referee.layout.pieceIDs().size, 11, "the sweep keeps the rings");
     engine.call(referee, BOB, "newGame");
     assert.equal(engine.discs().length, 0);
+    assert.equal(rings().length, 0);
     assert.equal(engine.projection().toMove, 1);
 });
 
@@ -454,9 +388,12 @@ test("switching a board's game removes the other game's children", () => {
     const engine = fakeEngine("", false, FLAT);
     loaded(engine);
     assert.equal(engine.named("GT.Col3").length, 1);
+    assert.equal(engine.named("GT.Hole r5c6").length, 1);
     engine.entities.get(BOARD).userData = CHECKERS;
     loaded(engine);
     assert.equal(engine.named("GT.Col3").length, 0);
+    const toy = [...engine.entities.values()].filter(entity => /^GT\.(Hole|Frame|Base)/.test(entity.name || ""));
+    assert.deepEqual(toy, [], "no holes, rails or base on the 8x8 board");
     assert.equal(engine.named("GT.Seat0").length, 1);
     assert.equal(engine.named("GT.Seat0")[0].text, "Play Black", "an adopted seat button takes the game's look");
     assert.equal(engine.named("GT.Sq r4c4").length, 1);

@@ -161,6 +161,7 @@ function moveCells(move) {
 
 export class GridLayout {
     /** @type {Map<string, { id: Uuid, piece: string }>} cell -> piece entity */ pieces = new Map();
+    /** @type {Color | null} the board keeps the colour it was rezzed with */ boardColor = null;
 
     /**
      * @param {Uuid} boardID

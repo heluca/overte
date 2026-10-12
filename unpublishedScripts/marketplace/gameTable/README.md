@@ -18,7 +18,7 @@ Two tables live here:
 | `status-text.mjs` | anywhere | What `GT.Status` shows |
 | `grid-select.mjs` | anywhere | Turning clicks on an 8x8 board into one of the legal moves |
 | `gametable-referee.mjs` | entity script server | The board's `serverScripts`: the remotely callable methods, the child sweep, and the adapter over `Entities`, `Messages` and `Script` |
-| `layout-connect4.mjs`, `layout-grid.mjs` | entity script server | Where each board's children go, and drawing its pieces: the upright Connect Four board, and the flat 8x8 board |
+| `layout-connect4.mjs`, `layout-grid.mjs` | entity script server | Where each board's children go, and drawing its pieces: the upright Connect Four board (drawn like the toy), and the flat 8x8 board |
 | `gametable-client.mjs`, `client-grid.mjs` | Interface | The client entity `script` of the board, its click targets and its seat buttons: clicks become server method calls, and the channel becomes announcements and highlights |
 
 The modules need the fork's ES module support for entity scripts (`.mjs` `serverScripts` and
@@ -39,7 +39,6 @@ Entities.addEntity({
     position: Vec3.sum(MyAvatar.position, Vec3.multiply(1.5, Quat.getFront(MyAvatar.orientation))),
     rotation: MyAvatar.orientation,
     dimensions: { x: 0.75, y: 0.65, z: 0.04 },
-    color: { red: 30, green: 60, blue: 160 },
     serverScripts: "https://<asset-host>/gameTable/gametable-referee.mjs",
     script: "https://<asset-host>/gameTable/gametable-client.mjs",
     userData: JSON.stringify({ gameTableConfig: { turnTimeoutS: 180, waitTimeoutS: 600 } })
@@ -96,20 +95,39 @@ children and lays out its own.
   channel, `GT.Status` and the pieces work), but it logs a warning, shows `BOARD LOCKED` on
   `GT.Status`, and leaves `userData` alone.
 - The operator should rez the table: whoever can edit the board can change its `serverScripts`.
+- A Connect Four board needs no `color`: the referee paints the Box the toy's blue (`{ red: 20,
+  green: 80, blue: 190 }`) when it loads, unless it already is (or the board is locked), and
+  colours the rest of the toy from that blue. The 8x8 board keeps the colour it was rezzed with.
 
 The children are found by name, so a reload does not duplicate them. On a Connect Four board
-(upright, the disc grid across its front face, 7 columns across `x`, 6 rows down `y`):
+(upright, the disc grid across both faces, 7 columns across `x`, 6 rows down `y`), drawn like the
+toy: a blue grid with a dark hole at every cell, between two side rails, on a base. Sizes follow
+the board's: in cells (the smaller of the column and row pitch) and board thicknesses, so a board
+rezzed twice the size looks the same, twice as big. All but the column markers and seat buttons
+are collisionless, not grabbable and ignore picks.
 
 - `GT.Status`: a Text entity above the board, in Inconsolata, showing the seats, whose turn it is
   with the time left, a standing draw offer, the result, and the board as text. `look()` returns
-  Text, so an agent can read the game without inspecting the board.
-- `GT.Disc r<row>c<col>`: one red or black checker model per disc, collisionless and not
-  grabbable. The discs of a winning line are drawn larger. Row 0 is the top row.
-- `GT.Col0` to `GT.Col6`: column targets, a strip of small boxes just above the board's top edge,
-  one over each column, between the board and `GT.Status`.
+  Text, so an agent can read the game without inspecting the board. It and the seat buttons are
+  the 8x8 boards' sizes on the board above (cells 0.75 / 7 m wide) and scale with the cells.
+- `GT.Hole r<row>c<col>`: 42 flat Shape cylinders through the board, 0.76 of a cell across, a
+  little deeper than the board so they show on both faces, unlit and nearly black (the board's
+  blue at 18%). Row 0 is the top row.
+- `GT.Frame L`, `GT.Frame R` and `GT.Base`: Boxes for the side rails (from the base up past the
+  top edge, thicker than the grid, the board's blue at 70%) and the base the grid stands on
+  (wider than the rails and deeper, at 50%).
+- `GT.Disc r<row>c<col>`: one flat Shape cylinder per disc, 0.8 of a cell across so it covers
+  its hole, and thicker still so it stands proud of both faces. Red, or charcoal for Black (not
+  black, so a disc never reads as an empty hole).
+- `GT.Win r<row>c<col>`: once a line of four wins, an unlit gold ring behind each of its discs
+  (a cylinder 0.96 of a cell across, between the hole and the disc in depth). A move adds one
+  disc; a win adds the four rings.
+- `GT.Col0` to `GT.Col6`: column targets, light Shape cones pointing down at each column just
+  above the board's top edge, between the board and `GT.Status`. A cone is picked by its
+  bounding box, so the whole box is the target.
 - `GT.Seat0` and `GT.Seat1`: seat buttons, Text entities reading "Play Red" and "Play Black" to
-  the left and right of the board's bottom corners. They are labelled buttons rather than the old
-  table's chair models by decision: a label says what a click does.
+  the left and right of the base, standing on its floor. They are labelled buttons rather than the
+  old table's chair models by decision: a label says what a click does.
 
 On an 8x8 board (flat: the playing surface is the Box's local +y face, the squares across local
 `x` and `z`; seat 0 plays from the +z edge, which faces the rezzer when the board is rezzed with
@@ -136,7 +154,7 @@ script (see "Playing as a human").
 
 When the referee loads, it sweeps the board's children for a few seconds while the entity server
 delivers them. It adopts its layout's fixed children (`GT.Status`, the click targets or tiles,
-and the seat buttons), and deletes any duplicate of them, any piece it did not create, and any
+the seat buttons, and Connect Four's holes, rails and base), and deletes any duplicate of them, any piece it did not create, and any
 other `GT.` child (left by another game). An adopted child gets its position, size, look and (for
 the clickables) `script` set again from the current layout, so a resized board, a moved asset
 host or a change of game leaves nothing stale. Whichever fixed child it has not found by the end
@@ -342,8 +360,8 @@ sender ID is whatever the sending client wrote.
    trigger). The referee seats you in that seat under your display name, unless someone already
    holds it. When both seats are taken the game starts.
 3. On your turn an announcement says "Your turn".
-   - Connect Four: the columns you can play light up green. Click the target above a column to
-     drop a disc there.
+   - Connect Four: the markers over the columns you can play light up green. Click the marker
+     above a column to drop a disc there.
    - Checkers: click one of your pieces (or its square). Its square lights up yellow and the
      squares it can move to green; click one to play the move. For a multi-jump, click the square
      the piece finally lands on. If two different jump paths end there, that square turns yellow
@@ -375,8 +393,8 @@ name:
   the user with `Window.displayAnnouncement`: whose turn it is, a draw offer, waiting for an
   opponent, the result, losing the seat, the referee going offline, and refusals addressed to the
   user's session ID. Spectators get no announcement for every move. While it is the user's turn
-  it highlights where they can play: a green box around each legal column target, or the
-  selection and its destinations on an 8x8 board. These highlights are local entities: the user
+  it highlights where they can play: a green copy of each legal column marker, grown round it,
+  or the selection and its destinations on an 8x8 board. These highlights are local entities: the user
   sees them, nobody else does, and they need no edit rights. They ignore picks, so the click goes
   through to the target or tile. A target or tile that has not reached the client yet is looked
   for again every second; a highlight whose target is deleted moves to the one that replaces it.

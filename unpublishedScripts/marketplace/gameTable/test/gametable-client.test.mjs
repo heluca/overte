@@ -93,7 +93,7 @@ function fakeEngine(gameTable = projection()) {
         },
         // What the referee's child sweep leaves on the board
         child(name) {
-            return engine.Entities.addEntity({ name, parentID: BOARD, dimensions: { x: 0.08, y: 0.05, z: 0.04 } });
+            return engine.Entities.addEntity({ name, parentID: BOARD, shape: "Cone", dimensions: { x: 0.08, y: 0.05, z: 0.04 } });
         },
         // A message as the messages mixer delivers it to every handler in the engine
         deliver(channel, message) {
@@ -224,6 +224,7 @@ test("a state message announces the turn and highlights the legal columns on loc
         assert.equal(h.ignorePickIntersection, true);
         assert.equal(h.parentID, targets[Number(h.name.slice(-1))]);
         assert.ok(h.dimensions.x > 0.08);
+        assert.deepEqual([h.type, h.shape], ["Shape", "Cone"], "the target's own shape, grown round it");
     });
     // The same state again (after a `state` call or a repeated join) is not announced twice
     engine.deliver(CHANNEL, { type: "state", ...projection({ phase: "playing", seats: SEATED, toMove: 0, legal: [0, 2, 5] }) });
