@@ -9,7 +9,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planPieces, cellOffset, cellKey } from "../layout-grid.mjs";
+import { planPieces, cellOffset, cellKey, GridLayout } from "../layout-grid.mjs";
+import { GAMES } from "../game-registry.mjs";
+import { newGame, play, rows, fromFen } from "../chess.mjs";
 
 const EMPTY_ROW = "........";
 
@@ -117,4 +119,43 @@ test("chess moves: castling moves king and rook, en passant removes the victim, 
         { op: "move", from: "r1c1", to: "r0c0", piece: "Q" },
         { op: "remove", from: "r0c0" }
     ]);
+});
+
+test("chess moves as chess.mjs reports them take the move path", () => {
+    /** @param {string} fen @param {string} text */
+    const plan = (fen, text) => {
+        const state = fromFen(fen);
+        const result = play(state, text);
+        assert.ok("move" in result, text);
+        return planPieces(shownFor(rows(state)), rows(result.state), result.move);
+    };
+    assert.deepEqual(plan("r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1", "e8c8"), [
+        { op: "move", from: "r0c4", to: "r0c2", piece: "k" },
+        { op: "move", from: "r0c0", to: "r0c3", piece: "r" }
+    ]);
+    assert.deepEqual(plan("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 2", "e5d6"), [
+        { op: "move", from: "r3c4", to: "r2c3", piece: "P" },
+        { op: "remove", from: "r3c3" }
+    ]);
+    assert.deepEqual(plan("3r3k/4P3/8/8/8/8/8/4K3 w - - 0 1", "e7d8n"), [
+        { op: "move", from: "r1c4", to: "r0c3", piece: "N" },
+        { op: "remove", from: "r0c3" }
+    ]);
+});
+
+test("chess pieces stand on their squares, White's turned to face Black", () => {
+    const layout = new GridLayout("{board}", { x: 0.6, y: 0.04, z: 0.6 }, "https://<asset-host>/gameTable/", GAMES.chess);
+    const board = rows(newGame());
+    const king = layout.pieceProperties("r7c4", board[7][4]);
+    const queen = layout.pieceProperties("r0c3", board[0][3]);
+    assert.ok(king && queen);
+    assert.equal(king.modelURL, "https://<asset-host>/gameTable/assets/chess/lowPoly/king_lt.fbx");
+    assert.equal(queen.modelURL, "https://<asset-host>/gameTable/assets/chess/lowPoly/queen_dk.fbx");
+    assert.deepEqual(king.localRotation, { x: 0, y: 1, z: 0, w: 0 });
+    assert.equal(queen.localRotation, undefined);
+    // e1 is at White's (+z) edge, d8 at Black's; the king stands on the surface, taller than wide
+    assert.ok(king.localPosition.z > 0.25 && queen.localPosition.z < -0.25);
+    assert.ok(Math.abs(king.localPosition.y - (0.02 + 0.004 + king.dimensions.y / 2)) < 1e-9);
+    assert.ok(king.dimensions.y > king.dimensions.x && king.dimensions.x < 0.075);
+    assert.equal(king.ignorePickIntersection, true);
 });

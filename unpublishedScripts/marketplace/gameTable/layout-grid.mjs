@@ -35,6 +35,7 @@ const SEAT_GAP = 0.02;
 const SEAT_LINE_HEIGHT = 0.03;
 // A half turn about y: seat 1's button reads from the -z edge.
 const HALF_TURN = { x: 0, y: 1, z: 0, w: 0 };
+const UNROTATED = { x: 0, y: 0, z: 0, w: 1 };
 /** @type {Record<string, { backgroundColor: Color, textColor: Color }>} */
 const SEAT_COLORS = {
     Black: { backgroundColor: { red: 15, green: 15, blue: 15 }, textColor: { red: 240, green: 240, blue: 240 } },
@@ -43,8 +44,9 @@ const SEAT_COLORS = {
 };
 
 /**
- * @typedef {{ model: string, size: Vec3 }} PieceLook model relative to the referee's directory;
- *     size in square widths
+ * @typedef {{ model: string, size: Vec3, rotation?: { x: number, y: number, z: number, w: number } }} PieceLook
+ *     model relative to the referee's directory; size in square widths; rotation relative to the
+ *     board (none: unrotated)
  * @typedef {{ rules: { SEAT_NAMES: string[] }, rowZeroSide: number, pieces: Record<string, PieceLook> }} GridGame
  * @typedef {{ from: number[], to: number[], captured?: number[][],
  *     castle?: { rookFrom: number[], rookTo: number[] } }} MoveCells the move just played, as
@@ -255,7 +257,7 @@ export class GridLayout {
                     y: height / 2 + SEAT_SIZE.y / 2,
                     z: side * (depth / 2 + SEAT_GAP + SEAT_SIZE.z / 2)
                 },
-                localRotation: seat === 0 ? { x: 0, y: 0, z: 0, w: 1 } : HALF_TURN,
+                localRotation: seat === 0 ? UNROTATED : HALF_TURN,
                 dimensions: SEAT_SIZE,
                 lineHeight: SEAT_LINE_HEIGHT,
                 backgroundAlpha: 1,
@@ -312,8 +314,10 @@ export class GridLayout {
             }
             if (op.op === "move") {
                 const { id, piece } = /** @type {{ id: Uuid, piece: string }} */ (lifted.get(op.from));
-                const { name, localPosition, dimensions, modelURL } = properties;
-                Entities.editEntity(id, piece === op.piece ? { name, localPosition } : { name, localPosition, dimensions, modelURL });
+                const { name, localPosition, localRotation, dimensions, modelURL } = properties;
+                // A reused entity can change colour, so a new piece always sets its rotation
+                Entities.editEntity(id, piece === op.piece ? { name, localPosition }
+                    : { name, localPosition, localRotation: localRotation || UNROTATED, dimensions, modelURL });
                 this.pieces.set(op.to, { id, piece: op.piece });
             } else {
                 this.pieces.set(op.to, { id: Entities.addEntity(properties), piece: op.piece });
@@ -340,6 +344,7 @@ export class GridLayout {
             parentID: this.boardID,
             modelURL: this.base + look.model,
             localPosition: this.position(row, col, TILE_HEIGHT + size.y / 2),
+            ...(look.rotation ? { localRotation: look.rotation } : {}),
             dimensions: size,
             collisionless: true,
             dynamic: false,

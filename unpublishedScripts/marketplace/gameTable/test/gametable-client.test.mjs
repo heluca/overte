@@ -12,6 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as chess from "../chess.mjs";
 
 const BOARD = "{b0a4d000-0000-4000-8000-000000000000}";
 const CHANNEL = "gametable:" + BOARD;
@@ -493,4 +494,19 @@ test("tiles that reach the client after a click get their highlights on a retry"
     engine.runTimers();
     assert.equal(engine.highlights().length, 3);
     assert.equal(engine.timers.size, 0);
+});
+
+test("on a chess board, the king then its castling square castles; a promotion by click is a queen", () => {
+    const position = chess.fromFen("r3k2r/1P6/8/8/8/8/8/R3K2R w KQkq - 0 1");
+    const engine = fakeEngine(projection({ game: "chess", rows: chess.rows(position), phase: "playing", seats: SEATED,
+        toMove: 0, legal: chess.legalMoves(position) }));
+    const squares = tiles(engine);
+    load(BOARD);
+    assert.deepEqual(engine.announced, ["Your turn (White)"]);
+    engine.press(squares.get("r7c4"));
+    assert.ok(engine.highlights().some(h => h.name === "GT.Highlight r7c6"), "g1 is offered");
+    engine.press(squares.get("r7c6"));
+    engine.press(squares.get("r1c1"));
+    engine.press(squares.get("r0c0"));
+    assert.deepEqual(engine.calls.map(call => call.params[0]), ["e1g1", "b7a8q"]);
 });

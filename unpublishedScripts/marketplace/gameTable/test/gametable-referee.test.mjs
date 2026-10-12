@@ -489,3 +489,47 @@ test("a crowning capture on the board keeps the capturer's entity and deletes th
     assert.ok(engine.entities.get(red.id).dimensions.y > 2 * manHeight);
     assert.equal(pieces(engine).length, 2);
 });
+
+test("a chess board: 32 pieces, White's facing Black; en passant, castling and promotion redraw them", () => {
+    const engine = fakeEngine(JSON.stringify({ gameTableConfig: { game: "chess" } }), false, FLAT);
+    const referee = loaded(engine);
+    assert.equal(pieces(engine).length, 32);
+    assert.equal(engine.named("GT.Seat0")[0].text, "Play White");
+    const king = engine.named("GT.Pc r7c4")[0];
+    assert.match(king.modelURL, /\/assets\/chess\/lowPoly\/king_lt\.fbx$/);
+    assert.deepEqual(king.localRotation, { x: 0, y: 1, z: 0, w: 0 });
+    assert.ok(king.localPosition.z > 0.25, "rank 1 at seat 0's edge");
+    engine.call(referee, ALICE, "join", ["Alice"]);
+    engine.call(referee, BOB, "join", ["Bob"]);
+    let ply = 0;
+    const play = (/** @type {string[]} */ moves) => moves.forEach(move => engine.call(referee, ply++ % 2 ? BOB : ALICE, "move", [move]));
+    play(["e2e4", "d7d5", "e4e5", "f7f5", "e5f6"]);
+    const state = engine.projection();
+    assert.deepEqual(state.last, { seat: 0, move: "e5f6", san: "exf6" });
+    assert.equal(state.fen, "rnbqkbnr/ppp1p1pp/5P2/3p4/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 3");
+    assert.equal(state.check, false);
+    assert.equal(engine.named("GT.Pc r3c5").length, 0, "the pawn taken en passant is gone");
+    assert.equal(pieces(engine).length, 31);
+    const rook = referee.layout.pieces.get("r7c7").id;
+    play(["b8c6", "g1f3", "c6b8", "f1e2", "b8c6", "e1g1"]);
+    assert.equal(engine.projection().last.san, "O-O");
+    assert.equal(engine.entities.get(rook).name, "GT.Pc r7c5", "the rook moved with the king");
+    play(["c6b8", "f6g7", "b8c6"]);
+    const pawn = referee.layout.pieces.get("r1c6").id;
+    const victim = referee.layout.pieces.get("r0c7").id;
+    play(["g7h8q"]);
+    assert.equal(engine.projection().last.san, "gxh8=Q");
+    assert.equal(engine.entities.get(pawn).name, "GT.Pc r0c7", "the pawn's entity becomes the queen");
+    assert.match(engine.entities.get(pawn).modelURL, /queen_lt\.fbx$/);
+    assert.deepEqual(engine.entities.get(pawn).localRotation, { x: 0, y: 1, z: 0, w: 0 });
+    assert.equal(engine.entities.has(victim), false, "the rook taken is deleted");
+    assert.equal(pieces(engine).length, 29);
+    // A redraw that reuses a White entity for a Black piece turns it back round
+    const knight = referee.layout.pieces.get("r5c5").id;
+    const board = engine.projection().rows.map((/** @type {string} */ line, /** @type {number} */ row) =>
+        row === 5 ? line.replace("N", ".") : row === 4 ? "n" + line.slice(1) : line);
+    referee.layout.draw({ board, move: null });
+    assert.equal(engine.entities.get(knight).name, "GT.Pc r4c0");
+    assert.match(engine.entities.get(knight).modelURL, /knight_dk\.fbx$/);
+    assert.deepEqual(engine.entities.get(knight).localRotation, { x: 0, y: 0, z: 0, w: 1 });
+});

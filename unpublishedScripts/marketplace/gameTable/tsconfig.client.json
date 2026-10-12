@@ -19,6 +19,7 @@
         "../../../tools/typings/dist/overte-client-entity.d.ts",
         "connect4.mjs",
         "checkers.mjs",
+        "chess.mjs",
         "status-text.mjs",
         "referee-core.mjs",
         "game-registry.mjs",

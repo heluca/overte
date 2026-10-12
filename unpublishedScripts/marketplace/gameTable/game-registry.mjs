@@ -12,23 +12,20 @@
 //
 //  An 8x8 game ("grid" layout, layout-grid.mjs) also says which side's home row is row 0 of its
 //  `rows`, how a move's notation maps to the cells it passes through (for the client's clicks),
-//  and which model draws each piece character. Chess registers here once chess.mjs lands:
-//
-//      chess: { rules: chess, layout: "grid", rowZeroSide: 1, cells: uciCells, pieces: CHESS_PIECES }
-//
-//  with CHESS_PIECES mapping "K", "Q", ... "p" to assets/chess/lowPoly/<piece>_lt.fbx and
-//  _dk.fbx, sized from the assets/chess/*.json descriptors (in square widths).
+//  and which model draws each piece character.
 //
 
 import * as connect4 from "./connect4.mjs";
 import * as checkers from "./checkers.mjs";
+import * as chess from "./chess.mjs";
 
 export const DEFAULT_GAME = "connect4";
 
 /**
  * @typedef {import("./referee-core.mjs").Rules} Rules
- * @typedef {{ model: string, size: Vec3 }} PieceLook the model relative to this directory; its
- *     size in square widths
+ * @typedef {{ model: string, size: Vec3, rotation?: { x: number, y: number, z: number, w: number } }} PieceLook
+ *     the model relative to this directory; its size in square widths; its rotation relative to
+ *     the board (none: unrotated)
  * @typedef {{ rules: Rules, layout: "connect4" }} Connect4Entry
  * @typedef {{ rules: Rules, layout: "grid", rowZeroSide: number, cells: (text: string) => number[][] | null,
  *     pieces: Record<string, PieceLook> }} GridEntry
@@ -46,10 +43,37 @@ const CHECKERS_PIECES = {
     R: { model: "assets/checkers/red_checker.fbx", size: CHECKER_KING }
 };
 
+// The assets/chess/*.json descriptors size the models in metres for the squares of the old
+// table's 1.045 m mat; here they are in square widths. Letter -> model name, width, height.
+const CHESS_SQUARE_M = 1.045 / 8;
+/** @type {Record<string, [string, number, number]>} */
+const CHESS_MODELS = {
+    k: ["king", 0.0715, 0.1983],
+    q: ["queen", 0.0715, 0.1665],
+    r: ["rook", 0.0653, 0.1083],
+    b: ["bishop", 0.0660, 0.1383],
+    n: ["knight", 0.0618, 0.1209],
+    p: ["pawn", 0.0603, 0.0897]
+};
+// The models face their local +z (the knights show it). White (seat 0) plays from the board's
+// +z edge, so White's pieces turn half round to face Black; Black's face White unturned.
+const HALF_TURN = { x: 0, y: 1, z: 0, w: 0 };
+/** @type {Record<string, PieceLook>} */
+export const CHESS_PIECES = Object.fromEntries(Object.entries(CHESS_MODELS).flatMap(([letter, [name, width, height]]) => {
+    const size = { x: width / CHESS_SQUARE_M, y: height / CHESS_SQUARE_M, z: width / CHESS_SQUARE_M };
+    /** @type {[string, PieceLook][]} */
+    const looks = [
+        [letter.toUpperCase(), { model: `assets/chess/lowPoly/${name}_lt.fbx`, size, rotation: HALF_TURN }],
+        [letter, { model: `assets/chess/lowPoly/${name}_dk.fbx`, size }]
+    ];
+    return looks;
+}));
+
 /** @type {Record<string, Entry>} */
 export const GAMES = {
     connect4: { rules: connect4, layout: "connect4" },
-    checkers: { rules: checkers, layout: "grid", rowZeroSide: 0, cells: checkers.moveCells, pieces: CHECKERS_PIECES }
+    checkers: { rules: checkers, layout: "grid", rowZeroSide: 0, cells: checkers.moveCells, pieces: CHECKERS_PIECES },
+    chess: { rules: chess, layout: "grid", rowZeroSide: 1, cells: uciCells, pieces: CHESS_PIECES }
 };
 
 /**

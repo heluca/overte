@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { MovePicker } from "../grid-select.mjs";
 import * as checkers from "../checkers.mjs";
 import { uciCells } from "../game-registry.mjs";
+import * as chess from "../chess.mjs";
 
 const { squareCell, moveCells, legalMoves, fromPosition, newGame } = checkers;
 
@@ -103,4 +104,23 @@ test("no choices, nothing selectable", () => {
     const picking = picker([]);
     assert.equal(clicks(picking, 11, 15), null);
     assert.deepEqual(picking.view(), { selected: [], targets: [] });
+});
+
+test("chess by clicks, from real positions: castling is the king's move; en passant is a pawn's", () => {
+    // [row, col] of an algebraic square, rank 8 on row 0
+    const at = (/** @type {string} */ square) => [8 - Number(square[1]), square.charCodeAt(0) - 97];
+    const fromState = (/** @type {any} */ state) => picker(chess.legalMoves(state), uciCells);
+    const castle = fromState(chess.fromFen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1"));
+    castle.click(at("e1"));
+    for (const square of ["c1", "g1", "d1", "f1"]) {
+        assert.ok(castle.view().targets.some(cell => cell.join() === at(square).join()), square);
+    }
+    assert.equal(castle.click(at("g1")), "e1g1");
+    const passant = fromState(chess.fromFen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 2"));
+    passant.click(at("e5"));
+    assert.deepEqual(passant.view().targets.map(cell => cell.join()).sort(), [at("d6").join(), at("e6").join()].sort());
+    assert.equal(passant.click(at("d6")), "e5d6");
+    const promote = fromState(chess.fromFen("3r3k/4P3/8/8/8/8/8/4K3 w - - 0 1"));
+    promote.click(at("e7"));
+    assert.equal(promote.click(at("d8")), "e7d8q");
 });
