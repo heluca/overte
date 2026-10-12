@@ -8,8 +8,8 @@
 //
 //  The Connect Four board, for the referee, drawn like the toy: the upright Box is the blue
 //  grid, with a dark hole through it at every cell, a rail up each side, a base under it, a
-//  down-pointing marker over each column (the column targets), the status Text above those
-//  and the seat buttons beside the base. The referee entry owns the child sweep and the status
+//  down-pointing marker over each column (the column targets), the status display above those
+//  and the seat buttons beside the base (layout-controls.mjs builds those two). The referee entry owns the child sweep and the status
 //  text; a layout says which children there are, where they go, and draws the pieces.
 //
 //  Local axes: the grid faces +z and -z, columns run across x and rows down y. Sizes are in
@@ -17,10 +17,9 @@
 //  be rezzed at any size. Shape Cylinders and Cones have their axis along their local y.
 //
 
-import { COLUMNS, ROWS, EMPTY } from "./connect4.mjs";
+import { COLUMNS, ROWS, EMPTY, PIECES, SEAT_NAMES as SIDE_NAMES } from "./connect4.mjs";
+import { TableControls, statusSize, seatSize } from "./layout-controls.mjs";
 
-export const STATUS_NAME = "GT.Status";
-const SEAT_NAMES = ["GT.Seat0", "GT.Seat1"];
 const COLUMN_NAMES = Array.from({ length: COLUMNS }, (_, col) => "GT.Col" + col);
 const HOLE_PREFIX = "GT.Hole ";
 const FRAME_NAMES = ["GT.Frame L", "GT.Frame R"];
@@ -84,19 +83,28 @@ const MARKER_GAP = 0.12;
 const QUARTER_TURN_X = { x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 };
 // A half turn about x points a Cone's apex (+y) down.
 const HALF_TURN_X = { x: 1, y: 0, z: 0, w: 0 };
-// The status display and seat buttons are the 8x8 boards' sizes on a board with cells this
-// wide (the README's), and scale with the cells.
+// The seat buttons are their reference size on a board with cells this wide (the README's),
+// and scale with the cells; the status display is as wide as the base.
 const REFERENCE_CELL = 0.75 / COLUMNS;
-const STATUS_SIZE = { x: 1.0, y: 0.4, z: 0.01 };
 const STATUS_GAP = 0.05;
-const STATUS_LINE_HEIGHT = 0.03;
-const SEAT_SIZE = { x: 0.16, y: 0.06, z: 0.01 };
+// Seats, turn and result, the six rows and the column numbers, a locked board's warning (two
+// lines) and one line to spare for a long line that wraps
+const STATUS_LINES = 11;
 const SEAT_GAP = 0.03;
-const SEAT_LINE_HEIGHT = 0.03;
-const SEAT_LOOK = [
-    { text: "Play Red", backgroundColor: { red: 190, green: 30, blue: 30 } },
-    { text: "Play Black", backgroundColor: { red: 15, green: 15, blue: 15 } }
-];
+/** @type {import("./layout-controls.mjs").ControlsLook} */
+const CONTROLS_LOOK = {
+    bezel: FRAME_COLOR,
+    screen: shade(BOARD_COLOR, 0.25),
+    text: { red: 236, green: 242, blue: 255 },
+    title: WIN_COLOR,
+    titleFont: "Roboto",
+    ring: WIN_COLOR,
+    plate: BASE_COLOR,
+    glow: WIN_COLOR,
+    cap: MARKER_COLOR,
+    label: BASE_COLOR,
+    labelFont: "Roboto"
+};
 
 /**
  * @param {number} row
@@ -130,6 +138,8 @@ export class Connect4Layout {
         this.boardID = boardID;
         this.dimensions = dimensions;
         this.clientURL = base + "gametable-client.mjs";
+        const sides = SIDE_NAMES.map((name, seat) => ({ name, color: DISC_COLORS[PIECES[seat]] }));
+        this.controls = new TableControls(boardID, this.clientURL, CONTROLS_LOOK, sides, "CONNECT FOUR");
         this.holeNames = [];
         for (let row = 0; row < ROWS; row++) {
             for (let col = 0; col < COLUMNS; col++) {
@@ -137,7 +147,7 @@ export class Connect4Layout {
             }
         }
         // The children there is exactly one of, created by the referee if none turns up.
-        this.fixedNames = [STATUS_NAME, ...COLUMN_NAMES, ...SEAT_NAMES, ...this.holeNames, ...FRAME_NAMES, BASE_NAME];
+        this.fixedNames = [...this.controls.names, ...COLUMN_NAMES, ...this.holeNames, ...FRAME_NAMES, BASE_NAME];
     }
 
     /**
@@ -166,8 +176,8 @@ export class Connect4Layout {
         return Math.min(this.dimensions.x / COLUMNS, this.dimensions.y / ROWS);
     }
 
-    /** @returns {number} the status display's and seat buttons' scale */
-    get textScale() {
+    /** @returns {number} the seat buttons' scale */
+    get scale() {
         return this.cell / REFERENCE_CELL;
     }
 
@@ -220,13 +230,45 @@ export class Connect4Layout {
     }
 
     /**
+     * @returns {import("./layout-controls.mjs").Placement} the status display above the column
+     *     markers, the seat buttons beside the base
+     */
+    get placement() {
+        const height = this.dimensions.y;
+        const scale = this.scale;
+        const { baseHeight, baseWidth } = this.frame;
+        const status = statusSize(baseWidth, STATUS_LINES);
+        const plate = seatSize(scale);
+        // Standing on the base's floor
+        const seatAt = (/** @type {number} */ side) => ({
+            position: { x: side * (baseWidth / 2 + SEAT_GAP * scale + plate.x / 2), y: plate.y / 2 - height / 2 - baseHeight, z: 0 },
+            facing: 1
+        });
+        return {
+            status: {
+                centre: {
+                    x: 0,
+                    y: height / 2 + (MARKER_GAP + MARKER_SIZE.y) * this.cell + STATUS_GAP * scale + status.height / 2,
+                    z: 0
+                },
+                width: status.width,
+                lines: STATUS_LINES
+            },
+            seats: [seatAt(-1), seatAt(1)],
+            scale
+        };
+    }
+
+    /**
      * @param {string} name one of fixedNames
      * @returns {Entities.EntityProperties} the child to create
      */
     fixedProperties(name) {
+        if (this.controls.has(name)) {
+            return this.controls.properties(name, this.placement);
+        }
         const { x: width, y: height, z: depth } = this.dimensions;
         const cell = this.cell;
-        const scale = this.textScale;
         const { railWidth, baseHeight, baseWidth } = this.frame;
         const markerHeight = MARKER_SIZE.y * cell;
         const hole = this.holeNames.indexOf(name);
@@ -265,66 +307,20 @@ export class Connect4Layout {
             };
         }
         const column = COLUMN_NAMES.indexOf(name);
-        const seat = SEAT_NAMES.indexOf(name);
-        // Humans click these: each runs the client script, which knows its role by its name
-        const clickable = {
+        // A Shape other than a Sphere is picked by its bounding box, so all of it is the target;
+        // it runs the client script, which knows its column by its name
+        return {
             name,
             parentID: this.boardID,
             script: this.clientURL,
             collisionless: true,
-            grab: { grabbable: false, triggerable: true }
-        };
-        if (column >= 0) {
-            // A Shape other than a Sphere is picked by its bounding box, so all of it is the target
-            return {
-                ...clickable,
-                type: "Shape",
-                shape: "Cone",
-                localPosition: { x: this.cellPosition(0, column).x, y: height / 2 + MARKER_GAP * cell + markerHeight / 2, z: 0 },
-                localRotation: HALF_TURN_X,
-                dimensions: { x: MARKER_SIZE.x * cell, y: markerHeight, z: MARKER_SIZE.x * cell },
-                color: MARKER_COLOR
-            };
-        }
-        if (seat >= 0) {
-            const size = scaled(SEAT_SIZE, scale);
-            // Beside the base, standing on the same floor
-            return {
-                ...clickable,
-                type: "Text",
-                localPosition: {
-                    x: (seat === 0 ? -1 : 1) * (baseWidth / 2 + SEAT_GAP * scale + size.x / 2),
-                    y: size.y / 2 - height / 2 - baseHeight,
-                    z: 0
-                },
-                dimensions: size,
-                lineHeight: SEAT_LINE_HEIGHT * scale,
-                textColor: { red: 240, green: 240, blue: 240 },
-                backgroundAlpha: 1,
-                unlit: true,
-                ...SEAT_LOOK[seat]
-            };
-        }
-        const size = scaled(STATUS_SIZE, scale);
-        return {
-            type: "Text",
-            name: STATUS_NAME,
-            parentID: this.boardID,
-            localPosition: {
-                x: 0,
-                y: height / 2 + MARKER_GAP * cell + markerHeight + STATUS_GAP * scale + size.y / 2,
-                z: 0
-            },
-            dimensions: size,
-            font: "Inconsolata",
-            lineHeight: STATUS_LINE_HEIGHT * scale,
-            textColor: { red: 240, green: 240, blue: 240 },
-            backgroundColor: { red: 20, green: 24, blue: 32 },
-            backgroundAlpha: 0.85,
-            unlit: true,
-            billboardMode: "yaw",
-            collisionless: true,
-            grab: { grabbable: false }
+            grab: { grabbable: false, triggerable: true },
+            type: "Shape",
+            shape: "Cone",
+            localPosition: { x: this.cellPosition(0, column).x, y: height / 2 + MARKER_GAP * cell + markerHeight / 2, z: 0 },
+            localRotation: HALF_TURN_X,
+            dimensions: { x: MARKER_SIZE.x * cell, y: markerHeight, z: MARKER_SIZE.x * cell },
+            color: MARKER_COLOR
         };
     }
 

@@ -22,6 +22,8 @@ export function fakeEngine(boardUserData = "", locked = false, dimensions = { x:
         sent: [],
         printed: [],
         boardEdits: 0,
+        // [id, properties] of every edit, in order
+        edits: [],
         timers: new Map(),
         Entities: {
             addEntity(properties) {
@@ -33,6 +35,7 @@ export function fakeEngine(boardUserData = "", locked = false, dimensions = { x:
                 if (id === BOARD) {
                     engine.boardEdits++;
                 }
+                engine.edits.push([id, properties]);
                 Object.assign(entities.get(id), properties);
                 return id;
             },

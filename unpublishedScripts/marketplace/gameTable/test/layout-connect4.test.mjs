@@ -6,8 +6,9 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
-//  The Connect Four board's geometry and look: holes, rails and base, discs, markers and the
-//  winning rings, on the README's board and on a larger one; and the board's own colour.
+//  The Connect Four board's geometry and look: holes, rails and base, discs, markers, the
+//  winning rings and where the seat buttons stand, on the README's board and on a larger one;
+//  and the board's own colour.
 //
 
 import { test } from "node:test";
@@ -140,7 +141,7 @@ for (const [label, size] of [["the README board", README], ["a board twice the s
 
     test(`${label}: column markers point down over each column, under the status display`, () => {
         const layout = layoutFor(size);
-        const status = layout.fixedProperties("GT.Status");
+        const status = layout.fixedProperties("GT.StatusFrame");
         for (let col = 0; col < 7; col++) {
             const marker = layout.fixedProperties("GT.Col" + col);
             const hole = layout.fixedProperties("GT.Hole r0c" + col);
@@ -159,22 +160,20 @@ for (const [label, size] of [["the README board", README], ["a board twice the s
         }
     });
 
-    test(`${label}: seat buttons stand beside the base, sized like the 8x8 boards' at the README's size`, () => {
+    test(`${label}: seat buttons stand beside the base, scaled with the cells`, () => {
         const layout = layoutFor(size);
         const scale = cell / (0.75 / 7);
         const base = layout.fixedProperties("GT.Base");
-        const [red, black] = ["GT.Seat0", "GT.Seat1"].map(name => layout.fixedProperties(name));
-        near(red.dimensions, { x: 0.16 * scale, y: 0.06 * scale, z: 0.01 * scale }, "seat size");
-        assert.ok(Math.abs(red.lineHeight - 0.03 * scale) < EPSILON);
+        const [red, black] = ["GT.Seat0Plate", "GT.Seat1Plate"].map(name => layout.fixedProperties(name));
+        near(red.dimensions, { x: 0.24 * scale, y: 0.08 * scale, z: 0.014 * scale }, "plate size");
         assert.ok(red.localPosition.x + red.dimensions.x / 2 < -base.dimensions.x / 2, "left of the base");
         assert.ok(black.localPosition.x - black.dimensions.x / 2 > base.dimensions.x / 2, "right of the base");
         const floor = base.localPosition.y - base.dimensions.y / 2;
-        assert.ok(Math.abs(red.localPosition.y - red.dimensions.y / 2 - floor) < EPSILON);
-        assert.equal(red.text, "Play Red");
-        assert.equal(black.text, "Play Black");
-        const status = layout.fixedProperties("GT.Status");
-        near(status.dimensions, { x: 1.0 * scale, y: 0.4 * scale, z: 0.01 * scale }, "status size");
-        assert.equal(status.font, "Inconsolata");
+        assert.ok(Math.abs(red.localPosition.y - red.dimensions.y / 2 - floor) < EPSILON, "standing on the floor");
+        assert.equal(layout.fixedProperties("GT.Seat0").text, "Play Red");
+        assert.equal(layout.fixedProperties("GT.Seat1").text, "Play Black");
+        assert.deepEqual(layout.fixedProperties("GT.Seat0Token").color, layout.discProperties(0, 0, "R").color);
+        assert.deepEqual(layout.fixedProperties("GT.Seat1Token").color, layout.discProperties(0, 0, "B").color);
     });
 }
 

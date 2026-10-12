@@ -24,6 +24,7 @@
         "referee-core.mjs",
         "game-registry.mjs",
         "grid-select.mjs",
+        "layout-controls.mjs",
         "layout-connect4.mjs",
         "layout-grid.mjs",
         "client-grid.mjs",

@@ -19,6 +19,7 @@ Two tables live here:
 | `grid-select.mjs` | anywhere | Turning clicks on an 8x8 board into one of the legal moves |
 | `gametable-referee.mjs` | entity script server | The board's `serverScripts`: the remotely callable methods, the child sweep, and the adapter over `Entities`, `Messages` and `Script` |
 | `layout-connect4.mjs`, `layout-grid.mjs` | entity script server | Where each board's children go, and drawing its pieces: the upright Connect Four board (drawn like the toy), and the flat 8x8 board |
+| `layout-controls.mjs` | entity script server | The status display and the seat buttons both layouts share, and what of their look follows the table |
 | `gametable-client.mjs`, `client-grid.mjs` | Interface | The client entity `script` of the board, its click targets and its seat buttons: clicks become server method calls, and the channel becomes announcements and highlights |
 
 The modules need the fork's ES module support for entity scripts (`.mjs` `serverScripts` and
@@ -106,10 +107,12 @@ the board's: in cells (the smaller of the column and row pitch) and board thickn
 rezzed twice the size looks the same, twice as big. All but the column markers and seat buttons
 are collisionless, not grabbable and ignore picks.
 
-- `GT.Status`: a Text entity above the board, in Inconsolata, showing the seats, whose turn it is
-  with the time left, a standing draw offer, the result, and the board as text. `look()` returns
-  Text, so an agent can read the game without inspecting the board. It and the seat buttons are
-  the 8x8 boards' sizes on the board above (cells 0.75 / 7 m wide) and scale with the cells.
+- The status display and the seat buttons (see "Status display and seat buttons" below), in the
+  toy's colours: a blue bezel (the board's blue at 70%) with "CONNECT FOUR" in gold over a navy
+  screen, a gold lamp under it; navy button plates with white caps and navy Roboto labels. The
+  display stands over the column markers, as wide as the base. The buttons stand on the base's
+  floor to its left (Red) and right (Black), sized for the board above (cells 0.75 / 7 m wide)
+  and scaled with the cells.
 - `GT.Hole r<row>c<col>`: 42 flat Shape cylinders through the board, 0.76 of a cell across, a
   little deeper than the board so they show on both faces, unlit and nearly black (the board's
   blue at 18%). Row 0 is the top row.
@@ -125,15 +128,18 @@ are collisionless, not grabbable and ignore picks.
 - `GT.Col0` to `GT.Col6`: column targets, light Shape cones pointing down at each column just
   above the board's top edge, between the board and `GT.Status`. A cone is picked by its
   bounding box, so the whole box is the target.
-- `GT.Seat0` and `GT.Seat1`: seat buttons, Text entities reading "Play Red" and "Play Black" to
-  the left and right of the base, standing on its floor. They are labelled buttons rather than the
-  old table's chair models by decision: a label says what a click does.
+- `GT.Seat0` and `GT.Seat1`: the seat buttons' labels, reading "Play Red" and "Play Black". They
+  are labelled buttons rather than the old table's chair models by decision: a label says what a
+  click does.
 
 On an 8x8 board (flat: the playing surface is the Box's local +y face, the squares across local
 `x` and `z`; seat 0 plays from the +z edge, which faces the rezzer when the board is rezzed with
 the avatar's orientation, and seat 1 from the -z edge):
 
-- `GT.Status`: as above, raised over the far (-z) edge and turning to face the viewer.
+- The status display and the seat buttons, in a walnut and brass finish that suits the maple and
+  walnut tiles: a walnut bezel with the game's name ("CHECKERS") in Timeless over a dark green
+  screen, a brass lamp under it; walnut button plates with brass caps and dark Timeless labels.
+  The display is raised over the far (-z) edge, as wide as the board.
 - `GT.Sq r<row>c<col>`: 64 thin square tiles on the surface, light and dark (the dark ones,
   `(row + col)` odd, are the checkers squares). Row and column are those of `rows` in the state.
   Each side's home rows are nearest its own seat button: in checkers squares 1-12 (row 0) are at
@@ -145,26 +151,67 @@ the avatar's orientation, and seat 1 from the -z edge):
   goes to its landing square (and changes model or size when crowned or promoted), the captured
   pieces' entities are deleted, and castling moves the rook's entity too. Chess pieces are the
   `assets/chess/lowPoly` models, White's turned half round to face Black.
-- `GT.Seat0` and `GT.Seat1`: seat buttons at each player's edge, to their right, reading "Play"
-  and the side's name ("Play Black", "Play Red" for checkers).
+- `GT.Seat0` and `GT.Seat1`: seat buttons at each player's edge, to their right, facing them and
+  standing on the table (the board's underside), reading "Play" and the side's name ("Play
+  Black", "Play Red" for checkers). They are sized for a 0.6 m board and scale with the squares.
 
 The column targets and seat buttons run `gametable-client.mjs` (their `script` is set to the copy
 next to the referee) and are triggerable, so hand controllers can press them too. The tiles run no
 script (see "Playing as a human").
 
 When the referee loads, it sweeps the board's children for a few seconds while the entity server
-delivers them. It adopts its layout's fixed children (`GT.Status`, the click targets or tiles,
-the seat buttons, and Connect Four's holes, rails and base), and deletes any duplicate of them, any piece it did not create, and any
+delivers them. It adopts its layout's fixed children (the status display, the click targets or
+tiles, the seat buttons, and Connect Four's holes, rails and base), and deletes any duplicate of them, any piece it did not create, and any
 other `GT.` child (left by another game). An adopted child gets its position, size, look and (for
 the clickables) `script` set again from the current layout, so a resized board, a moved asset
-host or a change of game leaves nothing stale. Whichever fixed child it has not found by the end
-of the sweep, it creates.
+host or a change of game leaves nothing stale; a board laid out before the display and buttons
+had their decoration gets its old plain Texts restyled and the rest added. Whichever fixed child
+it has not found by the end of the sweep, it creates.
 
 On unload the referee abandons a game in progress (an `over` message with reason `abandoned`). It
 then writes the table to `userData` as `offline`, deletes its pieces, and shows "Referee not
 running" on the status Text. If it loads and finds a game still `playing` in `userData`, the old
 instance died without unloading. It then announces that game as abandoned and starts an empty
 table.
+
+#### Status display and seat buttons
+
+Both layouts build these from `layout-controls.mjs`; only the colours, fonts and placement differ.
+
+- `GT.Status`: a Text entity, in Inconsolata, showing the seats, whose turn it is with the time
+  left, a standing draw offer, the result, and the board as text. `look()` returns Text, so an
+  agent can read the game without inspecting the board. It is the display's screen: its own
+  background is the screen's colour, with half a line of margin round the text.
+- `GT.StatusFrame`, `GT.StatusScreen`, `GT.StatusTitle`, `GT.StatusLamp` and `GT.StatusTurn`: the
+  bezel (a Box), the screen (a Box just proud of the bezel), the game's name in the band over the
+  screen (a Text), a ring in the band under it (a flat Cylinder) and, in the ring, a disc of the
+  colour of the side to move, shown only while a game is being played.
+
+  The display turns to face the viewer (`billboardMode: "yaw"`), and the engine turns each such
+  entity about its own centre, so every part of it has its centre on the same vertical line and
+  they turn as one. Depth stacks them: a Text's depth is fixed at 1 cm and its glyphs are drawn
+  5 mm in front of its centre, so the bezel (2 mm deep), the ring (5 mm) and the screen (6 mm)
+  are boxes round the same centre, thinner than that, and their depths are in metres, not scaled.
+
+  The display is as wide as the board under it (the Connect Four base, the 8x8 board), but never
+  narrower than 0.8 m, so its text stays legible over a small board. Everything else in it
+  follows the width: a body line is 1/28 of it (some 56 characters to a line); the screen holds
+  11 lines on Connect Four and 13 on 8x8 (the seats, the turn or result, the board, a locked
+  board's warning and a line to spare for one that wraps).
+- `GT.Seat0Plate`, `GT.Seat0Cap` and `GT.Seat0Token` (and seat 1's): each seat button is a plate
+  (a Box, 0.24 x 0.08 m at scale 1), a raised cap on it, smaller by a rim that shows round it, and
+  on the cap's left a token of the seat's pieces (a flat Cylinder in their colour). The label,
+  `GT.Seat<n>`, is a Text the size of the whole plate, just in front of the cap, with no
+  background: it is the only part of the button that takes clicks (the rest ignore picks), so a
+  click anywhere on the button lands on the entity the client recognises by name.
+
+What the table shows on them follows the published state: an empty seat's button reads "Play
+Red" (or the side's name), a taken one the player's name (cut to 12 characters); while a game is
+being played the plate of the seat to move glows (unlit, in the gold or amber of the finish) and
+the lamp shows that side's colour. The referee edits one of these children only when its look
+changes (a seat taken or freed, the turn passing, the game ending), never on the clock's tick,
+and not at all on a locked board, whose controls keep the look they were laid out with (as the
+board keeps its colour).
 
 ### Server API
 
@@ -358,7 +405,8 @@ sender ID is whatever the sending client wrote.
    buttons and the pieces appear.
 2. Click a seat button, such as "Play Red" or "Play Black" (or point a hand controller at it and pull the
    trigger). The referee seats you in that seat under your display name, unless someone already
-   holds it. When both seats are taken the game starts.
+   holds it, and the button shows your name. When both seats are taken the game starts; the
+   button of the seat to move glows, and the lamp under the status display shows its colour.
 3. On your turn an announcement says "Your turn".
    - Connect Four: the markers over the columns you can play light up green. Click the marker
      above a column to drop a disc there.
