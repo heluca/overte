@@ -23,12 +23,14 @@
 #include <NetworkAccessManager.h>
 #include <NetworkingConstants.h>
 #include <MetaverseAPI.h>
+#include <ScriptCredentials.h>
 
 #include "ResourceRequestObserver.h"
 #include "ScriptContext.h"
 #include "ScriptEngine.h"
 #include "ScriptEngineCast.h"
 #include "ScriptEnvironment.h"
+#include "ScriptManager.h"
 #include "ScriptValue.h"
 
 Q_DECLARE_METATYPE(QByteArray*)
@@ -167,6 +169,10 @@ void XMLHttpRequestClass::open(const QString& method, const QString& url, bool a
             }
         }
 
+        if (auto manager = _engine->manager()) {
+            _credentialScope = manager->scriptCredentialScope();
+        }
+
         if (!username.isEmpty()) {
             _url.setUserName(username);
         }
@@ -204,6 +210,16 @@ void XMLHttpRequestClass::send(const ScriptValue& data) {
 }
 
 void XMLHttpRequestClass::doSend() {
+    // After the metaverse token and the script's own header, either of which wins
+    if (!_authorization.isEmpty() || !_request.hasRawHeader("Authorization")) {
+        _authorization = ScriptCredentials::find(_request.url(), _credentialScope);
+        // A null value removes the header
+        _request.setRawHeader("Authorization", _authorization);
+        // Qt sends every request header on to a redirect target; requestRedirected() decides instead
+        _request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, _authorization.isEmpty()
+            ? QNetworkRequest::NoLessSafeRedirectPolicy : QNetworkRequest::UserVerifiedRedirectPolicy);
+    }
+
     DependencyManager::get<ResourceRequestObserver>()->update(_url, -1, "XMLHttpRequestClass::doSend");
     _reply = NetworkAccessManager::getInstance().sendCustomRequest(_request, _method.toLatin1(), _sendData);
     connectToReply(_reply);
@@ -230,6 +246,22 @@ void XMLHttpRequestClass::requestTimeout() {
 }
 
 void XMLHttpRequestClass::requestError(QNetworkReply::NetworkError code) {
+}
+
+// Only a credential's request waits for this; the same credential must apply at the target, which also refuses https to
+// http, as no https prefix covers http
+void XMLHttpRequestClass::requestRedirected(const QUrl& target) {
+    if (_authorization.isEmpty()) {
+        return;
+    }
+    if (ScriptCredentials::find(target, _credentialScope) == _authorization) {
+        emit _reply->redirectAllowed();
+        return;
+    }
+    abortRequest();
+    _errorCode = QNetworkReply::InsecureRedirectError;
+    setReadyState(DONE);
+    emit requestComplete();
 }
 
 void XMLHttpRequestClass::requestFinished() {
@@ -279,6 +311,7 @@ void XMLHttpRequestClass::connectToReply(QNetworkReply* reply) {
     connect(reply, SIGNAL(error(QNetworkReply::NetworkError)), this, SLOT(requestError(QNetworkReply::NetworkError)));
     connect(reply, SIGNAL(downloadProgress(qint64, qint64)), this, SLOT(requestDownloadProgress(qint64, qint64)));
     connect(reply, SIGNAL(metaDataChanged()), this, SLOT(requestMetaDataChanged()));
+    connect(reply, SIGNAL(redirected(const QUrl&)), this, SLOT(requestRedirected(const QUrl&)));
 }
 
 void XMLHttpRequestClass::disconnectFromReply(QNetworkReply* reply) {
@@ -286,4 +319,5 @@ void XMLHttpRequestClass::disconnectFromReply(QNetworkReply* reply) {
     disconnect(reply, SIGNAL(error(QNetworkReply::NetworkError)), this, SLOT(requestError(QNetworkReply::NetworkError)));
     disconnect(reply, SIGNAL(downloadProgress(qint64, qint64)), this, SLOT(requestDownloadProgress(qint64, qint64)));
     disconnect(reply, SIGNAL(metaDataChanged()), this, SLOT(requestMetaDataChanged()));
+    disconnect(reply, SIGNAL(redirected(const QUrl&)), this, SLOT(requestRedirected(const QUrl&)));
 }

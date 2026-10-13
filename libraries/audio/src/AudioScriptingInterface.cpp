@@ -18,6 +18,9 @@
 #include <shared/QtHelpers.h>
 
 #include "ScriptAudioInjector.h"
+#include <ResourceManager.h>
+#include <Scriptable.h>
+#include <ScriptCredentials.h>
 #include <ScriptEngine.h>
 #include <ScriptEngineCast.h>
 #include <ScriptEngineLogging.h>
@@ -87,7 +90,20 @@ ScriptAudioInjector* AudioScriptingInterface::playStream(const QString& url, con
     AudioInjectorOptions optionsCopy = injectorOptions;
     optionsCopy.ambisonic = false;
 
-    auto injector = DependencyManager::get<AudioInjectorManager>()->playStream(QUrl(url), optionsCopy);
+    // Looked up here, on the script thread, for the URL the stream will request
+    QUrl streamURL(url);
+    AudioStreamCredential credential;
+    auto engine = Scriptable::engine();
+    if (DependencyManager::isSet<ScriptCredentials>() && engine && engine->manager()) {
+        streamURL = DependencyManager::get<ResourceManager>()->normalizeURL(streamURL);
+        const QList<QUrl> scope = engine->manager()->scriptCredentialScope();
+        credential.authorization = ScriptCredentials::find(streamURL, scope);
+        credential.appliesTo = [scope, authorization = credential.authorization](const QUrl& target) {
+            return ScriptCredentials::find(target, scope) == authorization;
+        };
+    }
+
+    auto injector = DependencyManager::get<AudioInjectorManager>()->playStream(streamURL, optionsCopy, credential);
     if (!injector) {
         return nullptr;
     }

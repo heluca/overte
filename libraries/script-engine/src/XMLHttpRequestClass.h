@@ -70,6 +70,14 @@ XMlHttpRequest.getResponseHeader(QString) function
  * 
  * <p>Create using <code>new XMLHttpRequest(...)</code>.</p>
  *
+ * <p>In server entity scripts and Agent scripts, a request that sets no <code>Authorization</code> header gets the domain's
+ * script credential for its URL, if there is one: the domain settings hold bearer tokens, each for requests under a URL
+ * prefix made by scripts under a script prefix. The script prefix must cover the calling script, every script whose code
+ * is on the call stack and every module the script imported. The token is added as the request is sent and is never
+ * visible to the script. A redirect away from the credential's URL prefix ends the request with <code>errorCode</code>
+ * <code>11</code> (InsecureRedirectError) rather than send the token on. A script that sets its own
+ * <code>Authorization</code> header sends that instead.</p>
+ *
  * @class XMLHttpRequest
  *
  * @hifi-interface
@@ -376,8 +384,13 @@ private:
     QTimer _timer;
     int _numRedirects { 0 };
 
+    // The script URLs of the code that opened the request, and the script credential doSend() attached for them
+    QList<QUrl> _credentialScope;
+    QByteArray _authorization;
+
 private slots:
     void requestFinished();
+    void requestRedirected(const QUrl& target);
     void requestError(QNetworkReply::NetworkError code);
     void requestMetaDataChanged();
     void requestDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);

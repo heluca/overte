@@ -35,7 +35,8 @@ public:
     AudioInjectorPointer playSound(const AudioDataPointer& audioData, const AudioInjectorOptions& options, bool setPendingDelete = false);
     // Plays raw little-endian 16-bit PCM at AudioConstants::SAMPLE_RATE from an HTTP response as it arrives, stereo when
     // options.stereo is set; the injector finishes when the response ends
-    AudioInjectorPointer playStream(const QUrl& url, const AudioInjectorOptions& options);
+    AudioInjectorPointer playStream(const QUrl& url, const AudioInjectorOptions& options,
+                                    const AudioStreamCredential& credential = {});
 
     size_t getNumInjectors();
 

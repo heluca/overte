@@ -1555,6 +1555,15 @@ public:
      */
     QUrl currentSandboxURL() const;
 
+    /**
+     * @brief The script URLs a script credential must cover for the code that is running: the entity script's URL or the
+     * script's own, every script frame on the stack, and every URL loaded into an ES module environment. A frame without
+     * a name, or no script frame at all, adds an empty URL, which is under no prefix. Script thread only.
+     *
+     * @return QList<QUrl> Script URLs for ScriptCredentials
+     */
+    QList<QUrl> scriptCredentialScope() const;
+
 protected:
     // Is called by the constructor, bceause all types need to be registered before method discovery with ScriptObjectV8Proxy::investigate()
     void initMetaTypes();

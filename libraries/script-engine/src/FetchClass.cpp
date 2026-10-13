@@ -20,6 +20,7 @@
 #include <NetworkingConstants.h>
 #include <ResourceManager.h>
 #include <ResourceRequest.h>
+#include <ScriptCredentials.h>
 
 #include "ResourceRequestObserver.h"
 #include "ScriptContext.h"
@@ -87,7 +88,11 @@ static ScriptValue startTransfer(ScriptContext* context, ScriptEngine* engine, b
     ScriptPromise promise = engine->newPromise();
     auto transfer = new FetchTransfer(engine, promise.resolver, url, isHead);
     if (isHttp) {
-        transfer->startHttp(httpRequest(url, context->argument(2)), method, bodyBytes(context->argument(3)));
+        QNetworkRequest request = httpRequest(url, context->argument(2));
+        if (engine->manager()) {
+            transfer->attachCredential(request, engine->manager()->scriptCredentialScope());
+        }
+        transfer->startHttp(request, method, bodyBytes(context->argument(3)));
     } else {
         ResourceRequest* request = DependencyManager::get<ResourceManager>()->createResourceRequest(
             transfer, url, ResourceRequest::IS_OBSERVABLE, -1, "fetch");
@@ -152,7 +157,7 @@ void registerFetchGlobals(ScriptEngine* engine, bool allowLocalFiles) {
     natives.setProperty("decodeText", engine->newFunction(decodeText, 1));
     natives.setProperty("encodeText", engine->newFunction(encodeText, 1));
 
-    ScriptValue install = engine->evaluate(fetchPrelude(), "(fetch)");
+    ScriptValue install = engine->evaluate(fetchPrelude(), FETCH_PRELUDE_NAME);
     if (!install.isFunction()) {
         qCCritical(scriptengine) << "fetch prelude did not evaluate to a function, fetch() is unavailable:" << install.toString();
         return;
@@ -180,6 +185,20 @@ FetchTransfer::~FetchTransfer() {
     cancel();
 }
 
+// After the metaverse token and the script's own headers, either of which wins
+void FetchTransfer::attachCredential(QNetworkRequest& request, const QList<QUrl>& scope) {
+    if (request.hasRawHeader("Authorization")) {
+        return;
+    }
+    _authorization = ScriptCredentials::find(request.url(), scope);
+    if (!_authorization.isEmpty()) {
+        _credentialScope = scope;
+        request.setRawHeader("Authorization", _authorization);
+        // Qt sends every request header on to a redirect target; httpRedirected() decides instead
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
+    }
+}
+
 void FetchTransfer::startHttp(const QNetworkRequest& request, const QByteArray& method, const QByteArray& body) {
     DependencyManager::get<ResourceRequestObserver>()->update(_url, -1, "fetch");
     auto& networkAccessManager = NetworkAccessManager::getInstance();
@@ -191,6 +210,18 @@ void FetchTransfer::startHttp(const QNetworkRequest& request, const QByteArray& 
         _reply = networkAccessManager.sendCustomRequest(request, method, body);
     }
     connect(_reply, &QNetworkReply::finished, this, &FetchTransfer::httpFinished);
+    if (!_authorization.isEmpty()) {
+        connect(_reply, &QNetworkReply::redirected, this, &FetchTransfer::httpRedirected);
+    }
+}
+
+// The same credential must apply at the target, which also refuses https to http, as no https prefix covers http
+void FetchTransfer::httpRedirected(const QUrl& target) {
+    if (ScriptCredentials::find(target, _credentialScope) == _authorization) {
+        emit _reply->redirectAllowed();
+    } else {
+        reject("fetch: " + _url.toString() + ": redirected outside the URL prefix of its script credential");
+    }
 }
 
 void FetchTransfer::startResource(ResourceRequest* request) {

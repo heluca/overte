@@ -52,6 +52,10 @@ private slots:
     void testFetchFile();
     void testFetchFileRefused();
     void testFetchClosureArrayBuffer();
+    void testFetchScriptCredential();
+    void testFetchScriptCredentialOtherScript();
+    void testXhrScriptCredential();
+    void testFetchScriptCredentialForeignFrames();
 
 private:
     // Runs the script to its Script.stop(); false if it threw or never stopped. closureSource, if given, is what the

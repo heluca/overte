@@ -19,6 +19,7 @@
 #include <QtNetwork/QNetworkReply>
 #include <QtCore/QSharedPointer>
 
+#include <Assignment.h>
 #include <HifiConfigVariantMap.h>
 #include <HTTPManager.h>
 #include <Node.h>
@@ -159,7 +160,9 @@ public:
      * @note thread safe
      *
      * @param typeValue Type of assignment client
-     * @param authentication
+     * @param authentication With a type: whether the requester is an assignment client of that type, which gets the
+     *     settings marked assignment-only. Without one: the settings page, which gets every setting, with password columns
+     *     masked.
      * @param domainSettingsInclusion
      * @param contentSettingsInclusion
      * @param defaultSettingsInclusion
@@ -194,6 +197,8 @@ private slots:
 
 private:
     QJsonArray filteredDescriptionArray(bool isContentSettings);
+    void sendSettings(Assignment::Type type, SettingsRequestAuthentication authentication, const SockAddr& destination);
+    void resendSettingsToScriptAssignments();
     void updateSetting(const QString& key, const QJsonValue& newValue, QVariantMap& settingMap,
                        const QJsonObject& settingDescription);
     QJsonObject settingDescriptionFromGroup(const QJsonObject& groupObject, const QString& settingName);

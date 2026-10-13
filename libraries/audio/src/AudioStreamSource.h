@@ -12,9 +12,11 @@
 #ifndef overte_AudioStreamSource_h
 #define overte_AudioStreamSource_h
 
+#include <functional>
 #include <memory>
 #include <mutex>
 
+#include <QtCore/QByteArray>
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
 #include <QtCore/QSharedPointer>
@@ -26,6 +28,13 @@ class QNetworkReply;
 class AudioStreamSource;
 using AudioStreamSourcePointer = QSharedPointer<AudioStreamSource>;
 
+// The Authorization header a script credential gives the stream's request, and whether a redirect target keeps it. The
+// caller looks both up; the stream never sees the credential table.
+struct AudioStreamCredential {
+    QByteArray authorization;
+    std::function<bool(const QUrl&)> appliesTo;
+};
+
 // Live audio for an AudioInjector: raw little-endian 16-bit PCM at AudioConstants::SAMPLE_RATE, read from an HTTP
 // response as it arrives. The object lives on the ResourceManager thread, where the reply's signals are delivered.
 // The network injection and the local playback each read from a ring of their own, so neither takes the other's frames.
@@ -35,8 +44,9 @@ public:
     enum Consumer { Network = 0, Local, NumConsumers };
     enum class Frame { Audio, Silence, Ended };
 
-    // Null unless the URL is http or https
-    static AudioStreamSourcePointer create(const QUrl& url, int numChannels);
+    // Null unless the URL is http or https. The credential was looked up for url, so it is dropped if url normalizes to
+    // another URL.
+    static AudioStreamSourcePointer create(const QUrl& url, int numChannels, const AudioStreamCredential& credential = {});
     ~AudioStreamSource();
 
     int getNumChannels() const { return _numChannels; }
@@ -53,14 +63,16 @@ public:
     Frame readFrame(Consumer consumer, char* destination);
 
 private:
-    AudioStreamSource(const QUrl& url, int numChannels);
+    AudioStreamSource(const QUrl& url, int numChannels, const AudioStreamCredential& credential);
 
     void sendRequest();
+    void onRedirected(const QUrl& target);
     void onReadyRead();
     void onFinished();
 
     const QUrl _url;
     const int _numChannels;
+    const AudioStreamCredential _credential;
 
     // Network thread only
     QPointer<QNetworkReply> _reply;

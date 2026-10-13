@@ -1686,6 +1686,44 @@
       ]
     },
     {
+      "name": "script_credentials",
+      "label": "Script Credentials",
+      "restart": false,
+      "assignment-types": [ 2, 5 ],
+      "settings": [
+        {
+          "name": "credentials",
+          "label": "Script Credentials",
+          "type": "table",
+          "can_add_new_rows": true,
+          "numbered": false,
+          "assignment-only": true,
+          "backup": false,
+          "help": "Bearer tokens for HTTP APIs that server entity scripts and Agent scripts call. A <code>fetch</code>, <code>XMLHttpRequest</code> or <code>Audio.playStream</code> request whose URL is under a row's URL prefix, made by a script under the row's script prefix, is sent with <code>Authorization: Bearer &lt;token&gt;</code>, unless the script sets its own <code>Authorization</code> header. Every script whose code is on the call stack, and every module the script imported, must be under the script prefix too. Scripts never see the token.<br/>Under a prefix means the same scheme, host and port, and a path under the prefix's path on a segment boundary: <code>/api</code> covers <code>/api/x</code> but not <code>/apix</code>. URL prefixes must be <code>https</code>, or <code>http</code> on a loopback host; script prefixes may also be <code>atp</code>. Where several rows apply, the longest URL prefix wins. A redirect away from the URL prefix ends the request. Changes apply to running scripts from their next request. To change a row's prefixes, delete it and add it again with its token.<br/>What the domain trusts: every assignment client it admits as an Agent or entity script server receives this table in clear text, and it admits assignment clients from localhost and from the subnets allowed under Security. While these settings pages have no HTTP password (the default), anyone who can reach them can add their subnet, run an assignment client and read every token: set an HTTP password under Security before adding tokens. Do not let a URL prefix cover an endpoint that echoes request headers back, which would hand the token to the script in the response body. Scripts under a script prefix must treat entity properties such as <code>userData</code> as untrusted and never build request URLs from them, since anyone who can create entities can attach a trusted script to their own entity. All server entity scripts share one script engine, so another script can alter built-ins to steer or observe a trusted script's own requests, though it cannot read the token.",
+          "columns": [
+            {
+              "name": "url_prefix",
+              "label": "URL Prefix",
+              "placeholder": "https://<host>/api/",
+              "can_set": true
+            },
+            {
+              "name": "token",
+              "label": "Token",
+              "type": "password",
+              "can_set": true
+            },
+            {
+              "name": "script_prefix",
+              "label": "Script Prefix",
+              "placeholder": "https://<host>/scripts/",
+              "can_set": true
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "broadcasting",
       "label": "Broadcasting",
       "restart": false,
