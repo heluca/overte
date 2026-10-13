@@ -13,78 +13,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const BOARD = "{b0a4d000-0000-4000-8000-000000000000}";
+import { BOARD, fakeEngine } from "./fake-engine.mjs";
+
 const ALICE = "{aaaaaaaa-0000-4000-8000-000000000001}";
 const BOB = "{bbbbbbbb-0000-4000-8000-000000000002}";
-
-function fakeEngine(boardUserData = "", locked = false) {
-    let nextId = 1;
-    const entities = new Map([[BOARD, {
-        name: "Board", dimensions: { x: 0.7, y: 0.6, z: 0.04 }, userData: boardUserData, locked
-    }]]);
-    const engine = {
-        entities,
-        sent: [],
-        printed: [],
-        boardEdits: 0,
-        timers: new Map(),
-        Entities: {
-            addEntity(properties) {
-                const id = `{00000000-0000-4000-8000-${String(nextId++).padStart(12, "0")}}`;
-                entities.set(id, { ...properties });
-                return id;
-            },
-            editEntity(id, properties) {
-                if (id === BOARD) {
-                    engine.boardEdits++;
-                }
-                Object.assign(entities.get(id), properties);
-                return id;
-            },
-            deleteEntity(id) { entities.delete(id); },
-            getEntityProperties(id, names) {
-                const entity = entities.get(id) || {};
-                return Object.fromEntries(names.map(name => [name, entity[name]]));
-            },
-            getChildrenIDs(parentID) {
-                return [...entities].filter(([, entity]) => entity.parentID === parentID).map(([id]) => id);
-            }
-        },
-        Messages: { sendMessage(channel, message) { engine.sent.push({ channel, message: JSON.parse(message) }); } },
-        Script: {
-            remoteCallerID: undefined,
-            setInterval(callback) { engine.timers.set(nextId, callback); return nextId++; },
-            setTimeout(callback) { engine.timers.set(nextId, callback); return nextId++; },
-            clearInterval(id) { engine.timers.delete(id); },
-            clearTimeout(id) { engine.timers.delete(id); }
-        },
-        print(text) { engine.printed.push(text); },
-        // As the entity script server does: the caller id is set only while the method runs
-        call(referee, caller, method, params = []) {
-            engine.Script.remoteCallerID = caller;
-            referee[method](BOARD, params);
-            engine.Script.remoteCallerID = undefined;
-        },
-        named(name) {
-            return [...entities.values()].filter(entity => entity.name === name);
-        },
-        discs() {
-            return [...entities.values()].filter(entity => (entity.name || "").startsWith("GT.Disc "));
-        },
-        projection() { return JSON.parse(entities.get(BOARD).userData).gameTable; },
-        // A child the entity server delivers after preload has started
-        arrive(name) {
-            return engine.Entities.addEntity({ name, parentID: BOARD });
-        },
-        runTimer(id) {
-            const callback = engine.timers.get(id);
-            engine.timers.delete(id);
-            callback();
-        }
-    };
-    Object.assign(globalThis, { Entities: engine.Entities, Messages: engine.Messages, Script: engine.Script, print: engine.print });
-    return engine;
-}
 
 const { default: GameTableReferee } = await import("../gametable-referee.mjs");
 
@@ -98,7 +30,7 @@ function loaded(engine) {
 }
 
 test("the remotely callable methods are exactly the referee API", () => {
-    assert.deepEqual(new GameTableReferee().remotelyCallable, ["join", "move", "leave", "state", "newGame"]);
+    assert.deepEqual(new GameTableReferee().remotelyCallable, ["join", "move", "leave", "state", "newGame", "draw"]);
 });
 
 test("preload publishes into userData without losing other keys and creates one status Text", () => {
@@ -117,7 +49,7 @@ test("preload publishes into userData without losing other keys and creates one 
     assert.deepEqual(engine.sent[0], { channel: "gametable:" + BOARD, message: { type: "state", ...userData.gameTable } });
 });
 
-test("seats come from Script.remoteCallerID and moves drop disc models on the board", () => {
+test("seats come from Script.remoteCallerID and moves drop discs on the board", () => {
     const engine = fakeEngine();
     const referee = loaded(engine);
     engine.call(referee, ALICE, "join", ["Alice"]);
@@ -129,7 +61,8 @@ test("seats come from Script.remoteCallerID and moves drop disc models on the bo
     const discs = engine.discs();
     assert.deepEqual(discs.map(disc => disc.name).sort(), ["GT.Disc r4c3", "GT.Disc r5c3"]);
     const red = discs.find(disc => disc.name === "GT.Disc r5c3");
-    assert.match(red.modelURL, /\/assets\/checkers\/red_checker\.fbx$/);
+    assert.equal(red.shape, "Cylinder");
+    assert.ok(red.color.red > 150 && red.color.green < 80);
     assert.equal(red.parentID, BOARD);
     assert.equal(red.collisionless, true);
     assert.equal(red.localPosition.x, 0);
@@ -157,19 +90,20 @@ test("a call without a caller id is refused and announced on the channel", () =>
     assert.deepEqual(engine.projection().seats, [null, null]);
 });
 
-test("the winning line is drawn larger, and a rematch clears the discs", () => {
+test("the winning line gets a ring behind each disc, and a rematch clears discs and rings", () => {
     const engine = fakeEngine();
     const referee = loaded(engine);
     engine.call(referee, ALICE, "join", ["Alice"]);
     engine.call(referee, BOB, "join", ["Bob"]);
     [0, 1, 0, 1, 0, 1, 0].forEach((col, i) => engine.call(referee, i % 2 ? BOB : ALICE, "move", [String(col)]));
-    const discs = engine.discs();
-    assert.equal(discs.length, 7);
-    const winning = discs.filter(disc => disc.name.endsWith("c0"));
-    const other = discs.find(disc => disc.name.endsWith("c1"));
-    winning.forEach(disc => assert.ok(disc.dimensions.x > other.dimensions.x));
+    assert.equal(engine.discs().length, 7);
+    const rings = () => [...engine.entities.values()].filter(entity => (entity.name || "").startsWith("GT.Win "));
+    assert.deepEqual(rings().map(ring => ring.name).sort(), ["GT.Win r2c0", "GT.Win r3c0", "GT.Win r4c0", "GT.Win r5c0"]);
+    rings().forEach(ring => assert.equal(ring.parentID, BOARD));
+    assert.equal(referee.layout.pieceIDs().size, 11, "the sweep keeps the rings");
     engine.call(referee, BOB, "newGame");
     assert.equal(engine.discs().length, 0);
+    assert.equal(rings().length, 0);
     assert.equal(engine.projection().toMove, 1);
 });
 
@@ -209,7 +143,7 @@ test("the sweep runs for the whole search window and deletes discs that arrive l
     engine.runTimer(referee.searchTimer);
     [...stale, duplicate].forEach(id => assert.equal(engine.entities.has(id), false));
     assert.deepEqual(engine.discs().map(disc => disc.name), ["GT.Disc r5c4"]);
-    assert.equal(engine.entities.has(referee.discs.get("r5c4").id), true);
+    assert.equal(engine.entities.has(referee.layout.discs.get("r5c4").id), true);
     // After the window it stops, and creates no second display
     engine.Script.clearTimeout(referee.searchTimer);
     referee.findChildren(0);
@@ -343,4 +277,196 @@ test("adopted children are brought back to the current layout and client script"
     assert.ok(engine.entities.get(seat).localPosition.x > 0.35);
     assert.ok(engine.entities.get(status).localPosition.y > fresh.localPosition.y);
     assert.equal(engine.entities.get(status).script, undefined);
+});
+
+test("an unknown game in the config logs a warning and plays Connect Four", () => {
+    const engine = fakeEngine(JSON.stringify({ gameTableConfig: { game: "go" } }));
+    loaded(engine);
+    assert.ok(engine.printed.some(line => /unknown game "go", playing connect4/.test(line)));
+    assert.equal(engine.projection().game, "connect4");
+    assert.equal(engine.named("GT.Col0").length, 1);
+});
+
+test("draw offers come from Script.remoteCallerID and agreement ends the game", () => {
+    const engine = fakeEngine();
+    const referee = loaded(engine);
+    engine.call(referee, ALICE, "join", ["Alice"]);
+    engine.call(referee, BOB, "join", ["Bob"]);
+    engine.call(referee, BOB, "draw");
+    assert.equal(engine.projection().drawOffer, 1);
+    engine.call(referee, ALICE, "draw");
+    assert.deepEqual(engine.projection().result, { winner: null, reason: "agreement", line: null });
+});
+
+const CHECKERS = JSON.stringify({ gameTableConfig: { game: "checkers" } });
+const FLAT = { x: 0.6, y: 0.04, z: 0.6 };
+
+function pieces(engine) {
+    return [...engine.entities].filter(([, entity]) => (entity.name || "").startsWith("GT.Pc "));
+}
+
+test("a checkers board lays out 64 tiles, the seats, the status and 24 pieces that ignore picks", () => {
+    const engine = fakeEngine(CHECKERS, false, FLAT);
+    loaded(engine);
+    const state = engine.projection();
+    assert.equal(state.game, "checkers");
+    assert.equal(state.legal.length, 0);
+    assert.equal(engine.named("GT.Col0").length, 0, "no Connect Four targets");
+    const tiles = [...engine.entities.values()].filter(entity => (entity.name || "").startsWith("GT.Sq "));
+    assert.equal(tiles.length, 64);
+    tiles.forEach(tile => {
+        assert.equal(tile.parentID, BOARD);
+        assert.equal(tile.script, undefined, "tiles run no script");
+        assert.ok(tile.localPosition.y > FLAT.y / 2, "on the playing surface");
+        assert.ok(Math.abs(tile.dimensions.x - 0.075) < 1e-9);
+    });
+    const [darkTile] = engine.named("GT.Sq r0c1");
+    const [lightTile] = engine.named("GT.Sq r0c0");
+    assert.notDeepEqual(darkTile.color, lightTile.color);
+    // Black's home row (row 0, squares 1-4) is at seat 0's edge, +z
+    assert.ok(darkTile.localPosition.z > 0.25);
+    const seats = [engine.named("GT.Seat0")[0], engine.named("GT.Seat1")[0]];
+    assert.equal(seats[0].text, "Play Black");
+    assert.equal(seats[1].text, "Play Red");
+    assert.ok(seats[0].localPosition.z > FLAT.z / 2 && seats[1].localPosition.z < -FLAT.z / 2);
+    seats.forEach(seat => assert.match(seat.script, /\/gametable-client\.mjs$/));
+    const status = engine.named("GT.Status")[0];
+    assert.ok(status.localPosition.z < 0 && status.localPosition.y > 0.2, "above the far edge");
+    assert.match(status.text, /Black: \(empty\) {3}Red: \(empty\)/);
+
+    const placed = pieces(engine);
+    assert.equal(placed.length, 24);
+    placed.forEach(([, piece]) => {
+        assert.equal(piece.ignorePickIntersection, true);
+        assert.equal(piece.collisionless, true);
+        assert.deepEqual(piece.grab, { grabbable: false });
+    });
+    const black = engine.named("GT.Pc r0c1")[0];
+    assert.match(black.modelURL, /\/assets\/checkers\/black_checker\.fbx$/);
+    assert.deepEqual([black.localPosition.x, black.localPosition.z], [darkTile.localPosition.x, darkTile.localPosition.z]);
+    assert.match(engine.named("GT.Pc r7c0")[0].modelURL, /red_checker/);
+});
+
+test("checkers moves edit the piece entities: a step moves one, a capture deletes one, a king grows", () => {
+    const engine = fakeEngine(CHECKERS, false, FLAT);
+    const referee = loaded(engine);
+    engine.call(referee, ALICE, "join", ["Alice"]);
+    engine.call(referee, BOB, "join", ["Bob"]);
+    const state = engine.projection();
+    assert.deepEqual(state.legal, ["10-14", "10-15", "11-15", "11-16", "12-16", "9-13", "9-14"]);
+    assert.equal(state.drawOffer, null);
+    const moving = referee.layout.pieces.get("r2c5").id;
+    engine.call(referee, ALICE, "move", ["11-15"]);
+    assert.deepEqual(engine.projection().last, { seat: 0, move: "11-15" });
+    assert.equal(engine.entities.get(moving).name, "GT.Pc r3c4", "the same entity moved");
+    assert.equal(engine.entities.get(moving).localPosition.x, engine.named("GT.Sq r3c4")[0].localPosition.x);
+    assert.equal(pieces(engine).length, 24);
+    engine.call(referee, BOB, "move", ["11-15"]);
+    assert.equal(engine.sent.at(-1).message.reason, "illegal move");
+    engine.call(referee, BOB, "move", ["22-18 please"]);
+    assert.equal(engine.sent.at(-1).message.reason, "move must be like 11-15 or 22x15x6");
+    engine.call(referee, BOB, "move", ["22-18"]);
+    engine.call(referee, ALICE, "move", ["15x22"]);
+    assert.equal(pieces(engine).length, 23);
+    assert.equal(engine.named("GT.Pc r4c3").length, 0);
+
+    // Crowning: a man stepping onto the far row is the same entity, taller
+    const crown = new GameTableReferee();
+    const flat = fakeEngine(CHECKERS, false, FLAT);
+    crown.preload(BOARD);
+    flat.Script.clearTimeout(crown.searchTimer);
+    crown.findChildren(0);
+    crown.layout.draw({ board: [".b......", "........", "........", "........", "........", "........", "..b.....", "........"] });
+    const man = crown.layout.pieces.get("r6c2");
+    const height = flat.entities.get(man.id).dimensions.y;
+    crown.layout.draw({ board: [".b......", "........", "........", "........", "........", "........", "........", "...B...."] });
+    assert.equal(crown.layout.pieces.get("r7c3").id, man.id);
+    assert.ok(flat.entities.get(man.id).dimensions.y > 2 * height);
+});
+
+test("switching a board's game removes the other game's children", () => {
+    const engine = fakeEngine("", false, FLAT);
+    loaded(engine);
+    assert.equal(engine.named("GT.Col3").length, 1);
+    assert.equal(engine.named("GT.Hole r5c6").length, 1);
+    engine.entities.get(BOARD).userData = CHECKERS;
+    loaded(engine);
+    assert.equal(engine.named("GT.Col3").length, 0);
+    const toy = [...engine.entities.values()].filter(entity => /^GT\.(Hole|Frame|Base)/.test(entity.name || ""));
+    assert.deepEqual(toy, [], "no holes, rails or base on the 8x8 board");
+    assert.equal(engine.named("GT.Seat0").length, 1);
+    assert.equal(engine.named("GT.Seat0")[0].text, "Play Black", "an adopted seat button takes the game's look");
+    assert.equal(engine.named("GT.Sq r4c4").length, 1);
+    assert.deepEqual(engine.named("GT.Seat1")[0].localRotation, { x: 0, y: 1, z: 0, w: 0 }, "seat 1 faces its edge");
+    // And back: Connect Four's seat buttons face front again
+    engine.entities.get(BOARD).userData = "";
+    loaded(engine);
+    assert.equal(engine.named("GT.Sq r4c4").length, 0);
+    assert.equal(engine.named("GT.Col3").length, 1);
+    assert.equal(engine.named("GT.Seat1")[0].text, "Play Black");
+    assert.deepEqual(engine.named("GT.Seat1")[0].localRotation, { x: 0, y: 0, z: 0, w: 1 });
+});
+
+test("a crowning capture on the board keeps the capturer's entity and deletes the captured one", () => {
+    const engine = fakeEngine(CHECKERS, false, FLAT);
+    const referee = loaded(engine);
+    const layout = referee.layout;
+    const before = ["........", "..b.....", "...r....", "........", "........", "........", "........", "..b....."];
+    layout.draw({ board: before, move: null });
+    const red = layout.pieces.get("r2c3");
+    const black = layout.pieces.get("r1c2");
+    const manHeight = engine.entities.get(red.id).dimensions.y;
+    layout.draw({
+        board: [".R......", "........", "........", "........", "........", "........", "........", "..b....."],
+        move: { side: 1, notation: "10x1", from: [2, 3], to: [0, 1], path: [[2, 3], [0, 1]], captured: [[1, 2]], promoted: true }
+    });
+    assert.equal(layout.pieces.get("r0c1").id, red.id);
+    assert.equal(engine.entities.has(black.id), false);
+    assert.match(engine.entities.get(red.id).modelURL, /red_checker/);
+    assert.ok(engine.entities.get(red.id).dimensions.y > 2 * manHeight);
+    assert.equal(pieces(engine).length, 2);
+});
+
+test("a chess board: 32 pieces, White's facing Black; en passant, castling and promotion redraw them", () => {
+    const engine = fakeEngine(JSON.stringify({ gameTableConfig: { game: "chess" } }), false, FLAT);
+    const referee = loaded(engine);
+    assert.equal(pieces(engine).length, 32);
+    assert.equal(engine.named("GT.Seat0")[0].text, "Play White");
+    const king = engine.named("GT.Pc r7c4")[0];
+    assert.match(king.modelURL, /\/assets\/chess\/lowPoly\/king_lt\.fbx$/);
+    assert.deepEqual(king.localRotation, { x: 0, y: 1, z: 0, w: 0 });
+    assert.ok(king.localPosition.z > 0.25, "rank 1 at seat 0's edge");
+    engine.call(referee, ALICE, "join", ["Alice"]);
+    engine.call(referee, BOB, "join", ["Bob"]);
+    let ply = 0;
+    const play = (/** @type {string[]} */ moves) => moves.forEach(move => engine.call(referee, ply++ % 2 ? BOB : ALICE, "move", [move]));
+    play(["e2e4", "d7d5", "e4e5", "f7f5", "e5f6"]);
+    const state = engine.projection();
+    assert.deepEqual(state.last, { seat: 0, move: "e5f6", san: "exf6" });
+    assert.equal(state.fen, "rnbqkbnr/ppp1p1pp/5P2/3p4/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 3");
+    assert.equal(state.check, false);
+    assert.equal(engine.named("GT.Pc r3c5").length, 0, "the pawn taken en passant is gone");
+    assert.equal(pieces(engine).length, 31);
+    const rook = referee.layout.pieces.get("r7c7").id;
+    play(["b8c6", "g1f3", "c6b8", "f1e2", "b8c6", "e1g1"]);
+    assert.equal(engine.projection().last.san, "O-O");
+    assert.equal(engine.entities.get(rook).name, "GT.Pc r7c5", "the rook moved with the king");
+    play(["c6b8", "f6g7", "b8c6"]);
+    const pawn = referee.layout.pieces.get("r1c6").id;
+    const victim = referee.layout.pieces.get("r0c7").id;
+    play(["g7h8q"]);
+    assert.equal(engine.projection().last.san, "gxh8=Q");
+    assert.equal(engine.entities.get(pawn).name, "GT.Pc r0c7", "the pawn's entity becomes the queen");
+    assert.match(engine.entities.get(pawn).modelURL, /queen_lt\.fbx$/);
+    assert.deepEqual(engine.entities.get(pawn).localRotation, { x: 0, y: 1, z: 0, w: 0 });
+    assert.equal(engine.entities.has(victim), false, "the rook taken is deleted");
+    assert.equal(pieces(engine).length, 29);
+    // A redraw that reuses a White entity for a Black piece turns it back round
+    const knight = referee.layout.pieces.get("r5c5").id;
+    const board = engine.projection().rows.map((/** @type {string} */ line, /** @type {number} */ row) =>
+        row === 5 ? line.replace("N", ".") : row === 4 ? "n" + line.slice(1) : line);
+    referee.layout.draw({ board, move: null });
+    assert.equal(engine.entities.get(knight).name, "GT.Pc r4c0");
+    assert.match(engine.entities.get(knight).modelURL, /knight_dk\.fbx$/);
+    assert.deepEqual(engine.entities.get(knight).localRotation, { x: 0, y: 0, z: 0, w: 1 });
 });

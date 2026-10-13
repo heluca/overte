@@ -18,7 +18,16 @@
     "files": [
         "../../../tools/typings/dist/overte-client-entity.d.ts",
         "connect4.mjs",
+        "checkers.mjs",
+        "chess.mjs",
+        "status-text.mjs",
         "referee-core.mjs",
+        "game-registry.mjs",
+        "grid-select.mjs",
+        "layout-controls.mjs",
+        "layout-connect4.mjs",
+        "layout-grid.mjs",
+        "client-grid.mjs",
         "gametable-client.mjs"
     ]
 }

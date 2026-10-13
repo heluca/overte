@@ -70,6 +70,7 @@ test("start publishes an empty waiting table with the full state shape", () => {
         legal: [],
         last: null,
         result: null,
+        drawOffer: null,
         turnDeadline: null,
         channel: "gametable:{table}"
     });

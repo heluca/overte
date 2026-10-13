@@ -12,6 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as chess from "../chess.mjs";
 
 const BOARD = "{b0a4d000-0000-4000-8000-000000000000}";
 const CHANNEL = "gametable:" + BOARD;
@@ -22,7 +23,7 @@ const CAROL = "{cccccccc-0000-4000-8000-000000000003}";
 function projection(fields = {}) {
     return {
         v: 1, game: "connect4", gameId: null, phase: "waiting", seats: [null, null], toMove: null, moveNo: 0,
-        rows: Array(6).fill("......."), legal: [], last: null, result: null, turnDeadline: null,
+        rows: Array(6).fill("......."), legal: [], last: null, result: null, drawOffer: null, turnDeadline: null,
         channel: CHANNEL, ...fields
     };
 }
@@ -41,6 +42,8 @@ function fakeEngine(gameTable = projection()) {
         announced: [],
         subscribed: new Set(),
         handlers: [],
+        pressHandlers: [],
+        offHandlers: [],
         timers: new Map(),
         Entities: {
             addEntity(properties, hostType) {
@@ -64,6 +67,14 @@ function fakeEngine(gameTable = projection()) {
             },
             callEntityServerMethod(entityID, method, params) {
                 engine.calls.push({ entityID, method, params });
+            },
+            mousePressOnEntity: {
+                connect(handler) { engine.pressHandlers.push(handler); },
+                disconnect(handler) { engine.pressHandlers = engine.pressHandlers.filter(h => h !== handler); }
+            },
+            mousePressOffEntity: {
+                connect(handler) { engine.offHandlers.push(handler); },
+                disconnect(handler) { engine.offHandlers = engine.offHandlers.filter(h => h !== handler); }
             }
         },
         Messages: {
@@ -82,7 +93,7 @@ function fakeEngine(gameTable = projection()) {
         },
         // What the referee's child sweep leaves on the board
         child(name) {
-            return engine.Entities.addEntity({ name, parentID: BOARD, dimensions: { x: 0.08, y: 0.05, z: 0.04 } });
+            return engine.Entities.addEntity({ name, parentID: BOARD, shape: "Cone", dimensions: { x: 0.08, y: 0.05, z: 0.04 } });
         },
         // A message as the messages mixer delivers it to every handler in the engine
         deliver(channel, message) {
@@ -93,6 +104,14 @@ function fakeEngine(gameTable = projection()) {
             const due = [...engine.timers];
             engine.timers.clear();
             due.forEach(([, callback]) => callback());
+        },
+        // A click anywhere in the domain, as Entities.mousePressOnEntity reports it
+        press(id, event = PRIMARY) {
+            engine.pressHandlers.forEach(handler => handler(id, event));
+        },
+        // A click on no entity at all
+        pressOff() {
+            engine.offHandlers.forEach(handler => handler());
         },
         highlights() {
             return [...entities.values()].filter(entity => (entity.name || "").startsWith("GT.Highlight "));
@@ -205,6 +224,7 @@ test("a state message announces the turn and highlights the legal columns on loc
         assert.equal(h.ignorePickIntersection, true);
         assert.equal(h.parentID, targets[Number(h.name.slice(-1))]);
         assert.ok(h.dimensions.x > 0.08);
+        assert.deepEqual([h.type, h.shape], ["Shape", "Cone"], "the target's own shape, grown round it");
     });
     // The same state again (after a `state` call or a repeated join) is not announced twice
     engine.deliver(CHANNEL, { type: "state", ...projection({ phase: "playing", seats: SEATED, toMove: 0, legal: [0, 2, 5] }) });
@@ -321,4 +341,173 @@ test("unload unsubscribes, disconnects and removes the highlights", () => {
     // A column target's unload has nothing to undo
     load(engine.child("GT.Col2")).unload();
     assert.equal(engine.handlers.length, 0);
+});
+
+test("a draw offer is announced to the players, and a draw by agreement says so", () => {
+    const engine = fakeEngine();
+    load(BOARD);
+    engine.deliver(CHANNEL, { type: "state", ...projection({ phase: "playing", seats: SEATED, toMove: 0, drawOffer: 1 }) });
+    assert.equal(engine.announced.at(-1), "Your turn (Red); Black offers a draw");
+    engine.deliver(CHANNEL, { type: "state", ...projection({ phase: "playing", seats: SEATED, toMove: 0, drawOffer: 0 }) });
+    assert.equal(engine.announced.at(-1), "Your turn (Red); your draw offer stands");
+    engine.deliver(CHANNEL, { type: "state", ...projection({
+        phase: "over", seats: SEATED, result: { winner: null, reason: "agreement", line: null }
+    }) });
+    assert.equal(engine.announced.at(-1), "Draw (by agreement)");
+    engine.deliver(CHANNEL, { type: "rejected", to: ME, method: "draw", reason: "game over" });
+    assert.equal(engine.announced.at(-1), "Draw offer refused: game over");
+});
+
+function checkersState(fields = {}) {
+    return projection({
+        game: "checkers",
+        rows: [".b.b.b.b", "b.b.b.b.", ".b.b.b.b", "........", "........", "r.r.r.r.", ".r.r.r.r", "r.r.r.r."],
+        ...fields
+    });
+}
+
+// The 64 tiles the referee lays on a checkers board; returns cell -> tile id.
+function tiles(engine) {
+    const ids = new Map();
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            ids.set(`r${row}c${col}`, engine.Entities.addEntity({
+                name: `GT.Sq r${row}c${col}`, parentID: BOARD, dimensions: { x: 0.075, y: 0.004, z: 0.075 }
+            }));
+        }
+    }
+    return ids;
+}
+
+const OPENING = ["10-14", "10-15", "11-15", "11-16", "12-16", "9-13", "9-14"];
+
+test("on a checkers board, clicks on the squares select a piece and play a move", () => {
+    const engine = fakeEngine(checkersState({ phase: "playing", seats: SEATED, toMove: 0, legal: OPENING }));
+    const squares = tiles(engine);
+    const board = load(BOARD);
+    assert.deepEqual(engine.announced, ["Your turn (Black)"]);
+    assert.equal(engine.pressHandlers.length, 1);
+    assert.equal(engine.highlights().length, 0);
+    // Square 11 is row 2, col 5; a click on the piece model there counts as its square
+    const piece = engine.Entities.addEntity({ name: "GT.Pc r2c5", parentID: BOARD });
+    engine.press(piece);
+    const shown = engine.highlights();
+    assert.deepEqual(shown.map(h => h.name).sort(), ["GT.Highlight r2c5", "GT.Highlight r3c4", "GT.Highlight r3c6"]);
+    shown.forEach(h => {
+        assert.equal(h.hostType, "local");
+        assert.equal(h.ignorePickIntersection, true);
+        assert.equal(h.parentID, squares.get(h.name.slice("GT.Highlight ".length)));
+    });
+    assert.notDeepEqual(shown.find(h => h.name.endsWith("r2c5")).color, shown.find(h => h.name.endsWith("r3c4")).color);
+    // Not the primary button: ignored
+    engine.press(squares.get("r3c4"), { isPrimaryButton: false });
+    assert.equal(engine.highlights().length, 3);
+    // Anything off this board's squares and pieces clears the selection: the board itself,
+    // another board's square, or no entity at all
+    const elsewhere = [
+        () => engine.press(BOARD),
+        () => engine.press(engine.Entities.addEntity({ name: "GT.Sq r3c4", parentID: "{another-board}" })),
+        () => engine.pressOff()
+    ];
+    elsewhere.forEach(click => {
+        engine.press(piece);
+        assert.equal(engine.highlights().length, 3);
+        click();
+        assert.equal(engine.highlights().length, 0);
+    });
+    assert.deepEqual(engine.calls, []);
+    engine.press(piece);
+    engine.press(squares.get("r3c4"));
+    assert.deepEqual(engine.calls, [{ entityID: BOARD, method: "move", params: ["11-15"] }]);
+    assert.equal(engine.highlights().length, 0);
+    board.unload();
+    assert.equal(engine.pressHandlers.length, 0);
+    assert.equal(engine.offHandlers.length, 0);
+});
+
+test("the board's game changing drops the 8x8 click handling, or rebuilds it", () => {
+    const engine = fakeEngine(checkersState({ phase: "playing", seats: SEATED, toMove: 0, legal: OPENING }));
+    const squares = tiles(engine);
+    const board = load(BOARD);
+    const grid = board.grid;
+    engine.press(squares.get("r2c5"));
+    assert.equal(engine.highlights().length, 3);
+    // The same game again keeps the instance
+    engine.deliver(CHANNEL, { type: "state", ...checkersState({ phase: "playing", seats: SEATED, toMove: 0, legal: OPENING }) });
+    assert.equal(board.grid, grid);
+    // The referee reloads as Connect Four: no more square clicks, no grid highlights
+    columns(engine);
+    engine.deliver(CHANNEL, { type: "state", ...projection({ phase: "playing", seats: SEATED, toMove: 0, legal: [3] }) });
+    assert.equal(board.grid, null);
+    assert.equal(engine.pressHandlers.length, 0);
+    assert.equal(engine.offHandlers.length, 0);
+    assert.deepEqual(engine.highlights().map(h => h.name), ["GT.Highlight 3"]);
+    // And back to checkers: a fresh one
+    engine.deliver(CHANNEL, { type: "state", ...checkersState({ phase: "playing", seats: SEATED, toMove: 0, legal: OPENING }) });
+    assert.notEqual(board.grid, null);
+    assert.notEqual(board.grid, grid);
+    assert.equal(engine.pressHandlers.length, 1);
+});
+
+test("on a checkers board, nothing is selectable while it is not the user's turn", () => {
+    const engine = fakeEngine(checkersState({ phase: "playing", seats: SEATED, toMove: 1, legal: ["21-17"] }));
+    const squares = tiles(engine);
+    load(BOARD);
+    engine.press(squares.get("r5c0"));
+    engine.press(squares.get("r4c1"));
+    assert.equal(engine.highlights().length, 0);
+    assert.deepEqual(engine.calls, []);
+    // The turn arrives: the earlier clicks left nothing behind
+    engine.deliver(CHANNEL, { type: "state", ...checkersState({ phase: "playing", seats: SEATED, toMove: 0, moveNo: 1,
+        legal: ["9-13"] }) });
+    engine.press(squares.get("r2c1"));
+    assert.equal(engine.highlights().length, 2);
+    // The same state again keeps the selection; a new turn drops it
+    engine.deliver(CHANNEL, { type: "state", ...checkersState({ phase: "playing", seats: SEATED, toMove: 0, moveNo: 1,
+        legal: ["9-13"] }) });
+    assert.equal(engine.highlights().length, 2);
+    engine.deliver(CHANNEL, { type: "state", ...checkersState({ phase: "playing", seats: SEATED, toMove: 1, moveNo: 2,
+        legal: ["21-17"] }) });
+    assert.equal(engine.highlights().length, 0);
+});
+
+test("on a checkers board, two jump paths to one square ask for the square on the way", () => {
+    const engine = fakeEngine(checkersState({ phase: "playing", seats: SEATED, toMove: 0, legal: ["2x11x18", "2x9x18"] }));
+    const squares = tiles(engine);
+    load(BOARD);
+    engine.press(squares.get("r0c3"));
+    engine.press(squares.get("r4c3"));
+    assert.deepEqual(engine.calls, []);
+    assert.deepEqual(engine.highlights().map(h => h.name).sort(),
+        ["GT.Highlight r0c3", "GT.Highlight r2c1", "GT.Highlight r2c5", "GT.Highlight r4c3"]);
+    engine.press(squares.get("r2c5"));
+    assert.deepEqual(engine.calls, [{ entityID: BOARD, method: "move", params: ["2x11x18"] }]);
+});
+
+test("tiles that reach the client after a click get their highlights on a retry", () => {
+    const engine = fakeEngine(checkersState({ phase: "playing", seats: SEATED, toMove: 0, legal: OPENING }));
+    load(BOARD);
+    const piece = engine.Entities.addEntity({ name: "GT.Pc r2c5", parentID: BOARD });
+    engine.press(piece);
+    assert.equal(engine.highlights().length, 0);
+    assert.equal(engine.timers.size, 1);
+    tiles(engine);
+    engine.runTimers();
+    assert.equal(engine.highlights().length, 3);
+    assert.equal(engine.timers.size, 0);
+});
+
+test("on a chess board, the king then its castling square castles; a promotion by click is a queen", () => {
+    const position = chess.fromFen("r3k2r/1P6/8/8/8/8/8/R3K2R w KQkq - 0 1");
+    const engine = fakeEngine(projection({ game: "chess", rows: chess.rows(position), phase: "playing", seats: SEATED,
+        toMove: 0, legal: chess.legalMoves(position) }));
+    const squares = tiles(engine);
+    load(BOARD);
+    assert.deepEqual(engine.announced, ["Your turn (White)"]);
+    engine.press(squares.get("r7c4"));
+    assert.ok(engine.highlights().some(h => h.name === "GT.Highlight r7c6"), "g1 is offered");
+    engine.press(squares.get("r7c6"));
+    engine.press(squares.get("r1c1"));
+    engine.press(squares.get("r0c0"));
+    assert.deepEqual(engine.calls.map(call => call.params[0]), ["e1g1", "b7a8q"]);
 });

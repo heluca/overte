@@ -13,7 +13,8 @@
 //      GT.Seat<n>  a seat button: a click joins seat n, or leaves it when already seated there
 //                  (during a game, which resigns it, only on a second click within 5 s)
 //      (other)     the board itself: listens on the board's channel, announces what concerns
-//                  this user, and highlights the legal columns while it is their turn
+//                  this user, and highlights the legal columns while it is their turn; on an
+//                  8x8 board it also takes the clicks on the squares (client-grid.mjs)
 //
 //  The client holds no game state of its own: it reads the board's userData and the channel,
 //  never writes either, and edits only the local entities it creates for the highlights. Channel
@@ -21,7 +22,9 @@
 //  shown; every action goes to the referee, which checks the caller.
 //
 
-import { SEAT_NAMES, channelFor } from "./referee-core.mjs";
+import { channelFor } from "./referee-core.mjs";
+import { gameEntry } from "./game-registry.mjs";
+import { GridClient } from "./client-grid.mjs";
 
 const COLUMN = /^GT\.Col([0-6])$/;
 const SEAT = /^GT\.Seat([01])$/;
@@ -35,9 +38,15 @@ const RESIGN_CONFIRM_TEXT = "Click your seat again within 5 s to resign the game
 const NOT_SEATED_TEXT = "You are not seated at the game table";
 const OFFLINE_TEXT = "Game table: the referee is not running";
 /** @type {Record<string, string>} */
-const METHOD_TEXT = { join: "Seat refused", move: "Move refused", leave: "Leave refused", newGame: "New game refused" };
+const METHOD_TEXT = {
+    join: "Seat refused", move: "Move refused", leave: "Leave refused", newGame: "New game refused", draw: "Draw offer refused"
+};
 /** @type {Record<string, string>} */
-const REASON_TEXT = { four: "four in a row", timeout: "on time", resign: "by resignation" };
+const REASON_TEXT = {
+    four: "four in a row", timeout: "on time", resign: "by resignation", checkmate: "checkmate", "no moves": "no moves left",
+    agreement: "by agreement", repetition: "threefold repetition", "forty-move": "forty-move rule",
+    "fifty-move": "fifty-move rule", stalemate: "stalemate", material: "insufficient material"
+};
 
 /**
  * @param {unknown} text
@@ -70,6 +79,7 @@ function sameSession(a, b) {
  * @returns {string}
  */
 function statusFor(state, mine) {
+    const SEAT_NAMES = gameEntry(state.game).entry.rules.SEAT_NAMES;
     if (state.phase === "offline") {
         return OFFLINE_TEXT;
     }
@@ -78,16 +88,21 @@ function statusFor(state, mine) {
     }
     const seats = /** @type {({ name: string } | null)[]} */ (state.seats);
     if (state.phase === "playing") {
+        const offer = state.drawOffer === 1 - mine ? "; " + SEAT_NAMES[1 - mine] + " offers a draw"
+            : state.drawOffer === mine ? "; your draw offer stands" : "";
         if (state.toMove === mine) {
-            return "Your turn (" + SEAT_NAMES[mine] + ")";
+            return "Your turn (" + SEAT_NAMES[mine] + ")" + offer;
         }
         const opponent = seats[state.toMove];
-        return "Waiting for " + (opponent ? opponent.name : SEAT_NAMES[state.toMove]) + " to move";
+        return "Waiting for " + (opponent ? opponent.name : SEAT_NAMES[state.toMove]) + " to move" + offer;
     }
     if (state.phase === "over" && state.result) {
         const { winner, reason } = state.result;
         if (winner === null) {
-            return reason === "draw" ? "Draw" : "Game abandoned";
+            if (reason === "abandoned") {
+                return "Game abandoned";
+            }
+            return reason === "draw" ? "Draw" : "Draw (" + (REASON_TEXT[reason] || reason) + ")";
         }
         return (winner === mine ? "You win" : "You lose") + " (" + (REASON_TEXT[reason] || reason) + ")";
     }
@@ -108,6 +123,8 @@ export default class GameTableClient {
     highlights = new Map();
     /** @type {number[]} */ wanted = [];
     /** @type {number | null} */ retryTimer = null;
+    /** @type {GridClient | null} the 8x8 board's clicks and highlights, while its state shows one */ grid = null;
+    gridGame = "";
     resignUntil = 0;
 
     /** @param {Uuid} entityID */
@@ -140,6 +157,10 @@ export default class GameTableClient {
         }
         this.highlights.forEach(shown => Entities.deleteEntity(shown.id));
         this.highlights.clear();
+        if (this.grid) {
+            this.grid.stop();
+            this.grid = null;
+        }
     }
 
     /** @param {Uuid} _id @param {PointerEvent} event */
@@ -234,11 +255,28 @@ export default class GameTableClient {
         this.shown = status;
         this.seated = mine >= 0;
         const myTurn = state.phase === "playing" && mine >= 0 && state.toMove === mine;
-        this.highlight(myTurn && Array.isArray(state.legal) ? state.legal : []);
+        const game = gameEntry(state.game);
+        // The board's game can change when its referee reloads
+        if (this.grid && this.gridGame !== game.name) {
+            this.grid.stop();
+            this.grid = null;
+        }
+        const entry = game.entry;
+        if (entry.layout === "grid") {
+            if (!this.grid) {
+                this.grid = new GridClient(this.boardID, entry.cells);
+                this.gridGame = game.name;
+            }
+            this.grid.update(state, myTurn);
+            // Column highlights left from a Connect Four game on this board
+            this.highlight([]);
+        } else {
+            this.highlight(myTurn && Array.isArray(state.legal) ? state.legal : []);
+        }
     }
 
     /**
-     * Shows a local box around each column target in `columns` and removes the others. Local
+     * Shows a local highlight around each column target in `columns` and removes the others. Local
      * entities are drawn for this user only and need no edit rights; the column targets are
      * domain entities, so editing their colour would change it for everyone, if allowed at all.
      * @param {number[]} columns
@@ -274,7 +312,7 @@ export default class GameTableClient {
     addHighlights(wanted) {
         Entities.getChildrenIDs(this.boardID).forEach(id => {
             const target = /** @type {Partial<Entities.EntityProperties_Box>} */ (
-                Entities.getEntityProperties(id, ["name", "dimensions"]));
+                Entities.getEntityProperties(id, ["name", "dimensions", "shape"]));
             const column = COLUMN.exec(target.name || "");
             const col = column ? Number(column[1]) : -1;
             if (!wanted.has(col) || this.highlights.has(col)) {
@@ -282,7 +320,9 @@ export default class GameTableClient {
             }
             const size = /** @type {Vec3} */ (target.dimensions);
             this.highlights.set(col, { target: id, id: Entities.addEntity({
-                type: "Box",
+                // The target's own shape, grown round it: the highlight takes its rotation too
+                type: "Shape",
+                shape: target.shape || "Cube",
                 name: HIGHLIGHT_PREFIX + col,
                 parentID: id,
                 localPosition: { x: 0, y: 0, z: 0 },
