@@ -3663,10 +3663,20 @@ void VKBackend::do_setResourceTextureTable(const gpu::Batch& batch, size_t param
         return;
     }
 
+    // Layered materials bind one table per layer at its own start slot (ALBEDO2_3 = 4, ALBEDO3_3 = 8, ...).
+    // Samplers need no handling here: VKTexture syncs its sampler from the texture, which is the same
+    // sampler Batch::setResourceTextureTable caches for each entry.
+    uint32_t startSlot = batch._params[paramOffset + 1]._uint;
     const auto& textureTable = *textureTablePointer;
     const auto& textures = textureTable.getTextures();
     for (uint32_t slot = 0; slot < textures.size(); ++slot) {
-        bindResourceTexture(slot, textures[slot]);
+        if (startSlot + slot >= MAX_NUM_RESOURCE_TEXTURES) {
+            qCDebug(gpu_vk_logging) << "VKBackend::do_setResourceTextureTable: Trying to set a resource Texture at slot #"
+                                    << startSlot + slot << " which doesn't exist. MaxNumResourceTextures = "
+                                    << MAX_NUM_RESOURCE_TEXTURES;
+            return;
+        }
+        bindResourceTexture(startSlot + slot, textures[slot]);
     }
 }
 
@@ -3740,7 +3750,7 @@ std::array<VKBackend::CommandCall, Batch::NUM_COMMANDS> VKBackend::_commandCalls
     (&::gpu::vk::VKBackend::do_setUniformBuffer),
     (&::gpu::vk::VKBackend::do_setResourceBuffer),
     (&::gpu::vk::VKBackend::do_setResourceTexture),
-    (&::gpu::vk::VKBackend::do_setResourceTextureTable), // This is not needed, it's only for bindless textures, which are not enabled in OpenGL version
+    (&::gpu::vk::VKBackend::do_setResourceTextureTable), // Used by layered materials (one table per layer, at its own start slot)
     (&::gpu::vk::VKBackend::do_setResourceFramebufferSwapChainTexture),
 
     (&::gpu::vk::VKBackend::do_setFramebuffer),
