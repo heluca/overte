@@ -19,6 +19,9 @@
         "../../../tools/typings/dist/overte-client-entity.d.ts",
         "piano-core.mjs",
         "piano-bridge-core.mjs",
+        "piano-pose-core.mjs",
+        "piano-screen-core.mjs",
+        "piano-screen.mjs",
         "piano-client.mjs",
         "piano-bench-core.mjs",
         "piano-bench-client.mjs"

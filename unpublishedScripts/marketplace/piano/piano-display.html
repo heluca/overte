@@ -7,256 +7,364 @@
     Distributed under the Apache License, Version 2.0.
     See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 
-    The piano's desk display, shown on the music desk to whoever sits at the piano. This is a
-    WIREFRAME of the future interface: placeholder data, and buttons that only send a web event
-    to piano-client.mjs, which prints it and acknowledges it back.
+    The piano's two screens, each in a local Web entity that piano-client.mjs opens for one
+    visitor: ?view=desk, the desk screen on the music desk for whoever sits at the keyboard
+    (what plays, its progress, the transport, the queue and the songs), and ?view=picker, the
+    song picker that opens in front of the score. The page decides nothing: the client script
+    sends it a finished view ({"type": "piano-view", ...}, piano-screen-core.mjs) and it sends
+    back its buttons ({"type": "piano-display", "action": ...}) with EventBridge.emitWebEvent,
+    starting with "ready" once it can hear.
 
-    Laid out in rem on a 50 x 17.1875 rem canvas: the 0.80 x 0.275 m desk face of
-    piano-core.mjs DISPLAY_DEFAULTS, so 1 rem is 16 mm on the desk whatever the Web entity's
-    pixel count, and body text is 16 mm tall at the seated player's 0.6-0.7 m. The root font
-    size fits the canvas to the viewport, so another size or aspect from userData.piano.display
-    scales the page rather than cropping it. Self-contained: no external fonts, scripts or images.
+    Laid out in rem on a fixed canvas fitted to the viewport, so another size or aspect scales
+    the page rather than cropping it: the desk is 50 x 17.1875 rem, the 0.80 x 0.275 m desk face
+    (1 rem is 16 mm, legible from the bench); the picker is 24 x 24 rem, 0.48 x 0.48 m (1 rem is
+    20 mm, legible from a few metres). Self-contained: no external fonts, scripts or images.
+    Opened in a browser without EventBridge it shows sample data.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Piano Desk Display</title>
+<title>Piano Screen</title>
 <style>
     :root {
-        --glass: #0b0d10;
-        --line: #8a939d;
-        --faint: #454c56;
-        --text: #e2e6ea;
-        --label: #9aa3ad;
-        --mark: #f2f4f6;
-        /* 50 x 17.1875 rem fitted into the viewport */
+        --glass: #0c0e12;
+        --panel: #15181e;
+        --line: #343a44;
+        --text: #ece6da;
+        --muted: #a39d92;
+        --brass: #c9a24a;
+        --brass-deep: #6b5422;
+        --ok: #9fcf8a;
+        --refused: #f0a070;
         font-size: min(2vw, 5.818vh);
     }
+    :root.view-picker { font-size: min(4.1667vw, 4.1667vh); }
     * { box-sizing: border-box; }
-    html, body {
-        margin: 0;
-        height: 100%;
-        overflow: hidden;
-        background: var(--glass);
-    }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--glass); }
     body {
         display: flex;
         align-items: center;
         justify-content: center;
         color: var(--text);
-        font: 1rem/1.2 "DejaVu Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+        font: 1rem/1.25 "DejaVu Sans", "Segoe UI", Helvetica, Arial, sans-serif;
         -webkit-user-select: none;
         user-select: none;
     }
-    .frame {
-        display: grid;
-        grid-template-columns: 30rem 1fr;
-        grid-template-rows: 2rem 1fr;
-        gap: 0.6rem;
-        width: 50rem;
-        height: 17.1875rem;
-        padding: 0.5rem;
-    }
-    /* A wireframe region: dashed outline with its name tagged on the top edge */
-    .region {
-        position: relative;
-        border: 0.0625rem dashed var(--line);
-        padding: 0.75rem 0.6rem 0.4rem;
-        min-width: 0;
-        min-height: 0;
-    }
-    .region > .tag {
-        position: absolute;
-        top: -0.45rem;
-        left: 0.5rem;
-        padding: 0 0.25rem;
-        background: var(--glass);
-        color: var(--label);
-        font-size: 0.75rem;
-        line-height: 0.9rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-    }
-    .status {
-        grid-column: 1 / 3;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 1rem;
-        padding: 0 0.6rem;
-        font-size: 0.875rem;
-    }
-    .status strong { color: var(--mark); letter-spacing: 0.1em; font-size: 0.875rem; }
-    .indicators { display: flex; gap: 1rem; color: var(--label); white-space: nowrap; }
-    .indicator { display: flex; align-items: center; gap: 0.35rem; }
-    .indicator svg { width: 0.8rem; height: 0.8rem; }
-    #last { color: var(--text); }
-    .left { display: grid; grid-template-rows: auto auto 1fr; gap: 0.6rem; min-height: 0; }
-    .now { display: grid; grid-template-columns: 1fr auto; align-items: end; column-gap: 0.75rem; }
-    .title { grid-column: 1 / 3; font-size: 1.75rem; line-height: 2.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .composer { color: var(--label); }
-    .state {
-        padding: 0 0.6rem;
-        border: 0.0625rem solid var(--line);
-        border-radius: 0.6rem;
-        font-size: 0.875rem;
-        text-transform: lowercase;
-    }
-    .progress { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.6rem; }
-    .bar { height: 0.6rem; border: 0.0625rem solid var(--line); }
-    .bar > div { height: 100%; width: 45%; background: repeating-linear-gradient(135deg, var(--line) 0 0.12rem, transparent 0.12rem 0.36rem); }
-    .times { color: var(--label); font-size: 0.875rem; }
-    .buttons { display: flex; justify-content: space-between; height: 100%; align-items: center; }
+    [hidden] { display: none !important; }
     button {
         font: inherit;
         color: var(--text);
-        background: transparent;
+        background: var(--panel);
         border: 0.0625rem solid var(--line);
+        border-radius: 0.3rem;
         cursor: pointer;
     }
-    button:active { background: var(--faint); }
+    button:active { background: var(--brass-deep); }
+    svg { display: block; }
+
+    /* The desk: 50 x 17.1875 rem */
+    .desk {
+        display: grid;
+        grid-template-columns: 29rem 1fr;
+        grid-template-rows: 1.5rem 1fr;
+        gap: 0.5rem 0.9rem;
+        width: 50rem;
+        height: 17.1875rem;
+        padding: 0.55rem 0.8rem 0.6rem;
+    }
+    .bar { grid-column: 1 / 3; display: flex; align-items: center; gap: 0.7rem; font-size: 0.85rem; min-width: 0; }
+    .state {
+        padding: 0.05rem 0.55rem;
+        border: 0.0625rem solid var(--brass);
+        border-radius: 0.7rem;
+        color: var(--brass);
+        text-transform: lowercase;
+        white-space: nowrap;
+    }
+    .notice { margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .notice.ok { color: var(--ok); }
+    .notice.refused { color: var(--refused); }
+    .notice.info { color: var(--muted); }
+    .left { display: grid; grid-template-rows: auto auto 1fr; gap: 0.55rem; min-width: 0; }
+    .title { font-size: 1.75rem; line-height: 2.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .detail { color: var(--muted); font-size: 0.85rem; height: 1.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .progress { display: grid; grid-template-columns: 2.6rem 1fr 2.6rem; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--muted); }
+    .progress span:last-child { text-align: right; }
+    .track { height: 0.45rem; border-radius: 0.25rem; background: var(--line); overflow: hidden; }
+    .fill { height: 100%; width: 0; background: var(--brass); }
+    .transport { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.45rem; align-items: stretch; }
     .transport button {
-        width: 5.4rem;
-        height: 2.9rem;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 0.15rem;
+        gap: 0.2rem;
+        padding: 0.3rem 0;
         font-size: 0.75rem;
     }
-    .transport svg { width: 1.4rem; height: 1.4rem; }
-    .songs { display: flex; flex-direction: column; }
-    .songs ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+    .transport svg { width: 1.5rem; height: 1.5rem; }
+    .transport button.lit { border-color: var(--brass); background: var(--brass-deep); color: #fff7e6; box-shadow: 0 0 0.6rem rgba(201, 162, 74, 0.55); }
+    .transport button.dim { opacity: 0.4; }
+    .side { display: grid; grid-template-rows: 1.7rem 1fr auto; gap: 0.35rem; min-width: 0; min-height: 0; }
+    .tabs { display: flex; gap: 0.4rem; }
+    .tabs button { flex: 1; font-size: 0.8rem; padding: 0; }
+    .tabs button.on { border-color: var(--brass); color: var(--brass); }
+    ol, ul { list-style: none; margin: 0; padding: 0; min-height: 0; overflow: hidden; }
+    .queue li {
+        padding: 0.2rem 0.4rem;
+        border-bottom: 0.0625rem solid var(--line);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 0.9rem;
+    }
+    .queue li .n { color: var(--brass); margin-right: 0.45rem; }
+    .empty { color: var(--muted); font-size: 0.85rem; padding: 0.3rem 0.2rem; }
+    .songs { display: flex; flex-direction: column; gap: 0.25rem; }
     .songs button {
         width: 100%;
         display: grid;
         grid-template-columns: 1fr auto;
         align-items: center;
+        column-gap: 0.5rem;
         text-align: left;
-        padding: 0.25rem 0.5rem;
-        border-color: var(--faint);
+        padding: 0.2rem 0.45rem;
     }
-    .songs button.current { border-color: var(--mark); border-width: 0.125rem; padding: 0.1875rem 0.4375rem; }
-    .songs .song { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .songs .length { padding-left: 0.5rem; font-size: 0.875rem; color: var(--label); }
-    .more { margin-top: auto; font-size: 0.75rem; color: var(--label); }
+    .songs .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .songs .by { grid-column: 1; color: var(--muted); font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .songs .length { grid-row: 1 / 3; grid-column: 2; color: var(--muted); font-size: 0.8rem; }
+    .desk .songs .by { display: none; }
+    .pager { display: flex; align-items: center; justify-content: space-between; font-size: 0.8rem; color: var(--muted); }
+    .pager button { width: 2.6rem; padding: 0.05rem 0; }
+    .pager button:disabled { opacity: 0.3; }
+
+    /* The picker: 24 x 24 rem */
+    .pick {
+        display: grid;
+        grid-template-rows: 2.2rem 1fr 1.8rem 1.6rem;
+        gap: 0.45rem;
+        width: 24rem;
+        height: 24rem;
+        padding: 0.7rem 0.8rem;
+        border: 0.125rem solid var(--brass-deep);
+    }
+    .pick header { display: flex; align-items: center; justify-content: space-between; }
+    .pick h1 { margin: 0; font-size: 1.15rem; font-weight: normal; color: var(--brass); }
+    .pick .count { color: var(--muted); font-size: 0.8rem; margin-left: 0.5rem; }
+    .pick .close { width: 2rem; height: 2rem; padding: 0.35rem; }
+    .pick .songs { gap: 0.3rem; }
+    .pick .songs button { padding: 0.25rem 0.5rem; min-height: 1.95rem; }
+    .pick .notice { margin: 0; text-align: center; font-size: 0.85rem; }
 </style>
 </head>
 <body>
-<main class="frame">
-    <section class="region status" aria-label="Status bar">
-        <span class="tag">status bar</span>
-        <span><strong>WIREFRAME</strong> &middot; placeholder data</span>
-        <span class="indicators">
-            <span class="indicator" title="Orpheus connection (placeholder)">
-                <svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="6" cy="6" r="2" fill="currentColor"/></svg>
-                <span>Orpheus: connected</span>
-            </span>
-            <span class="indicator" title="EventBridge to the piano's client script">
-                <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6h3M8 6h3M4 3.5h4v5H4z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-                <span id="bridge">Script: checking</span>
-            </span>
-            <span id="last">no button pressed</span>
-        </span>
-    </section>
-
-    <div class="left">
-        <section class="region now" aria-label="Now playing">
-            <span class="tag">now playing</span>
-            <div class="title">Gymnopedie No. 1</div>
-            <div class="composer">Erik Satie</div>
-            <span class="state">playing</span>
-        </section>
-
-        <section class="region progress" aria-label="Progress">
-            <span class="tag">progress</span>
-            <span class="times">1:24</span>
-            <div class="bar"><div></div></div>
-            <span class="times">3:05</span>
-        </section>
-
-        <section class="region transport" aria-label="Transport">
-            <span class="tag">transport</span>
-            <div class="buttons">
-                <button data-action="previous" aria-label="Previous">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M18 5l-9 7 9 7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-                    previous
-                </button>
-                <button data-action="pause" aria-label="Play or pause">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5l9 7-9 7zM15 5v14M20 5v14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-                    play/pause
-                </button>
-                <button data-action="stop" aria-label="Stop">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
-                    stop
-                </button>
-                <button data-action="next" aria-label="Next">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M6 5l9 7-9 7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-                    next
-                </button>
-                <button data-action="replay" aria-label="Replay">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 1 0 2.1-5M5 4v4h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    replay
-                </button>
-            </div>
-        </section>
+<main class="desk" id="desk" hidden>
+    <div class="bar">
+        <span class="state" id="state">waiting</span>
+        <span class="notice" id="desk-notice"></span>
     </div>
+    <div class="left">
+        <div>
+            <div class="title" id="title">Waiting for Orpheus</div>
+            <div class="detail" id="detail"></div>
+        </div>
+        <div class="progress">
+            <span id="elapsed"></span>
+            <div class="track"><div class="fill" id="fill"></div></div>
+            <span id="duration"></span>
+        </div>
+        <nav class="transport" aria-label="Transport">
+            <button data-action="previous" aria-label="Previous">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M18 5l-9 7 9 7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>previous
+            </button>
+            <button data-action="play" aria-label="Play">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5l12 7-12 7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>play
+            </button>
+            <button data-action="pause" aria-label="Pause">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14" fill="none" stroke="currentColor" stroke-width="2.4"/></svg>pause
+            </button>
+            <button data-action="stop" aria-label="Stop">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>stop
+            </button>
+            <button data-action="next" aria-label="Next">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M6 5l9 7-9 7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>next
+            </button>
+            <button data-action="replay" aria-label="Replay">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12a7 7 0 1 0 2.1-5M5 4v4h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>replay
+            </button>
+        </nav>
+    </div>
+    <aside class="side">
+        <div class="tabs">
+            <button data-tab="queue" class="on">Up next</button>
+            <button data-tab="songs">Songs</button>
+        </div>
+        <ol class="queue" id="queue"></ol>
+        <ul class="songs" id="desk-songs" hidden></ul>
+        <div class="pager" id="desk-pager" hidden></div>
+    </aside>
+</main>
 
-    <section class="region songs" aria-label="Song list">
-        <span class="tag">song list</span>
-        <ul>
-            <li><button data-song="1"><span class="song">Ode to Joy</span><span class="length">0:16</span></button></li>
-            <li><button data-song="2" class="current"><span class="song">Gymnopedie No. 1</span><span class="length">3:05</span></button></li>
-            <li><button data-song="3"><span class="song">Clair de Lune</span><span class="length">5:02</span></button></li>
-            <li><button data-song="4"><span class="song">Prelude in C</span><span class="length">2:20</span></button></li>
-            <li><button data-song="5"><span class="song">Nocturne Op. 9 No. 2</span><span class="length">4:33</span></button></li>
-        </ul>
-        <div class="more">+7 more (scrolls)</div>
-    </section>
+<main class="pick" id="picker" hidden>
+    <header>
+        <h1>Request a song<span class="count" id="count"></span></h1>
+        <button class="close" data-close aria-label="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        </button>
+    </header>
+    <ul class="songs" id="picker-songs"></ul>
+    <div class="pager" id="picker-pager"></div>
+    <p class="notice" id="picker-notice"></p>
 </main>
 <script>
     "use strict";
-    // Interface injects EventBridge into Web entity pages; a desktop browser preview has none.
-    var bridge = typeof EventBridge !== "undefined" ? EventBridge : null;
-    var bridgeText = document.getElementById("bridge");
-    var lastText = document.getElementById("last");
-    bridgeText.textContent = bridge ? "Script: connected" : "Script: none (preview)";
+    var kind = /[?&]view=picker\b/.test(location.search) ? "picker" : "desk";
+    document.documentElement.className = "view-" + kind;
+    document.getElementById(kind).hidden = false;
 
+    // Interface injects a stand-in EventBridge and replaces it once its channel is up, so it is
+    // looked up at every send, never kept.
     function send(event) {
-        var message = JSON.stringify(event);
-        lastText.textContent = "sent " + event.action + (event.songId ? " " + event.songId : "");
-        if (bridge) {
-            bridge.emitWebEvent(message);
+        event.type = "piano-display";
+        if (typeof EventBridge !== "undefined") {
+            EventBridge.emitWebEvent(JSON.stringify(event));
         } else {
-            console.log("piano-display", message);
+            console.log("piano-display", JSON.stringify(event));
         }
     }
 
-    if (bridge) {
-        bridge.scriptEventReceived.connect(function (message) {
-            try {
-                var reply = JSON.parse(message);
-                if (reply && reply.type === "piano-display-ack") {
-                    lastText.textContent = "ack " + reply.action + (reply.songId ? " " + reply.songId : "");
-                }
-            } catch (e) {
-                // Not ours
-            }
-        });
+    function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) { node.className = className; }
+        if (text !== undefined && text !== null) { node.textContent = text; }
+        return node;
     }
 
-    document.querySelectorAll("[data-action]").forEach(function (button) {
-        button.addEventListener("click", function () {
-            send({ type: "piano-display", action: button.getAttribute("data-action") });
+    function showNotice(node, notice) {
+        node.textContent = notice ? notice.text : "";
+        node.className = "notice" + (notice ? " " + notice.tone : "");
+    }
+
+    function showSongs(list, pager, songs) {
+        list.textContent = "";
+        pager.textContent = "";
+        if (songs.state !== "ready") {
+            list.appendChild(el("li", "empty", songs.state === "loading" ? "Asking the piano for its songs..." : songs.text));
+            return;
+        }
+        if (songs.total === 0) {
+            list.appendChild(el("li", "empty", "The library has no songs yet"));
+        }
+        songs.items.forEach(function (song) {
+            var button = el("button");
+            button.appendChild(el("span", "name", song.title));
+            button.appendChild(el("span", "length", song.length || ""));
+            button.appendChild(el("span", "by", song.composer || ""));
+            button.addEventListener("click", function () { send({ action: "request", songId: song.id }); });
+            var item = el("li");
+            item.appendChild(button);
+            list.appendChild(item);
         });
-    });
-    document.querySelectorAll("[data-song]").forEach(function (button) {
-        button.addEventListener("click", function () {
-            send({ type: "piano-display", action: "play-song", songId: Number(button.getAttribute("data-song")) });
+        var back = el("button", null, "‹");
+        var on = el("button", null, "›");
+        back.disabled = songs.page === 0;
+        on.disabled = songs.page >= songs.pages - 1;
+        back.addEventListener("click", function () { send({ action: "page", page: songs.page - 1 }); });
+        on.addEventListener("click", function () { send({ action: "page", page: songs.page + 1 }); });
+        pager.appendChild(back);
+        pager.appendChild(el("span", null, "Page " + (songs.page + 1) + " of " + songs.pages));
+        pager.appendChild(on);
+    }
+
+    function showPicker(view) {
+        var songs = view.songs;
+        document.getElementById("count").textContent = songs.state === "ready" ? "(" + songs.total + ")" : "";
+        showSongs(document.getElementById("picker-songs"), document.getElementById("picker-pager"), songs);
+        showNotice(document.getElementById("picker-notice"), view.notice);
+    }
+
+    function showDesk(view) {
+        document.getElementById("state").textContent = view.state;
+        document.getElementById("title").textContent = view.title;
+        document.getElementById("detail").textContent = view.detail || "";
+        document.getElementById("elapsed").textContent = view.elapsed || "";
+        document.getElementById("duration").textContent = view.duration || "";
+        document.getElementById("fill").style.width = (view.progress || 0) + "%";
+        showNotice(document.getElementById("desk-notice"), view.notice);
+        Array.prototype.forEach.call(document.querySelectorAll("[data-action]"), function (button) {
+            var look = view.buttons[button.getAttribute("data-action")] || {};
+            button.className = (look.lit ? "lit" : "") + (look.dim ? " dim" : "");
         });
+        Array.prototype.forEach.call(document.querySelectorAll("[data-tab]"), function (button) {
+            button.className = button.getAttribute("data-tab") === view.tab ? "on" : "";
+        });
+        var queue = document.getElementById("queue");
+        var songs = document.getElementById("desk-songs");
+        var pager = document.getElementById("desk-pager");
+        queue.hidden = view.tab !== "queue";
+        songs.hidden = pager.hidden = view.tab !== "songs";
+        queue.textContent = "";
+        if (view.tab === "songs" && view.songs) {
+            showSongs(songs, pager, view.songs);
+        }
+        view.queue.items.forEach(function (title, i) {
+            var item = el("li");
+            item.appendChild(el("span", "n", String(i + 1)));
+            item.appendChild(document.createTextNode(title));
+            queue.appendChild(item);
+        });
+        if (view.queue.more > 0) {
+            queue.appendChild(el("li", "empty", "+" + view.queue.more + " more"));
+        }
+        if (view.queue.items.length === 0) {
+            queue.appendChild(el("li", "empty", "Nothing queued. Pick a song under Songs."));
+        }
+    }
+
+    function show(message) {
+        var view;
+        try {
+            view = JSON.parse(message);
+        } catch (e) {
+            return;
+        }
+        if (view && view.type === "piano-view" && view.kind === kind) {
+            (kind === "picker" ? showPicker : showDesk)(view);
+        }
+    }
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-action]"), function (button) {
+        button.addEventListener("click", function () { send({ action: button.getAttribute("data-action") }); });
     });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-tab]"), function (button) {
+        button.addEventListener("click", function () { send({ action: "tab", tab: button.getAttribute("data-tab") }); });
+    });
+    document.querySelector("[data-close]").addEventListener("click", function () { send({ action: "close" }); });
+
+    if (typeof EventBridge !== "undefined") {
+        EventBridge.scriptEventReceived.connect(show);
+        send({ action: "ready" });
+    } else {
+        // A browser preview: sample views, so the layout can be checked without Interface
+        var sample = [
+            { id: 1, title: "Gymnopédie No. 1", composer: "Erik Satie", length: "3:00" },
+            { id: 2, title: "Clair de Lune", composer: "Claude Debussy", length: "5:02" },
+            { id: 3, title: "Nocturne Op. 9 No. 2", composer: "Frédéric Chopin", length: "4:33" },
+            { id: 4, title: "Prelude in C", composer: "J. S. Bach", length: "2:20" },
+            { id: 5, title: "Ode to Joy", composer: null, length: "0:16" },
+            { id: 6, title: "Arabesque No. 1", composer: "Claude Debussy", length: "4:10" }
+        ];
+        var lit = { lit: true, dim: false }, plain = { lit: false, dim: false };
+        show(JSON.stringify(kind === "picker"
+            ? { type: "piano-view", kind: "picker", songs: { state: "ready", items: sample.slice(0, 5), page: 0, pages: 2, total: 8 },
+                notice: { text: "Gymnopédie No. 1: plays next", tone: "ok" } }
+            : { type: "piano-view", kind: "desk", state: "playing", title: "Gymnopédie No. 1", detail: null,
+                progress: 46, elapsed: "1:23", duration: "3:00",
+                buttons: { previous: plain, play: lit, pause: plain, stop: plain, next: plain, replay: plain },
+                tab: "queue", queue: { items: ["Clair de Lune", "Nocturne Op. 9 No. 2"], more: 0 }, songs: null,
+                notice: { text: "Pause: Too many controls: at most 5 every 30 s; try again in 21 s", tone: "refused" } }));
+    }
 </script>
 </body>
 </html>

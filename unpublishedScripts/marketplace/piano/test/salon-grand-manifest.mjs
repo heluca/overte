@@ -12,6 +12,7 @@ export const MANIFEST = {
     overte: { joint_count: 109 },
     joints: {
         salon_grand: { index: 0, kind: "static" },
+        score: { index: 108, parent: "anchor_score", kind: "static", mesh_index: 105 },
         fallboard: { index: 9, kind: "rotation", axis: [1.0, 0.0, 0.0], travel: 90.0, unit: "deg" },
         lid: { index: 100, kind: "rotation", axis: [0.0, 0.0, 1.0], travel: 40.0, unit: "deg" },
         lid_prop: { index: 101, kind: "rotation", axis: [-0.734583, -0.616388, 0.283643], travel: 103.3876, unit: "deg" }

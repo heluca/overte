@@ -10,6 +10,7 @@
 //  (Morpheus ADR 0021; phantasos props/salon-grand/spec.md sections 4 and 5). The joints come
 //  from the prop's published manifest.json, never typed in: index, axis and travel. The entity
 //  script server has no model loaded, so the pose is written as the entity's joint arrays.
+//  The client script reads the score's mesh index from the same manifest.
 //  No engine globals, so it runs under Node.
 //
 
@@ -145,4 +146,18 @@ export function jointEdit(pose, map) {
         jointRotations[joint.index] = angleAxis(pose[name] || 0, joint.axis);
     }
     return { jointRotationsSet, jointRotations };
+}
+
+/**
+ * The mesh a precision pick reports as `extraInfo.subMeshIndex` for a named part, from the
+ * manifest's `joints.<name>.mesh_index`. The glTF loader leaves `subMeshName` empty, so the
+ * index is the only way to tell the score from the rest of the piano (spec section 5).
+ * @param {unknown} manifest
+ * @param {string} name
+ * @returns {number | null}
+ */
+export function meshIndexOf(manifest, name) {
+    const m = /** @type {Record<string, any>} */ (manifest !== null && typeof manifest === "object" ? manifest : {});
+    const index = m.joints && m.joints[name] ? m.joints[name].mesh_index : undefined;
+    return Number.isInteger(index) && index >= 0 ? index : null;
 }

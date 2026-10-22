@@ -15,8 +15,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
     parseConfig, withStatus, statusOf, compactStatus, pollDelay, Backoff, formatDuration, formatStatus, formatSongs,
-    parseDisplayURL, parseDisplayGeometry, parseDisplayEvent,
-    DEFAULT_VOLUME, ACTIVE_POLL_MS, IDLE_POLL_MS
+    parseDisplayURL, parseDisplayGeometry,
+    DEFAULT_VOLUME, ACTIVE_POLL_MS, IDLE_POLL_MS, QUEUE_SHOWN
 } from "../piano-core.mjs";
 
 const BASE = "http://orpheus.example:8080";
@@ -71,12 +71,14 @@ test("withStatus replaces piano.status and keeps everything else", () => {
 
 test("compactStatus: idle, playing, paused and the start-up phases", () => {
     assert.deepEqual(compactStatus(playback(), SYNTH), {
-        state: "idle", title: null, output: null, progress: null, elapsed: null, synth: true, error: null
+        state: "idle", title: null, output: null, progress: null, elapsed: null, duration: null, queue: [], queued: 0,
+        synth: true, error: null
     });
     const playing = playback({ is_playing: true, status: "playing", title: "Gymnopedie No. 1", playback_id: 7,
-        output: "synth", progress: 0.4567 });
+        output: "synth", progress: 0.4567, duration: 179.6 });
     assert.deepEqual(compactStatus(playing, SYNTH), {
-        state: "playing", title: "Gymnopedie No. 1", output: "synth", progress: 46, elapsed: null, synth: true, error: null
+        state: "playing", title: "Gymnopedie No. 1", output: "synth", progress: 46, elapsed: null, duration: 180,
+        queue: [], queued: 0, synth: true, error: null
     });
     assert.equal(compactStatus({ ...playing, is_paused: true }, SYNTH).state, "paused");
     assert.equal(compactStatus({ ...playing, status: "connecting" }, SYNTH).state, "connecting");
@@ -90,11 +92,26 @@ test("compactStatus: errors, a failed synth request and an unreachable Orpheus",
     assert.equal(compactStatus(playback(), null).synth, false);
     assert.equal(compactStatus(playback(), { ...SYNTH, enabled: false }).synth, false);
     assert.deepEqual(compactStatus(null, null, "Error: HTTP 401"), {
-        state: "offline", title: null, output: null, progress: null, elapsed: null, synth: false, error: "Error: HTTP 401"
+        state: "offline", title: null, output: null, progress: null, elapsed: null, duration: null, queue: [], queued: 0,
+        synth: false, error: "Error: HTTP 401"
     });
     // Polled replies that differ only in what is not displayed compact to the same status
     assert.deepEqual(compactStatus(failed, { ...SYNTH, active_voices: 9 }),
         compactStatus({ ...failed, last_error: { ...failed.last_error, seconds_ago: 8.0 } }, SYNTH));
+});
+
+test("compactStatus: the queue's first titles and its length, the duration only while a piece is active", () => {
+    const row = (id, title) => ({ id, title, tempo_bpm: null, output: "synth", created_at: "2026-10-22T19:02:20Z" });
+    const queue = [row(4, "Clair de Lune"), row(5, "Prelude in C"), row(6, "Ode to Joy"), row(7, "Nocturne"),
+        row(8, "Arabesque"), row(9, "Reverie"), { id: 10 }];
+    const playing = compactStatus(playback({ is_playing: true, status: "playing", title: "Gymnopedie No. 1",
+        progress: 0.1, duration: 180, queue, queue_length: 7 }), SYNTH);
+    assert.deepEqual(playing.queue, ["Clair de Lune", "Prelude in C", "Ode to Joy", "Nocturne", "Arabesque"]);
+    assert.equal(playing.queue.length, QUEUE_SHOWN);
+    assert.equal(playing.queued, 7);
+    assert.equal(compactStatus(playback({ queue: [{ id: 3 }] }), SYNTH).queue[0], "Untitled");
+    assert.equal(compactStatus(playback({ duration: 180 }), SYNTH).duration, null, "idle: Orpheus keeps the last duration");
+    assert.equal(compactStatus(playback({ is_playing: true, status: "starting", duration: 0 }), SYNTH).duration, null);
 });
 
 test("pollDelay is fast only while something is active", () => {
@@ -190,16 +207,3 @@ function assertNear(actual, expected) {
         assert.ok(Math.abs(actual[key] - expected[key]) < 1e-9, key + ": " + actual[key] + " != " + expected[key]);
     }
 }
-
-test("parseDisplayEvent: the page's messages, exactly as piano-display.html sends them", () => {
-    // Captured from the page in headless Chrome with a stub EventBridge, every button clicked
-    const sent = ["previous", "pause", "stop", "next", "replay"].map(action => `{"type":"piano-display","action":"${action}"}`);
-    for (const message of sent) {
-        assert.deepEqual(parseDisplayEvent(message), { action: JSON.parse(message).action, songId: null });
-    }
-    assert.deepEqual(parseDisplayEvent('{"type":"piano-display","action":"play-song","songId":3}'), { action: "play-song", songId: 3 });
-    for (const message of ["", "rubbish", '{"type":"other","action":"stop"}', '{"type":"piano-display","action":"delete"}',
-        '{"type":"piano-display","action":"play-song"}', '{"type":"piano-display","action":"play-song","songId":"3"}']) {
-        assert.equal(parseDisplayEvent(message), null, message);
-    }
-});

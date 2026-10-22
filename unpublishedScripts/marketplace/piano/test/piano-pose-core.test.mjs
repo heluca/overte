@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseJoints, poseFor, stepPose, samePose, angleAxis, jointEdit } from "../piano-pose-core.mjs";
+import { parseJoints, poseFor, stepPose, samePose, angleAxis, jointEdit, meshIndexOf } from "../piano-pose-core.mjs";
 import { MANIFEST } from "./salon-grand-manifest.mjs";
 
 const MAP = /** @type {import("../piano-pose-core.mjs").JointMap} */ (parseJoints(MANIFEST));
@@ -113,4 +113,14 @@ test("jointEdit: arrays of the manifest's length, this script's joints set (at r
     assert.deepEqual(edit.jointRotations[101], { x: 0, y: 0, z: 0, w: 1 }, "a folded stick is sent as identity");
     assert.deepEqual(edit.jointRotations[100], angleAxis(40, [0, 0, 1]));
     assert.deepEqual(edit.jointRotations[50], { x: 0, y: 0, z: 0, w: 1 });
+});
+
+test("meshIndexOf: the score's mesh from the manifest, nothing for a part without one", () => {
+    assert.equal(meshIndexOf(MANIFEST, "score"), 105);
+    assert.equal(meshIndexOf(MANIFEST, "lid"), null, "the fixture's lid carries no mesh_index");
+    assert.equal(meshIndexOf({ joints: { score: { mesh_index: 0 } } }, "score"), 0);
+    for (const manifest of [null, "x", {}, { joints: {} }, { joints: { score: { mesh_index: -1 } } },
+        { joints: { score: { mesh_index: "105" } } }, { joints: { score: { mesh_index: 1.5 } } }]) {
+        assert.equal(meshIndexOf(manifest, "score"), null, JSON.stringify(manifest));
+    }
 });

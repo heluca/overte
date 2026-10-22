@@ -5,9 +5,9 @@ Visitors ask it for songs and run its transport from inside the world, each visi
 to limits (Morpheus ADRs 0020 and 0022), and the salon grand's lid, stick and fallboard follow
 what Orpheus is doing (ADR 0021). Nobody plays its keys in-world: LLM agents compose through
 Orpheus's own MCP server, and the domain's Orpheus is a headless, synth-only instance, never the
-appliance at a real piano. A bench lets one visitor sit at the keyboard; the desk display that
-opens for them is a wireframe whose buttons reach the client script and stop there (the song
-picker and the transport buttons on it are heluca/overte#74).
+appliance at a real piano. A click on the score opens a song picker; a bench lets one visitor
+sit at the keyboard, and the desk screen that opens for them shows what plays and what is
+queued and runs the transport (heluca/overte#74).
 
 | File | Runs in | What it is |
 | --- | --- | --- |
@@ -15,11 +15,13 @@ picker and the transport buttons on it are heluca/overte#74).
 | `piano-bridge-core.mjs` | anywhere | Pure logic for requests and transport: the per-session limits, the bridge routes, refusal reasons, the song list for a picker |
 | `piano-pose-core.mjs` | anywhere | Pure logic for the lid, stick and fallboard: joints from the prop's manifest, the pose per status, the ordered tween, the joint arrays |
 | `piano-entity.mjs` | entity script server | The piano's `serverScripts`: plays the stream at the entity, mirrors the status into `userData`, moves the lid, answers `status` and `list`, takes requests and runs the transport |
-| `piano-client.mjs` | Interface | The piano's client `script`: a floating local Text above the piano with the status, the song list on a click, the answers to requests and transport calls, and the desk display for the sitter |
+| `piano-screen-core.mjs` | anywhere | Pure logic for the two screens: the song list in pages, the page's events, the messages results and refusals leave, the transport buttons' looks, the views the page draws, where the picker floats |
+| `piano-screen.mjs` | Interface | One screen: a local Web entity with the page, the page's "ready" handshake, its views and its button events |
+| `piano-client.mjs` | Interface | The piano's client `script`: a floating local Text above the piano with the status, the song picker a click on the score opens, and the desk screen for the sitter |
 | `piano-bench-core.mjs` | anywhere | Pure logic for the bench: its `userData`, the sit and stand poses, the seat lease, the stand-up gesture |
 | `piano-bench-entity.js` | entity script server | The bench's `serverScripts`, a classic script: one sitter at a time, on a lease |
 | `piano-bench-client.mjs` | Interface | The bench's client `script`: sits and stands the avatar, asks the piano to open and close the desk display |
-| `piano-display.html` | the desk display | The page on the music desk: a wireframe of the future controls, placeholder data |
+| `piano-display.html` | the screens | The page of both screens, `?view=picker` and `?view=desk`: draws the views the client script sends and sends back its buttons |
 
 The modules need the fork's ES module support for entity scripts (`.mjs` `serverScripts` and
 `script` with `export default class`). Imports are relative, so the `.mjs` files must be served
@@ -124,6 +126,9 @@ Entities.addEntity({
             "output": "synth",
             "progress": 46,
             "elapsed": null,
+            "duration": 180,
+            "queue": ["Clair de Lune"],
+            "queued": 1,
             "synth": true,
             "error": null
         }
@@ -138,6 +143,9 @@ Entities.addEntity({
 | `output` | `synth` (what this entity plays) or `piano` (the real piano; the stream is then silent) |
 | `progress` | Whole percent through the piece's events. Orpheus counts events, not time |
 | `elapsed` | Whole seconds, only when the service sends `elapsed_seconds`. Orpheus does not; the mock does |
+| `duration` | The piece's length in whole seconds (Orpheus's `duration`, from its last event), while one is active |
+| `queue` | The titles waiting after the current piece, in play order, at most 5 |
+| `queued` | How many pieces are waiting |
 | `synth` | Whether Orpheus's synth output is enabled |
 | `error` | Orpheus's `last_error.message`, or why Orpheus could not be reached |
 
@@ -196,10 +204,28 @@ busy, which only an owner can cause and which the bridge never touches.
 Each visitor's Interface floats a local Text entity, `Piano.Status`, above the piano: the title
 and state, the elapsed time if known, the progress, or "idle" or "offline". Only that visitor
 sees it, and it needs no edit rights. It rereads `userData` every second and edits the text when
-it changed. A primary click on the piano calls `list` and shows the songs for 8 seconds. The
-answers to that visitor's requests and transport calls (`showResult`) show the same way for 8
-seconds, a refusal with its reason, and are logged. There are no buttons yet: a script calls the
-server methods (the desk display's song picker and transport buttons are heluca/overte#74).
+it changed. The script writes nothing to the piano: what a visitor does is a remote call to the
+server script, held to that visitor's session limits there.
+
+**The song picker.** A primary click on the score opens it. The script reads the score's mesh
+index from the prop's `manifest.json` (`piano.manifestURL`, `joints.score.mesh_index`, 105 in
+salon grand 1.0.0) when it loads; a click casts a precise pick (`Entities.findRayIntersection`
+with `Picks.PICK_PRECISE`, on the piano only) along the click's ray from 5 cm short of its hit,
+and opens the picker only when `extraInfo.subMeshIndex` is the score's. The glTF loader leaves
+`subMeshName` empty, so the index is the only way to tell the score (salon grand spec section 5).
+Without `manifestURL`, or on a Box, a click anywhere on the piano opens it. The picker is the
+page at `piano.displayURL` with `?view=picker`, in a local Web entity `Piano.Picker` 0.48 m
+square, 0.30 m back along the visitor's line of sight from the click, its bottom edge 5 cm above
+it, turned upright to face them. It asks the piano for its songs (`list`, kept for a minute) and
+shows them five to a page. Choosing one calls `request(songId)`; the answer shows on the picker
+for 8 seconds: "Gymnopedie No. 1: plays next" (or "playing now", or "number 3 in the queue"),
+or what was refused and why, "Gymnopedie No. 1: One request every 10 s; try again in 7 s". It
+closes from its button, 30 seconds after it was last touched, when the visitor sits down, and
+when the script unloads; another click on the score opens it again where it was clicked.
+
+Without `piano.displayURL` there is no page: a click asks for the song list and shows it on the
+label for 8 seconds. The answers to a visitor's calls (`showResult`) show on the open screen, or
+on the label when none is open, and are logged.
 
 ## The bench and the desk display
 
@@ -259,7 +285,8 @@ can come from there, `displayURL` cannot.
 
 | Key | Where | Meaning |
 | --- | --- | --- |
-| `piano.displayURL` | piano `userData` | The desk display page, `http://` or `https://`. No default: without it the sitter sits but gets no display, the label stays, and the log says why. Read when the piano's client script loads |
+| `piano.displayURL` | piano `userData` | The screens' page, `http://` or `https://`. No default: without it the sitter sits but gets no display, a click shows the song list on the label instead of a picker, and the log says why. Read when the piano's client script loads |
+| `piano.manifestURL` | piano `userData` | Also read by the client script, for the score's mesh index. Without it a click anywhere on the piano opens the picker |
 | `piano.display` | piano `userData` | Optional size and place of the display, every key optional: `{"width": 0.80, "height": 0.275, "offset": {"x": 0, "y": 0.0275, "z": 0.013}, "pagePixelsWide": 1600}` (the defaults). Metres at the piano's natural size, `offset` from `anchor_desk_screen` in its frame. Ranges: width 0.05 to 3, height 0.05 to 2, offset -1 to 1 each, pagePixelsWide 200 to 4096. Reread every second: an open display follows a change within a second |
 | `pianoBench.hipsAboveSeat` | bench `userData` | How far the hips sit above `seat`, as a fraction of the avatar's height. Default 0.06 (0.105 m for a 1.75 m avatar), 0 to 0.3 |
 | `pianoBench.standHoldMs` | bench `userData` | How long a movement key must be held to stand up. Default 500, 0 to 5000 |
@@ -309,8 +336,8 @@ reloads, the sitter's next renewal claims the seat again.
 
 **The desk display.** Once seated, the bench calls the piano's client script
 (`Entities.callEntityMethod(piano, "openDisplay")`, a local call; the method is not in
-`remotelyCallable`, so the server cannot call it). It adds a local Web entity, `Piano.Display`,
-seen by the sitter only, parented to the piano at `anchor_desk_screen` with identity rotation:
+`remotelyCallable`, so the server cannot call it). It closes an open song picker and adds a
+local Web entity, `Piano.Display` (the page with `?view=desk`), seen by the sitter only, parented to the piano at `anchor_desk_screen` with identity rotation:
 the anchor's +Z points out of the desk at the player, and a Web entity's face is its +Z (the
 yaw billboard turns +Z to the camera, `interface/src/Application_Setup.cpp` 1763-1768). By
 default it covers the whole face of the music desk, the score included. Measured in
@@ -325,17 +352,32 @@ someone sits edits the open display in place. `wantsKeyboardFocus` is off, so th
 reach the avatar. The sitter's floating status label hides while the display is up; everyone
 else still sees theirs. Standing up deletes the display and shows the label again.
 
-`piano-display.html` is self-contained (no external fonts, scripts or images). It is laid out
-in rem on a 50 x 17.1875 rem canvas, the 0.80 x 0.275 m desk face, so 1 rem (body text) is
-16 mm on the desk and the title 28 mm, legible from the bench at 0.6 to 0.7 m; the root font
-size fits that canvas to the viewport, so another size or aspect scales rather than crops.
-It is a **wireframe**: placeholder now-playing, progress, a transport row (previous, play/pause, stop,
-next, replay, after Orpheus's `/api/playback/*` routes), a song list (`play-song`), and status
-indicators. A button sends `{"type": "piano-display", "action": "next"}` (and `songId` for
-`play-song`) with `EventBridge.emitWebEvent`; the piano's client script prints it and answers
-`{"type": "piano-display-ack", ...}` with `Entities.emitScriptEvent`, which the page shows in
-its status bar. Nothing reaches Orpheus yet. Opened in a desktop browser, the page says it has no
-EventBridge and logs the events to the console.
+**The desk screen** is the page with `?view=desk`. It shows the state, the title, the progress
+bar with the time through the piece and its length (Orpheus counts events, so the time is the
+progress times the duration), and a transport row: previous, play, pause, stop, next and
+replay, each calling the server method of that name. Play is lit while a piece plays or starts,
+pause while it is paused; a button the state would refuse (pause with nothing playing, next
+with nothing queued) is dimmed but still sends, so the visitor sees the reason. The right side
+has two tabs: "Up next", the queue from the status, and "Songs", the song list five to a page,
+a click on one requesting it as on the picker (the screen covers the score). A call shows
+"pause..." until the piano answers, then the answer for 8 seconds: "Paused", or what was refused
+and why, "Next: Too many controls: at most 5 every 30 s; try again in 29 s".
+
+`piano-display.html` is self-contained (no external fonts, scripts or images) and decides
+nothing. The client script sends it a finished view, `{"type": "piano-view", "kind": "desk" |
+"picker", ...}` (built by `piano-screen-core.mjs`), with `Entities.emitScriptEvent`, only when
+it changed, and the page sends back its buttons, `{"type": "piano-display", "action": ...}`
+(`previous`, `play`, `pause`, `stop`, `next`, `replay`, `request` with `songId`, `page` with
+`page`, `tab` with `tab`, `close`), with `EventBridge.emitWebEvent`. Its first message is
+`ready`: a script event sent before the page's EventBridge is up is lost, so nothing is sent
+until then, and the last view is sent again when the page reloads. Interface gives the page a
+stand-in EventBridge and replaces it once its channel is up, so the page looks it up at every
+send. The desk is laid out in rem on a 50 x 17.1875 rem canvas, the 0.80 x 0.275 m desk face,
+so 1 rem (body text) is 16 mm on the desk and the title 28 mm, legible from the bench at 0.6
+to 0.7 m; the picker on 24 x 24 rem, 0.48 m square, 20 mm a rem. The root font size fits the
+canvas to the viewport, so another size or aspect scales rather than crops. Opened in a
+desktop browser, without EventBridge, the page shows sample data and logs its events to the
+console.
 
 ## Trying it with a mock Orpheus
 
@@ -360,7 +402,7 @@ headless synth container built from the Orpheus repository (its README, "Run as 
 Node (24 or later) runs the tests; it is a development tool, never a runtime dependency:
 
 ```sh
-npm test            # node:test over test/*.test.mjs: both cores, and every script with fake globals
+npm test            # node:test over test/*.test.mjs: the cores, and every script with fake globals
 npm run typecheck   # tsc twice: the server scripts and the client scripts against their entity declarations
 ```
 

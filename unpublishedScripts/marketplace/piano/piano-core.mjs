@@ -8,7 +8,7 @@
 //
 //  The piano's logic without the engine: reading the configuration from userData, folding
 //  Orpheus's two status replies into the compact status the piano publishes, the reconnect
-//  backoff, the text both scripts show, and the desk display's URL, size and button events.
+//  backoff, the text both scripts show, and the desk display's URL and size.
 //  No engine globals, so it runs under Node.
 //
 
@@ -20,6 +20,8 @@ export const DEFAULT_VOLUME = 0.8;
 export const ACTIVE_POLL_MS = 1000;
 export const IDLE_POLL_MS = 5000;
 export const SONG_LINES = 12;
+// Titles of waiting pieces the status carries; `queued` counts them all.
+export const QUEUE_SHOWN = 5;
 
 // Scheme, then a host[:port] with none of the characters a placeholder like <host> carries,
 // then an optional path. No query or fragment: paths are appended to it.
@@ -88,6 +90,9 @@ export function statusOf(userDataText) {
  * @property {string | null} output "piano" (the Kawai) or "synth" (what the piano entity plays)
  * @property {number | null} progress whole percent through the piece's events
  * @property {number | null} elapsed whole seconds, when the service reports them
+ * @property {number | null} duration the piece's length in whole seconds, while one is active
+ * @property {string[]} queue the titles waiting, in play order, at most QUEUE_SHOWN
+ * @property {number} queued how many pieces are waiting
  * @property {boolean} synth whether Orpheus's synth output is enabled
  * @property {string | null} error
  */
@@ -103,8 +108,8 @@ export function statusOf(userDataText) {
 export function compactStatus(playback, synth, failure) {
     const synthEnabled = synth !== null && synth.enabled === true;
     if (playback === null) {
-        return { state: "offline", title: null, output: null, progress: null, elapsed: null, synth: synthEnabled,
-            error: failure || "Orpheus unreachable" };
+        return { state: "offline", title: null, output: null, progress: null, elapsed: null, duration: null,
+            queue: [], queued: 0, synth: synthEnabled, error: failure || "Orpheus unreachable" };
     }
     const active = playback.is_playing === true;
     /** @type {PianoStatus["state"]} */
@@ -114,6 +119,7 @@ export function compactStatus(playback, synth, failure) {
             : ["starting", "connecting"].includes(playback.status) ? playback.status : "playing";
     }
     const lastError = playback.last_error;
+    const queue = Array.isArray(playback.queue) ? playback.queue : [];
     return {
         state,
         title: active && typeof playback.title === "string" ? playback.title : null,
@@ -121,6 +127,10 @@ export function compactStatus(playback, synth, failure) {
         progress: active && typeof playback.progress === "number" ? Math.round(playback.progress * 100) : null,
         // Orpheus reports progress through the events, not time; elapsed_seconds is the mock's
         elapsed: active && typeof playback.elapsed_seconds === "number" ? Math.floor(playback.elapsed_seconds) : null,
+        duration: active && typeof playback.duration === "number" && playback.duration > 0 ? Math.round(playback.duration) : null,
+        queue: queue.slice(0, QUEUE_SHOWN).map(/** @param {any} row */ row =>
+            row && typeof row.title === "string" ? row.title : "Untitled"),
+        queued: queue.length,
         synth: synthEnabled,
         error: lastError !== null && typeof lastError === "object" && typeof lastError.message === "string"
             ? lastError.message : null
@@ -234,7 +244,6 @@ export const DISPLAY_DEFAULTS = {
     pagePixelsWide: 1600
 };
 export const PIANO_NATURAL_WIDTH = 1.480;
-export const DISPLAY_ACTIONS = ["previous", "pause", "stop", "next", "replay", "play-song"];
 // A Web entity is its dimensions in inches times dpi pixels across (RenderableWebEntityItem.cpp
 // getWindowSize)
 const METERS_TO_INCHES = 39.3701;
@@ -345,21 +354,4 @@ export function parseDisplayGeometry(userDataText, pianoDimensions) {
         problems,
         source: JSON.stringify(found === undefined ? null : found)
     };
-}
-
-/**
- * A button press from piano-display.html over the EventBridge:
- * `{"type": "piano-display", "action": "next"}`, with `songId` for "play-song".
- * @param {unknown} message
- * @returns {{ action: string, songId: number | null } | null} null for anything else
- */
-export function parseDisplayEvent(message) {
-    const event = parseObject(message);
-    if (event.type !== "piano-display" || !DISPLAY_ACTIONS.includes(event.action)) {
-        return null;
-    }
-    if (event.action === "play-song") {
-        return Number.isInteger(event.songId) && event.songId > 0 ? { action: event.action, songId: event.songId } : null;
-    }
-    return { action: event.action, songId: null };
 }
