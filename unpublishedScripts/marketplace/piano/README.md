@@ -366,21 +366,35 @@ npm run typecheck   # tsc twice: the server scripts and the client scripts again
 
 `typecheck` needs the declarations built first: `npm ci && npm run build` in `tools/typings`.
 
-## Not verified yet
+## Verified, and not yet
 
-- Seen in Interface (fork build, Daybreak, at bcb58d1df0): clicking the bench sits the avatar
-  correctly on the seat, facing the keys, and the desk display appears; at the old 0.30 x 0.17 m
-  size it was too small to read, which the desk-face default replaces. Not yet seen: the new
-  size and its legibility from the bench, the live re-tune through `piano.display`, `endSit`
-  on `stand_up`, the drive-key stand-up, the lease against a second visitor, the buttons'
-  round trip over EventBridge, and the hand controller trigger. The page was rendered and its
-  buttons clicked in headless Chrome with a stub EventBridge.
+**In a domain (2026-10-22).** v2 at 18e0989, published as the `piano-scripts` 0.2.0 bundle and
+attached to the salon grand in the Oceanus sandbox domain (a fork domain server, the bearer in
+its script credential table, Orpheus's network grant off), with two fork Interfaces (headless,
+on Xvfb) connected:
 
-- Nothing here has run in an Overte domain: not the stream through `Audio.playStream`, the
-  position following, the reconnects, `fetch` in the entity script server, the client label or
-  the click. The tests run the scripts under Node with fake engine globals, and the server script
-  has been run under Node against the mock with real `fetch`.
-- Orpheus has no `/api/synth/stream.pcm` yet. Its synth stream is Ogg Opus at
-  `/api/synth/stream`; the PCM route at 24 kHz mono is what `Audio.playStream` needs.
-- Orpheus answers 401 to every unauthenticated request, and the piano sends no credential. A
-  credential must not go into `userData`, which every visitor can read.
+- The server script loaded from the bundle and its stream connected with the credential
+  (Orpheus logged "Overte listener connected").
+- A `request(1)` from one client appended the song on the synth (Orpheus: "Bridge request
+  queued ... for session `<the caller>`", then "Playing: ... output=synth"), and that client's
+  script showed "Requested: Gymnopedie No. 1: plays next". A second `request` 3 s later was
+  refused: "One request every 10 s; try again in 7 s".
+- A burst of seven `next` calls 0.3 s apart: five reached Orpheus and were refused for their
+  state ("Nothing is queued to skip to"), the sixth and seventh were refused by the limit ("Too
+  many controls: at most 5 every 30 s; try again in 29 s"). `stop` 32 s later went through.
+- The lid opened within about 2.5 s of the piece starting (lid 40 deg, then the stick 103.4
+  deg) and closed after the stop, read from the entity's joint arrays and seen in screenshots
+  by both clients. The status in `userData` followed.
+- Heard, by measurement: the first client's audio output, captured from a null sink, was
+  silent before the request, carried the piece while it played (RMS about -55 dBFS at 3 m), and
+  went silent at the stop. Nobody has listened to it by ear.
+
+Run against the real Orpheus under Node (the bearer added by the harness): `pause` and `play`
+(resume) on a playing piece, `next`, `stop`, and the transport limit.
+
+**Not yet seen in a domain:** `select`, `previous`, `replay`, `play` from idle, the queue cap,
+the fallboard closing when Orpheus is offline, the manifest retry, and the desk display with
+v2 (its buttons still stop at the client script, #74). From before: the bench seen in
+Interface at bcb58d1df0 and a70ff32 (sit and stand by click); not yet the drive-key stand-up,
+the lease against a second visitor, the display's buttons over EventBridge, or the hand
+controller trigger.
