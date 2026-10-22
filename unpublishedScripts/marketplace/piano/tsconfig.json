@@ -17,6 +17,8 @@
     "files": [
         "../../../tools/typings/dist/overte-server-entity.d.ts",
         "piano-core.mjs",
+        "piano-bridge-core.mjs",
+        "piano-pose-core.mjs",
         "piano-entity.mjs",
         "piano-bench-entity.js"
     ]

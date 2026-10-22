@@ -72,15 +72,31 @@ function fakeEngine(userData = { piano: { orpheusBase: BASE, volume: 0.5 } }) {
             clearInterval(id) { engine.timers.delete(id); }
         },
         print(text) { engine.printed.push(text); },
-        async fetch(url) {
+        /** @type {{ path: string, headers: Record<string, string> }[]} */
+        posts: [],
+        /** @type {Record<string, { status: number, body: any } | Error>} POST path -> reply; 200 {} otherwise */
+        postReplies: {},
+        async fetch(url, init = {}) {
+            const path = url.startsWith(BASE) ? url.slice(BASE.length) : url;
+            const respond = (status, body) => ({
+                ok: status >= 200 && status <= 299, status,
+                json: async () => structuredClone(body),
+                text: async () => JSON.stringify(body)
+            });
+            if (init.method === "POST") {
+                engine.posts.push({ path, headers: init.headers });
+                const reply = engine.postReplies[path];
+                if (reply instanceof Error) {
+                    throw reply;
+                }
+                return reply ? respond(reply.status, reply.body) : respond(200, {});
+            }
             engine.fetched.push(url);
-            const body = engine.routes[url.slice(BASE.length)];
+            const body = engine.routes[path];
             if (body instanceof Error) {
                 throw body;
             }
-            return body === undefined
-                ? { ok: false, status: 404, json: async () => ({}) }
-                : { ok: true, status: 200, json: async () => structuredClone(body) };
+            return body === undefined ? respond(404, {}) : respond(200, body);
         },
         advance(ms) { now += ms; },
         /** The pending timers whose delay is `ms`, as the engine would run them. */
@@ -120,8 +136,9 @@ async function loaded(engine) {
     return piano;
 }
 
-test("the remotely callable methods are read-only", () => {
-    assert.deepEqual(new PianoEntity().remotelyCallable, ["status", "list"]);
+test("the remotely callable methods: the reads, the request and the transport", () => {
+    assert.deepEqual(new PianoEntity().remotelyCallable,
+        ["status", "list", "request", "play", "pause", "stop", "next", "previous", "replay", "select"]);
 });
 
 test("without a usable orpheusBase it logs once and does nothing", async () => {
@@ -244,6 +261,8 @@ test("list() answers the caller read before the await, and caches /api/songs for
     assert.equal(songFetches(), 1, "concurrent calls share one request");
     assert.deepEqual(engine.clientCalls.map(call => [call.session, call.method, call.params[0]]),
         [[CALLER, "showSongs", "Songs (1)\nOde to Joy - Beethoven (0:16)"], [CALLER, "showSongs", "Songs (1)\nOde to Joy - Beethoven (0:16)"]]);
+    assert.deepEqual(JSON.parse(engine.clientCalls[0].params[1]),
+        [{ id: 1, title: "Ode to Joy", composer: "Beethoven", duration: 16 }], "and the songs with their ids, for a picker");
     engine.advance(59_000);
     await call();
     assert.equal(songFetches(), 1);
@@ -264,4 +283,205 @@ test("list() without a caller ID answers nobody, and a failed request says so", 
     engine.Script.remoteCallerID = undefined;
     assert.equal(await pending, null);
     assert.equal(engine.clientCalls[0].params[0], "Songs\n(Orpheus did not answer)");
+});
+
+const MANIFEST_URL = "https://media.example/salon-grand/1.0.0/manifest.json";
+const { MANIFEST } = await import("./salon-grand-manifest.mjs");
+
+/**
+ * A remote call as the engine makes it: the caller stamped for the synchronous part only.
+ * @param {any} engine
+ * @param {any} piano
+ * @param {string} method
+ * @param {string[]} [params]
+ * @param {string} [caller]
+ */
+function call(engine, piano, method, params = [], caller = CALLER) {
+    engine.Script.remoteCallerID = caller;
+    const result = piano[method](PIANO, params);
+    engine.Script.remoteCallerID = undefined;
+    return result;
+}
+
+/** @param {any} engine @returns {any[]} the showResult answers, parsed */
+function results(engine) {
+    return engine.clientCalls.filter(c => c.method === "showResult").map(c => ({ to: c.session, ...JSON.parse(c.params[0]) }));
+}
+
+test("request appends the song on the synth for the caller's session and answers with its place", async () => {
+    const engine = fakeEngine();
+    const piano = await loaded(engine);
+    engine.postReplies["/api/playback/request/1?output=synth"] = { status: 200, body: { queue_id: 41, position: 1 } };
+    const result = await call(engine, piano, "request", ["1"]);
+    assert.deepEqual(result, { action: "request", ok: true, songId: 1, title: undefined, position: 1 });
+    assert.deepEqual(engine.posts, [{ path: "/api/playback/request/1?output=synth",
+        headers: { "X-Orpheus-Request": "1", "X-Overte-Session": CALLER } }]);
+    assert.deepEqual(results(engine).map(r => [r.to, r.ok, r.position]), [[CALLER, true, 1]]);
+    assert.ok(engine.printed.some(line => line.includes("request 1 from " + CALLER + " done")));
+    assert.ok(!JSON.stringify(engine.entity).toLowerCase().includes("bearer"), "no credential in the entity");
+});
+
+test("a second request inside the cool-down is refused with its reason, without reaching Orpheus", async () => {
+    const engine = fakeEngine();
+    const piano = await loaded(engine);
+    engine.postReplies["/api/playback/request/1?output=synth"] = { status: 200, body: { queue_id: 41, position: 0 } };
+    await call(engine, piano, "request", ["1"]);
+    engine.advance(4000);
+    const second = await call(engine, piano, "request", ["1"]);
+    assert.equal(second.ok, false);
+    assert.equal(second.reason, "One request every 10 s; try again in 6 s");
+    assert.equal(engine.posts.length, 1);
+    assert.equal(results(engine)[1].reason, second.reason);
+});
+
+test("one waiting request per session until the status poll shows it has started", async () => {
+    const engine = fakeEngine({ piano: { orpheusBase: BASE, volume: 0.5, requestCooldownMs: 0 } });
+    const piano = await loaded(engine);
+    engine.postReplies["/api/playback/request/1?output=synth"] = { status: 200, body: { queue_id: 41, position: 2 } };
+    engine.routes["/api/playback/status"] = { ...PLAYING, queue: [{ id: 40 }, { id: 41 }] };
+    await call(engine, piano, "request", ["1"]);
+    engine.advance(1000);
+    await engine.run(1000);
+    const refused = await call(engine, piano, "request", ["1"]);
+    assert.match(refused.reason, /already have a song waiting/);
+    engine.routes["/api/playback/status"] = { ...PLAYING, queue: [] };
+    engine.advance(1000);
+    await engine.run(1000);
+    assert.equal((await call(engine, piano, "request", ["1"])).ok, true);
+});
+
+test("Orpheus's refusal reaches the caller with its reason; a bad id never leaves the piano", async () => {
+    const engine = fakeEngine();
+    const piano = await loaded(engine);
+    engine.postReplies["/api/playback/request/1?output=synth"] = { status: 429,
+        body: { detail: "3 in-world requests are already waiting (the cap is 3); try again when one has started" } };
+    const refused = await call(engine, piano, "request", ["1"]);
+    assert.equal(refused.reason, "3 in-world requests are already waiting (the cap is 3); try again when one has started");
+    assert.equal(piano.limits.waiting.size, 0, "the slot is free again");
+    const bad = await call(engine, piano, "request", ["../../system/reboot"]);
+    assert.equal(bad.reason, "Request a song by its library id");
+    assert.equal(engine.posts.length, 1);
+});
+
+test("transport routes: stop, next, previous, replay and select on the synth only", async () => {
+    const engine = fakeEngine({ piano: { orpheusBase: BASE, volume: 0.5, transportCalls: 10 } });
+    const piano = await loaded(engine);
+    engine.postReplies["/api/playback/next"] = { status: 200, body: { skipped: true } };
+    for (const [method, params] of [["stop", []], ["next", []], ["previous", []], ["replay", []], ["select", ["7"]]]) {
+        assert.equal((await call(engine, piano, method, params)).ok, true, method);
+    }
+    assert.deepEqual(engine.posts.map(post => post.path), ["/api/playback/stop", "/api/playback/next",
+        "/api/playback/previous?output=synth", "/api/playback/replay?output=synth",
+        "/api/playback/play-song/7?output=synth&play_now=true"]);
+    assert.ok(engine.posts.every(post => post.headers["X-Overte-Session"] === CALLER));
+    engine.postReplies["/api/playback/next"] = { status: 200, body: { skipped: false } };
+    assert.equal((await call(engine, piano, "next")).reason, "Nothing is queued to skip to");
+    assert.equal((await call(engine, piano, "select", ["x"])).reason, "Select a song by its library id");
+});
+
+test("play and pause each go one way, though Orpheus's pause toggles", async () => {
+    const engine = fakeEngine({ piano: { orpheusBase: BASE, volume: 0.5, transportCalls: 10 } });
+    const piano = await loaded(engine);
+    assert.equal((await call(engine, piano, "pause")).reason, "Nothing is playing");
+    assert.equal((await call(engine, piano, "play")).ok, true);
+    assert.deepEqual(engine.posts.map(post => post.path), ["/api/playback/replay?output=synth"], "play from idle replays");
+    engine.routes["/api/playback/status"] = PLAYING;
+    assert.equal((await call(engine, piano, "play")).reason, "Already playing");
+    assert.equal((await call(engine, piano, "pause")).ok, true);
+    engine.routes["/api/playback/status"] = { ...PLAYING, is_paused: true };
+    assert.equal((await call(engine, piano, "pause")).reason, "Already paused");
+    assert.equal((await call(engine, piano, "play")).ok, true);
+    assert.deepEqual(engine.posts.map(post => post.path).slice(1), ["/api/playback/pause", "/api/playback/pause"]);
+});
+
+test("a burst of transport calls is rate limited per session, with the reason", async () => {
+    const engine = fakeEngine();
+    const piano = await loaded(engine);
+    const answers = [];
+    for (let i = 0; i < 7; i++) {
+        answers.push(await call(engine, piano, "stop"));
+    }
+    assert.deepEqual(answers.map(answer => answer.ok), [true, true, true, true, true, false, false]);
+    assert.equal(answers[5].reason, "Too many controls: at most 5 every 30 s; try again in 30 s");
+    assert.equal(engine.posts.length, 5);
+    const other = "{cccccccc-0000-4000-8000-000000000003}";
+    assert.equal((await call(engine, piano, "stop", [], other)).ok, true, "another visitor is not held back");
+    engine.advance(30_000);
+    assert.equal((await call(engine, piano, "stop")).ok, true);
+});
+
+test("a call that changes playback polls the status at once", async () => {
+    const engine = fakeEngine();
+    const piano = await loaded(engine);
+    const before = engine.fetched.filter(url => url.endsWith("/api/playback/status")).length;
+    await call(engine, piano, "stop");
+    await settle();
+    assert.equal(engine.fetched.filter(url => url.endsWith("/api/playback/status")).length, before + 1);
+    assert.equal(engine.pending(5000).length, 1, "and still one poll scheduled");
+});
+
+test("limits from userData; a bad value is logged and replaced", async () => {
+    const engine = fakeEngine({ piano: { orpheusBase: BASE, requestQueueCap: 0, transportCalls: "lots" } });
+    const piano = await loaded(engine);
+    assert.ok(engine.printed.some(line => /piano.transportCalls must be an integer/.test(line)));
+    assert.equal((await call(engine, piano, "request", ["1"])).reason, "Song requests are turned off on this piano");
+});
+
+test("an unconfigured piano refuses calls with a reason", async () => {
+    const engine = fakeEngine({});
+    const piano = await loaded(engine);
+    assert.equal((await call(engine, piano, "stop")).reason, "This piano is not connected to Orpheus");
+    assert.equal(engine.posts.length, 0);
+});
+
+test("the lid follows the status: joints from the manifest, written at once, then tweened", async () => {
+    const engine = fakeEngine({ piano: { orpheusBase: BASE, volume: 0.5, manifestURL: MANIFEST_URL } });
+    engine.routes[MANIFEST_URL] = MANIFEST;
+    const piano = await loaded(engine);
+    assert.ok(engine.fetched.includes(MANIFEST_URL));
+    const lid = () => engine.entity.jointRotations[100];
+    assert.deepEqual(engine.entity.jointRotationsSet.flatMap((set, i) => set ? [i] : []), [9, 100, 101]);
+    assert.deepEqual(lid(), { x: 0, y: 0, z: 0, w: 1 }, "idle: closed, written at once");
+    engine.routes["/api/playback/status"] = PLAYING;
+    await engine.run(5000);
+    assert.equal(engine.pending(100).length, 1, "a tween runs");
+    const edits = engine.edits;
+    for (let i = 0; i < 40 && engine.pending(100).length; i++) {
+        engine.advance(100);
+        await engine.run(100);
+    }
+    assert.equal(engine.pending(100).length, 0, "and stops at the pose");
+    assert.ok(engine.edits - edits >= 20 && engine.edits - edits <= 30, "about ten edits a second for 2.5 s");
+    assert.ok(Math.abs(lid().z - Math.sin(20 * Math.PI / 180)) < 1e-9, "the lid at 40 degrees");
+    assert.equal(piano.pose?.lid_prop, 103.3876);
+});
+
+test("offline shuts the fallboard; a missing manifest or URL leaves the lid alone and says why", async () => {
+    const engine = fakeEngine({ piano: { orpheusBase: BASE, volume: 0.5, manifestURL: MANIFEST_URL } });
+    engine.routes[MANIFEST_URL] = MANIFEST;
+    engine.routes["/api/playback/status"] = new Error("connection refused");
+    await loaded(engine);
+    assert.ok(Math.abs(engine.entity.jointRotations[9].x - Math.SQRT1_2) < 1e-9, "fallboard at 90 degrees");
+
+    const none = fakeEngine();
+    await loaded(none);
+    assert.ok(none.printed.some(line => /the lid stays put, piano.manifestURL must be/.test(line)));
+    assert.equal(none.entity.jointRotations, undefined);
+
+    const failing = fakeEngine({ piano: { orpheusBase: BASE, manifestURL: MANIFEST_URL } });
+    failing.routes[MANIFEST_URL] = new Error("HTTP 404");
+    const piano = await loaded(failing);
+    assert.ok(failing.printed.some(line => /manifest failed, retrying in 60 s/.test(line)));
+    assert.equal(failing.pending(60_000).length, 1);
+    piano.unload();
+    assert.equal(failing.timers.size, 0);
+});
+
+test("a locked piano does not move its lid", async () => {
+    const engine = fakeEngine({ piano: { orpheusBase: BASE, manifestURL: MANIFEST_URL } });
+    engine.entity.locked = true;
+    engine.routes[MANIFEST_URL] = MANIFEST;
+    await loaded(engine);
+    assert.ok(!engine.fetched.includes(MANIFEST_URL));
+    assert.equal(engine.edits, 0);
 });

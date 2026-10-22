@@ -151,6 +151,24 @@ test("a click asks for the song list, shown for a few seconds before the status 
     assert.equal(engine.label().text, "Ode to Joy\nplaying  0:08  50%");
 });
 
+test("a call's result shows for a few seconds, a refusal with its reason, and is logged", () => {
+    const engine = fakeEngine(PLAYING);
+    const client = loaded(engine);
+    assert.deepEqual(client.remotelyCallable, ["showStatus", "showSongs", "showResult"]);
+    client.showResult(PIANO, [JSON.stringify({ action: "request", ok: false, songId: 3, title: "Ode to Joy",
+        reason: "One request every 10 s; try again in 4 s" })]);
+    assert.equal(engine.label().text, "Piano: request Ode to Joy refused\nOne request every 10 s; try again in 4 s");
+    assert.match(engine.printed.at(-1), /request Ode to Joy refused: One request every 10 s/);
+    engine.advance(7000);
+    client.showResult(PIANO, [JSON.stringify({ action: "request", ok: true, songId: 3, position: 2 })]);
+    assert.equal(engine.label().text, "Requested: song 3\nnumber 2 in the queue");
+    engine.advance(9000);
+    assert.equal(engine.label().text, "Ode to Joy\nplaying  0:08  50%");
+    client.showResult(PIANO, ["not json"]);
+    client.showResult(PIANO, ["{}"]);
+    assert.equal(engine.label().text, "Ode to Joy\nplaying  0:08  50%", "a malformed result is ignored");
+});
+
 test("unload removes the label and the refresh timer", () => {
     const engine = fakeEngine(PLAYING);
     const client = loaded(engine);

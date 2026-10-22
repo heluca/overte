@@ -1,16 +1,21 @@
 # Piano
 
-A proof of concept: an entity that is a speaker for a remote synthesizer, Orpheus, and shows
-what it is playing. Nobody plays it from inside the world. LLM agents play Orpheus through
-Orpheus's own MCP server, and people play the real piano it is connected to. The in-world side only listens and reads.
-A bench lets one visitor sit at the keyboard; the desk display that opens for them is a
-wireframe whose buttons reach the client script and stop there.
+An entity that is a speaker for a remote synthesizer, Orpheus, and shows what it is playing.
+Visitors ask it for songs and run its transport from inside the world, each visitor session held
+to limits (Morpheus ADRs 0020 and 0022), and the salon grand's lid, stick and fallboard follow
+what Orpheus is doing (ADR 0021). Nobody plays its keys in-world: LLM agents compose through
+Orpheus's own MCP server, and the domain's Orpheus is a headless, synth-only instance, never the
+appliance at a real piano. A bench lets one visitor sit at the keyboard; the desk display that
+opens for them is a wireframe whose buttons reach the client script and stop there (the song
+picker and the transport buttons on it are heluca/overte#74).
 
 | File | Runs in | What it is |
 | --- | --- | --- |
 | `piano-core.mjs` | anywhere | Pure logic: the userData configuration, the compact status, the reconnect backoff, and the text shown |
-| `piano-entity.mjs` | entity script server | The piano's `serverScripts`: plays the stream at the entity, mirrors the status into `userData`, answers `status` and `list` |
-| `piano-client.mjs` | Interface | The piano's client `script`: a floating local Text above the piano with the status, the song list on a click, and the desk display for the sitter |
+| `piano-bridge-core.mjs` | anywhere | Pure logic for requests and transport: the per-session limits, the bridge routes, refusal reasons, the song list for a picker |
+| `piano-pose-core.mjs` | anywhere | Pure logic for the lid, stick and fallboard: joints from the prop's manifest, the pose per status, the ordered tween, the joint arrays |
+| `piano-entity.mjs` | entity script server | The piano's `serverScripts`: plays the stream at the entity, mirrors the status into `userData`, moves the lid, answers `status` and `list`, takes requests and runs the transport |
+| `piano-client.mjs` | Interface | The piano's client `script`: a floating local Text above the piano with the status, the song list on a click, the answers to requests and transport calls, and the desk display for the sitter |
 | `piano-bench-core.mjs` | anywhere | Pure logic for the bench: its `userData`, the sit and stand poses, the seat lease, the stand-up gesture |
 | `piano-bench-entity.js` | entity script server | The bench's `serverScripts`, a classic script: one sitter at a time, on a lease |
 | `piano-bench-client.mjs` | Interface | The bench's client `script`: sits and stands the avatar, asks the piano to open and close the desk display |
@@ -41,12 +46,36 @@ Entities.addEntity({
 ```
 
 - `orpheusBase` is the Orpheus base URL, `http://` or `https://`, with no query. It has no
-  default: without a usable one the server script logs once and does nothing.
+  default: without a usable one the server script logs once and does nothing, and refuses every
+  call with "This piano is not connected to Orpheus".
 - `volume` is 0 to 1, default 0.8.
+- `manifestURL` is the salon grand's published `manifest.json` (the same Ergane bundle as its
+  model), where the server script reads the lid, stick and fallboard joints. No default: without
+  it, or on a Box, the piano plays but does not move.
+- The limits, every one optional, an integer, and logged and replaced by its default when out of
+  range:
+
+| Key | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `requestCooldownMs` | 10000 | 0 to 600000 | One song request per visitor session per this many milliseconds |
+| `requestQueueCap` | 5 | 0 to 50 | Requests from this piano waiting in Orpheus's queue at once; 0 turns requests off |
+| `transportCalls` | 5 | 1 to 100 | Transport calls per visitor session per window |
+| `transportWindowMs` | 30000 | 1000 to 600000 | The transport window |
+
+  A session may also have only one request waiting: it must start (or leave the queue) before
+  that session requests again. That one is not configurable (ADR 0020).
 - The configuration is read when the server script loads. Reload the script after changing it.
-- Do not lock the piano. A locked entity accepts no edit but to `locked`, so the status could not
-  be written. A locked piano still plays, and the client asks `status` once for its display.
+- Do not lock the piano. A locked entity accepts no edit but to `locked`, so neither the status
+  nor the lid could be written. A locked piano still plays and takes requests, and the client
+  asks `status` once for its display.
 - The entity script server must reach `orpheusBase`. Interface never connects to Orpheus.
+- **No credential in `userData`**, which every visitor can read. The bearer comes from the
+  domain's script credential table (`script_credentials`, heluca/overte#63): a row whose
+  `url_prefix` covers `<orpheus-base>/api/` and whose `script_prefix` covers the folder these
+  scripts are served from. The engine adds `Authorization` to this script's `fetch` and
+  `Audio.playStream` requests under that prefix, and only when every script on the stack and
+  every module imported is under `script_prefix`, so the modules must all come from one folder.
+  The domain's Orpheus takes it as a bridge token, scoped to the bridge routes.
 
 ## What the server script does
 
@@ -60,7 +89,29 @@ Entities.addEntity({
   second while something is playing, starting or paused, else every 5 seconds. Each request times
   out after 4 s. It writes a compact status into `userData.piano.status`, keeping every other
   key, and only when the status changed. While a piece plays, the progress and elapsed time
-  change, so that is about one edit a second.
+  change, so that is about one edit a second. After a request or a transport call that went
+  through, it polls at once rather than wait for the next poll.
+- **Lid, stick and fallboard.** With `manifestURL` set, it reads the joints `lid`, `lid_prop` and
+  `fallboard` from the manifest (`joints.<name>.index`, `axis`, `travel`, and
+  `overte.joint_count`), retrying every 60 s while the manifest cannot be fetched, and then
+  follows the status as the prop's spec says (phantasos `props/salon-grand/spec.md` section 4):
+  open while `playing`, `starting` or `connecting` (the lid to its travel, 40 deg, then the stick
+  up, 103.4 deg), closed while `idle` or `paused` (the stick down, then the lid), and closed with
+  the fallboard shut over the keys (90 deg) while `offline`. The entity script server has no
+  model loaded, so it writes the joints as properties: `Entities.editEntity(id,
+  {jointRotationsSet, jointRotations})`, arrays of `joint_count`, these three joints flagged set
+  on every edit (a joint flagged unset keeps whatever it was last given) and every other joint
+  left unset. The first pose after loading is written at once; after that each change is a
+  tween at 10 edits a second, the lid at 30 deg/s, the stick at 100 deg/s and the fallboard at
+  90 deg/s: about 2.5 s and 25 edits to open, the same to close, none while the pose holds. The
+  stick only rises once the lid is fully open, and the lid only comes down once the stick is
+  folded, also when the status changes part way through. The keys (`keysHz`, `keyDelayMs`) are
+  heluca/overte#73 and not read yet.
+- **Requests and transport.** See the server API below. Each call POSTs one bridge route with
+  `X-Overte-Session: <the caller's session>`, which Orpheus uses for its own per-visitor limits,
+  and `X-Orpheus-Request: 1`, which Orpheus's sandbox network grant asks of a POST without a
+  credential. Every route that can start a piece names `output=synth`: Orpheus forces it for a
+  bridge token anyway, and a wrong credential must still never sound a real piano.
 
 ```json
 {
@@ -94,23 +145,61 @@ The status is output only: the server script never reads it back.
 
 ### Server API
 
-Call the methods with `Entities.callEntityServerMethod(pianoID, method, [])`. Both only read.
-`callEntityServerMethod` returns nothing, so the answer goes to the caller's client script on the
-piano with `Entities.callEntityClientMethod`, addressed to `Script.remoteCallerID`. A call with no
-caller ID (the null UUID) gets no answer.
+Call the methods with `Entities.callEntityServerMethod(pianoID, method, params)`, `params` an
+array of strings. `callEntityServerMethod` returns nothing, so the answer goes to the caller's
+client script on the piano with `Entities.callEntityClientMethod`, addressed to
+`Script.remoteCallerID`, the caller's session, which the engine stamps and a caller cannot
+choose. A call with no caller ID (the null UUID) gets no answer and shares one set of limits.
 
-| Method | Answer |
-| --- | --- |
-| `status` | `showStatus([json])`: the last status, as above, or `null` before the first poll |
-| `list` | `showSongs([text])`: Orpheus's songs (`GET /api/songs`, cached for 60 s), one line each: title, composer, duration. At most 12 lines, then "+N more" |
+| Method | Params | What it does | Answer |
+| --- | --- | --- | --- |
+| `status` | none | Reads | `showStatus([json])`: the last status, as above, or `null` before the first poll |
+| `list` | none | Reads | `showSongs([text, json])`: Orpheus's songs (`GET /api/songs`, cached for 60 s). `text` one line each, title, composer and duration, at most 12 lines then "+N more"; `json` the songs for a picker, `[{"id", "title", "composer", "duration"}]` (`composer` and `duration`, in whole seconds, may be `null`), or `null` when Orpheus did not answer |
+| `request` | `[songId]` | Appends the library song to Orpheus's queue on the synth (`POST /api/playback/request/{id}?output=synth`). Never plays it now, never pre-empts | `showResult` with `position`: 1 plays next, 0 started at once |
+| `play` | none | Paused: resumes (`POST /api/playback/pause`, which toggles). Idle: plays the last piece again (`POST /api/playback/replay`), as Orpheus's own Play does. Refused while already playing | `showResult` |
+| `pause` | none | Pauses (`POST /api/playback/pause`). Refused while nothing plays or already paused | `showResult` |
+| `stop` | none | Stops and clears the queue (`POST /api/playback/stop`) | `showResult` |
+| `next` | none | Skips to the next queued piece (`POST /api/playback/next`). Refused when nothing is queued | `showResult` |
+| `previous` | none | Restarts the current piece, or when idle replays the last one (`POST /api/playback/previous`) | `showResult` |
+| `replay` | none | Plays the most recent piece again (`POST /api/playback/replay`) | `showResult` |
+| `select` | `[songId]` | Plays the library song now, replacing what plays and what is queued (`POST /api/playback/play-song/{id}?play_now=true`), the one call that may (ADR 0022) | `showResult` |
+
+`play` and `pause` ask Orpheus what is playing first, so each goes one way although Orpheus's
+pause toggles. `songId` is a library id, a positive integer as text; anything else is refused
+before it leaves the piano.
+
+`showResult([json])` carries `{"action", "ok", "reason", "songId", "title", "position"}`: `ok`
+false with `reason` when the piano or Orpheus refused, `songId` and `title` (when the piano has
+the song list cached) for `request` and `select`. The server script also logs one line per call:
+the action, the song, the caller's session, done or refused and why.
+
+**Limits.** Checked by the piano before anything is sent, then by Orpheus, which holds its own
+per bridge credential (orpheus `docs/orpheus.md`, "Overte bridge") and answers 429 with a reason
+that the piano passes on as it is. The piano's, per session (`Script.remoteCallerID`):
+
+- `request`: one request waiting per session, held from the call until the status poll shows it
+  has left Orpheus's queue (started, removed or cleared); one request per `requestCooldownMs`,
+  counted when admitted, also when Orpheus then refuses it; at most `requestQueueCap` of this
+  piano's requests waiting at once.
+- The transport calls share one sliding window: at most `transportCalls` per
+  `transportWindowMs`. A call refused for its state (nothing playing, nothing queued) still
+  counts. Requests do not count against it.
+
+A refusal names the limit and how long to wait, for example "One request every 10 s; try again
+in 6 s" or "Too many controls: at most 5 every 30 s; try again in 30 s". The counts are in
+memory: a reloaded script, or a visitor who reconnects with a new session, starts afresh, and
+the queue cap bounds what that buys (ADR 0020). Orpheus answers 409 while its real piano is
+busy, which only an owner can cause and which the bridge never touches.
 
 ## The client script
 
 Each visitor's Interface floats a local Text entity, `Piano.Status`, above the piano: the title
 and state, the elapsed time if known, the progress, or "idle" or "offline". Only that visitor
 sees it, and it needs no edit rights. It rereads `userData` every second and edits the text when
-it changed. A primary click on the piano calls `list` and shows the songs for 8 seconds. There
-are no buttons: playing is done through Orpheus.
+it changed. A primary click on the piano calls `list` and shows the songs for 8 seconds. The
+answers to that visitor's requests and transport calls (`showResult`) show the same way for 8
+seconds, a refusal with its reason, and are logged. There are no buttons yet: a script calls the
+server methods (the desk display's song picker and transport buttons are heluca/overte#74).
 
 ## The bench and the desk display
 
@@ -138,7 +227,8 @@ var pianoID = Entities.addEntity({
     userData: JSON.stringify({ piano: {
         orpheusBase: "http://<host>:<port>",
         volume: 0.8,
-        displayURL: "https://<asset-host>/piano/piano-display.html"
+        displayURL: "https://<asset-host>/piano/piano-display.html",
+        manifestURL: "https://<asset-host>/props/manifest.json"
     } })
 });
 
@@ -262,7 +352,8 @@ timeout 2 curl -s http://<addr>:<port>/api/synth/stream.pcm | wc -c    # about 9
 
 Then place a piano with `serverScripts` and `script` at `http://<addr>:<port>/scripts/...` and
 `orpheusBase` at `http://<addr>:<port>`, an address the entity script server and Interface can
-both reach.
+both reach. The mock has no request or transport routes: those need a real Orpheus, such as the
+headless synth container built from the Orpheus repository (its README, "Run as a container").
 
 ## Development
 

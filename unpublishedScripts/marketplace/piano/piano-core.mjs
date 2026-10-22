@@ -265,6 +265,21 @@ export function parseDisplayURL(userDataText) {
 }
 
 /**
+ * Reads `piano.manifestURL`, the salon grand's published manifest.json, where the server script
+ * finds the lid, stick and fallboard joints. No default: without one the piano does not move.
+ * @param {unknown} userDataText
+ * @returns {{ manifestURL: string } | { error: string }}
+ */
+export function parseManifestURL(userDataText) {
+    const piano = parseObject(userDataText).piano;
+    const url = piano !== null && typeof piano === "object" ? piano.manifestURL : undefined;
+    if (typeof url !== "string" || !PAGE_URL.test(url)) {
+        return { error: "piano.manifestURL must be an http:// or https:// URL, got " + JSON.stringify(url) };
+    }
+    return { manifestURL: url };
+}
+
+/**
  * @typedef {object} DisplayGeometry
  * @property {{ x: number, y: number, z: number }} dimensions
  * @property {{ x: number, y: number, z: number }} localPosition from `anchor_desk_screen`

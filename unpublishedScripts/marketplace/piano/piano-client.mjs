@@ -8,8 +8,9 @@
 //
 //  The piano's client entity script, run by Interface for each visitor. It floats a local Text
 //  entity above the piano showing what Orpheus is playing, read from userData.piano.status, and
-//  on a click asks the piano for Orpheus's song list and shows it for a few seconds. Read-only:
-//  it writes nothing to the piano.
+//  on a click asks the piano for Orpheus's song list and shows it for a few seconds. The piano's
+//  answers to a visitor's requests and transport calls (showResult) show the same way, a refusal
+//  with its reason. It writes nothing to the piano.
 //
 //  For whoever sits at the piano, the bench's client script (piano-bench-client.mjs) calls
 //  openDisplay and closeDisplay here: a local Web entity on the music desk shows the page at
@@ -19,27 +20,28 @@
 //
 
 import { statusOf, formatStatus, parseDisplayURL, parseDisplayGeometry, parseDisplayEvent } from "./piano-core.mjs";
+import { formatResult } from "./piano-bridge-core.mjs";
 
 const LABEL_NAME = "Piano.Status";
 const LABEL_SIZE = { x: 1.2, y: 0.5, z: 0.01 };
 const LABEL_GAP = 0.1;
 const LABEL_LINE_HEIGHT = 0.06;
 const REFRESH_MS = 1000;
-const SONGS_SHOWN_MS = 8000;
+const NOTICE_SHOWN_MS = 8000;
 const DISPLAY_NAME = "Piano.Display";
 const DISPLAY_JOINT = "anchor_desk_screen";
 
 export default class PianoClient {
     // openDisplay and closeDisplay are left out on purpose: only scripts in this Interface
     // (the bench's) may call them, never the server.
-    remotelyCallable = ["showStatus", "showSongs"];
+    remotelyCallable = ["showStatus", "showSongs", "showResult"];
 
     // Set in preload, which the engine calls before any other method.
     /** @type {Uuid} */ entityID;
     /** @type {Uuid} */ labelID;
     /** @type {number} */ refreshTimer;
     shown = "";
-    songsUntil = 0;
+    noticeUntil = 0;
     /** @type {import("./piano-core.mjs").PianoStatus | null} from status(), for a piano that cannot publish */
     reported = null;
     /** @type {{ displayURL: string } | { error: string }} */ display;
@@ -167,7 +169,8 @@ export default class PianoClient {
         }
     }
 
-    // Called by the piano's server script in answer to `status` and `list`.
+    // Called by the piano's server script in answer to `status`, `list` and the calls that
+    // request songs or run the transport.
 
     /** @param {Uuid} _id @param {string[]} params [status JSON] */
     showStatus(_id, params) {
@@ -180,10 +183,31 @@ export default class PianoClient {
         this.refresh();
     }
 
-    /** @param {Uuid} _id @param {string[]} params [song list text] */
+    /** @param {Uuid} _id @param {string[]} params [song list text, songs JSON (for a picker)] */
     showSongs(_id, params) {
-        this.songsUntil = Date.now() + SONGS_SHOWN_MS;
-        this.show(String(params[0]));
+        this.notice(String(params[0]));
+    }
+
+    /** @param {Uuid} _id @param {string[]} params [CallResult JSON] */
+    showResult(_id, params) {
+        let result;
+        try {
+            result = JSON.parse(params[0]);
+        } catch (e) {
+            return;
+        }
+        if (result === null || typeof result !== "object" || typeof result.action !== "string") {
+            return;
+        }
+        const text = formatResult(result);
+        print("Piano " + this.entityID + ": " + text.replace("\n", ": "));
+        this.notice(text);
+    }
+
+    /** @param {string} text shown for a few seconds over the status */
+    notice(text) {
+        this.noticeUntil = Date.now() + NOTICE_SHOWN_MS;
+        this.show(text);
     }
 
     refresh() {
@@ -194,7 +218,7 @@ export default class PianoClient {
                 Entities.editEntity(this.displayID, geometry);
             }
         }
-        if (Date.now() < this.songsUntil) {
+        if (Date.now() < this.noticeUntil) {
             return;
         }
         this.show(formatStatus(statusOf(properties.userData) || this.reported));
