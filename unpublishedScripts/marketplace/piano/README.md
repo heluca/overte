@@ -434,9 +434,32 @@ on Xvfb) connected:
 Run against the real Orpheus under Node (the bearer added by the harness): `pause` and `play`
 (resume) on a playing piece, `next`, `stop`, and the transport limit.
 
+**The screens in a domain (2026-10-22).** 7705b25, published as `piano-scripts` 0.3.0 and
+pinned by Oceanus 0.8.1 in the same sandbox domain, one fork Interface (headless, on Xvfb)
+driven by real mouse clicks (X test events at the window's centre, the camera aimed at each
+target):
+
+- A click on the score: the client's precise pick reported mesh 105, the score's
+  `mesh_index` in the published manifest, and the picker opened facing the visitor with the
+  library's one song. Choosing it: "Gymnopédie No. 1: plays next", and Orpheus played it on
+  the synth. Choosing it again 7 s later: "Gymnopédie No. 1: One request every 10 s; try
+  again in 3 s".
+- Sitting at the bench closed the picker and opened the desk screen: the title, the progress
+  bar and time (0:25 of 1:25), play lit. From its Songs tab the song was requested again and
+  "Up next" listed it (Orpheus's queue: 1). Pause lit pause and Orpheus paused; play lit play
+  and it resumed; next skipped to the queued piece. Two more next were refused for the state
+  ("Nothing is queued to skip to", the button dimmed), and the sixth transport call by the
+  limit: "Next: Too many controls: at most 5 every 30 s; try again in 2 s". Stop, 31 s later:
+  idle, "Stopped, the queue cleared". Standing up removed the screen.
+- The page's "ready" handshake, its views and every button arrived over EventBridge.
+
+The picker's refusal and the desk's empty-queue text were cut off with an ellipsis in 0.3.0;
+the page after 7705b25 wraps the one and shortens the other, and gives the desk's song rows
+one line each (0.3.0 showed four of five).
+
 **Not yet seen in a domain:** `select`, `previous`, `replay`, `play` from idle, the queue cap,
-the fallboard closing when Orpheus is offline, the manifest retry, and the desk display with
-v2 (its buttons still stop at the client script, #74). From before: the bench seen in
-Interface at bcb58d1df0 and a70ff32 (sit and stand by click); not yet the drive-key stand-up,
-the lease against a second visitor, the display's buttons over EventBridge, or the hand
-controller trigger.
+the fallboard closing when Orpheus is offline, the manifest retry, paging through more than one
+page of songs (the library holds one song), the picker's close button and idle timeout, and a
+second visitor seeing the same piano. From before: the bench seen in Interface at bcb58d1df0 and
+a70ff32 (sit and stand by click); not yet the drive-key stand-up, the lease against a second
+visitor, or the hand controller trigger.

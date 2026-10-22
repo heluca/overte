@@ -135,6 +135,7 @@
     .songs .by { grid-column: 1; color: var(--muted); font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .songs .length { grid-row: 1 / 3; grid-column: 2; color: var(--muted); font-size: 0.8rem; }
     .desk .songs .by { display: none; }
+    .desk .songs .length { grid-row: 1; }
     .pager { display: flex; align-items: center; justify-content: space-between; font-size: 0.8rem; color: var(--muted); }
     .pager button { width: 2.6rem; padding: 0.05rem 0; }
     .pager button:disabled { opacity: 0.3; }
@@ -142,7 +143,7 @@
     /* The picker: 24 x 24 rem */
     .pick {
         display: grid;
-        grid-template-rows: 2.2rem 1fr 1.8rem 1.6rem;
+        grid-template-rows: 2.2rem 1fr 1.8rem 2.1rem;
         gap: 0.45rem;
         width: 24rem;
         height: 24rem;
@@ -155,7 +156,8 @@
     .pick .close { width: 2rem; height: 2rem; padding: 0.35rem; }
     .pick .songs { gap: 0.3rem; }
     .pick .songs button { padding: 0.25rem 0.5rem; min-height: 1.95rem; }
-    .pick .notice { margin: 0; text-align: center; font-size: 0.85rem; }
+    /* A refusal's reason is long: two lines, not an ellipsis */
+    .pick .notice { margin: 0; text-align: center; font-size: 0.8rem; white-space: normal; overflow: hidden; }
 </style>
 </head>
 <body>
@@ -318,7 +320,7 @@
             queue.appendChild(el("li", "empty", "+" + view.queue.more + " more"));
         }
         if (view.queue.items.length === 0) {
-            queue.appendChild(el("li", "empty", "Nothing queued. Pick a song under Songs."));
+            queue.appendChild(el("li", "empty", "Nothing queued"));
         }
     }
 
@@ -358,7 +360,7 @@
         var lit = { lit: true, dim: false }, plain = { lit: false, dim: false };
         show(JSON.stringify(kind === "picker"
             ? { type: "piano-view", kind: "picker", songs: { state: "ready", items: sample.slice(0, 5), page: 0, pages: 2, total: 8 },
-                notice: { text: "Gymnopédie No. 1: plays next", tone: "ok" } }
+                notice: { text: "Gymnopédie No. 1: One request every 10 s; try again in 3 s", tone: "refused" } }
             : { type: "piano-view", kind: "desk", state: "playing", title: "Gymnopédie No. 1", detail: null,
                 progress: 46, elapsed: "1:23", duration: "3:00",
                 buttons: { previous: plain, play: lit, pause: plain, stop: plain, next: plain, replay: plain },
