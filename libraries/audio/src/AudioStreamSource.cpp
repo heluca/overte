@@ -28,7 +28,7 @@
 
 // The latency a stream may build up before its oldest audio is dropped, so a producer clock that runs ahead of the
 // mixer's never grows the delay
-static const int MAX_BUFFERED_FRAMES = 20;  // 200 ms
+const int AudioStreamSource::MAX_BUFFERED_FRAMES = 20;  // 200 ms
 
 AudioStreamSourcePointer AudioStreamSource::create(const QUrl& url, int numChannels, const AudioStreamCredential& credential) {
     auto resourceManager = DependencyManager::get<ResourceManager>();
@@ -87,6 +87,9 @@ void AudioStreamSource::stop() {
     {
         std::lock_guard<std::mutex> lock(_mutex);
         _ended = true;
+        if (_endReason.isEmpty()) {
+            _endReason = "stopped";
+        }
         for (auto& ring : _rings) {
             ring.reset();
         }
@@ -133,6 +136,12 @@ void AudioStreamSource::onRedirected(const QUrl& target) {
     }
     qCWarning(audio) << "Audio stream" << _url.toDisplayString(QUrl::RemoveUserInfo | QUrl::RemoveQuery)
                      << "was redirected outside the URL prefix of its script credential; stopping it";
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_endReason.isEmpty()) {
+            _endReason = "error: redirected outside the URL prefix of the script credential";
+        }
+    }
     _reply->abort();
 }
 
@@ -174,6 +183,7 @@ void AudioStreamSource::onFinished() {
     }
 
     const auto error = _reply->error();
+    const int status = _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const QString url = _url.toDisplayString(QUrl::RemoveUserInfo | QUrl::RemoveQuery);
     if (error != QNetworkReply::NoError && error != QNetworkReply::OperationCanceledError) {
         qCWarning(audio) << "Audio stream" << url << "ended with an error:" << _reply->errorString();
@@ -181,12 +191,29 @@ void AudioStreamSource::onFinished() {
         qCDebug(audio) << "Audio stream" << url << "ended";
     }
 
+    QString reason;
+    if (status >= 300) {
+        reason = QString("http %1").arg(status);
+    } else if (error == QNetworkReply::NoError) {
+        reason = "ended";
+    } else {
+        reason = "error: " + _reply->errorString();
+    }
     {
         std::lock_guard<std::mutex> lock(_mutex);
         _ended = true;
+        // stop() and a refused redirect say why before the abort that finishes the reply
+        if (_endReason.isEmpty()) {
+            _endReason = reason;
+        }
     }
     _reply->deleteLater();
     _reply = nullptr;
+}
+
+void AudioStreamSource::setPrebufferFrames(int frames) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _prebufferFrames = std::max(0, std::min(frames, MAX_BUFFERED_FRAMES));
 }
 
 AudioStreamSource::Frame AudioStreamSource::readFrame(Consumer consumer, char* destination) {
@@ -199,7 +226,10 @@ AudioStreamSource::Frame AudioStreamSource::readFrame(Consumer consumer, char* d
     }
 
     const int availableBytes = ring->samplesAvailable() * AudioConstants::SAMPLE_SIZE;
-    if (availableBytes >= frameBytes || (_ended && availableBytes > 0)) {
+    // The rest of an ended stream plays whatever its length
+    const bool primed = !_priming[consumer] || _ended || availableBytes >= _prebufferFrames * frameBytes;
+    if (primed && (availableBytes >= frameBytes || (_ended && availableBytes > 0))) {
+        _priming[consumer] = false;
         const int readBytes = ring->readData(destination, frameBytes);
         memset(destination + readBytes, 0, frameBytes - readBytes);
         return Frame::Audio;
@@ -207,6 +237,18 @@ AudioStreamSource::Frame AudioStreamSource::readFrame(Consumer consumer, char* d
     if (_ended) {
         return Frame::Ended;
     }
+    _priming[consumer] = true;
     memset(destination, 0, frameBytes);
     return Frame::Silence;
+}
+
+int AudioStreamSource::getBufferedFrames(Consumer consumer) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    const auto& ring = _rings[consumer];
+    return ring ? ring->samplesAvailable() / (AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL * _numChannels) : 0;
+}
+
+QString AudioStreamSource::getEndReason() {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _endReason;
 }
