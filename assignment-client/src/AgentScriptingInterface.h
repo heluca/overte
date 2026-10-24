@@ -139,14 +139,18 @@ public slots:
      * <code>true</code>; at other times nothing is sent. The mix leaves out the agent's own sound, such as
      * {@link Agent.playAvatarSound|playAvatarSound}, as the mixer does for every listener. Silence from the mixer is
      * sent as frames of zeros, so the messages keep real time.</p>
-     * <p>If the server reads more slowly than the audio arrives, the connection's operating-system buffers fill first;
-     * after that up to about 200 ms of audio waits in the sink and the oldest frames are dropped. Writing to the sink
-     * never delays the agent.</p>
+     * <p>The connection's operating-system buffers hold several seconds of audio (about 16 s on a loopback connection)
+     * before the sink starts dropping, so a server that stops reading receives stale audio when it resumes. A server
+     * should read every message as it arrives and discard on its own side what it cannot use; the sink's own 200 ms
+     * drop-oldest limit only applies once those buffers are full. Writing to the sink never delays the agent, and nor
+     * does stopping it.</p>
      * <p>The upgrade request carries an <code>Authorization</code> header when a script credential of the domain
      * covers the URL with its scheme read as http (for ws) or https (for wss). Script credentials only accept http
      * prefixes on a loopback host, so use wss for a server on another host.</p>
-     * <p>Starting a sink while one is active stops the active one first. Reconnecting is up to the script: call
-     * <code>startAudioSink</code> again from {@link Agent.audioSinkFinished|audioSinkFinished}, with a back-off.</p>
+     * <p>Starting a sink while one is active stops the active one first, and
+     * {@link Agent.audioSinkFinished|audioSinkFinished} is triggered with <code>"stopped"</code> for it during the call.
+     * Reconnecting is up to the script: call <code>startAudioSink</code> again from
+     * {@link Agent.audioSinkFinished|audioSinkFinished}, with a back-off, unless the reason is <code>"stopped"</code>.</p>
      * @function Agent.startAudioSink
      * @param {string} url - The WebSocket URL, <code>ws://</code> or <code>wss://</code>.
      * @param {object} [options] - Options.
@@ -172,7 +176,8 @@ public slots:
 
     /*@jsdoc
      * Stops sending the audio the agent hears, if {@link Agent.startAudioSink|startAudioSink} is active, closing the
-     * WebSocket. {@link Agent.audioSinkFinished|audioSinkFinished} is triggered with <code>"stopped"</code>.
+     * WebSocket. {@link Agent.audioSinkFinished|audioSinkFinished} is triggered with <code>"stopped"</code> during the
+     * call. The WebSocket's close handshake runs in the background, so stopping never delays the agent.
      * @function Agent.stopAudioSink
      */
     void stopAudioSink() const { _agent->stopAudioSink(); }

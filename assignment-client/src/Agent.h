@@ -116,6 +116,7 @@ private:
     float _lastReceivedAudioLoudness { 0.0f };
 
     void queryAvatars();
+    void retireAudioSink();
     void resetAudioSink();
 
     QString _scriptContents;
@@ -131,6 +132,8 @@ private:
 
     // the received mix forwarded to a WebSocket, while the script runs
     std::unique_ptr<AudioStreamSink> _audioSink;
+    // stopped or replaced, until closed
+    std::vector<std::unique_ptr<AudioStreamSink>> _retiredAudioSinks;
     quint32 _audioSinkSerial { 0 };
 };
 

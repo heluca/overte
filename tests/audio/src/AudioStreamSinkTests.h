@@ -26,6 +26,8 @@ private slots:
     void testAuthorizationOnlyWithCredential();
     void testRefusedHandshakeReportsStatus();
     void testStopClosesConnection();
+    void testStopDuringStallDoesNotBlock();
+    void testDestroyDuringCloseAborts();
     void testServerCloseFinishesOnce();
     void testDestroyClosesWithoutFinished();
 };

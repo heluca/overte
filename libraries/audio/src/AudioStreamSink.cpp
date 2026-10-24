@@ -62,7 +62,9 @@ AudioStreamSink::AudioStreamSink(const QUrl& url, int numChannels, int framesPer
 
 AudioStreamSink::~AudioStreamSink() {
     Q_ASSERT(QThread::currentThread() != &_thread);
-    QMetaObject::invokeMethod(&_context, [this] { closeSocket(); }, Qt::BlockingQueuedConnection);
+    // A stop() still queued ahead of the abort must not wait for its close handshake either
+    _destroying = true;
+    QMetaObject::invokeMethod(&_context, [this] { closeSocket(true); }, Qt::BlockingQueuedConnection);
     _thread.quit();
     _thread.wait();
 }
@@ -75,6 +77,7 @@ void AudioStreamSink::stop() {
     QMetaObject::invokeMethod(&_context, [this] {
         closeSocket();
         finish("stopped");
+        emit closed();
     }, Qt::QueuedConnection);
 }
 
@@ -167,7 +170,7 @@ void AudioStreamSink::openSocket() {
     _socket->open(request);
 }
 
-void AudioStreamSink::closeSocket() {
+void AudioStreamSink::closeSocket(bool abort) {
     _closed = true;
     _open = false;
     if (_statsTimer) {
@@ -176,19 +179,28 @@ void AudioStreamSink::closeSocket() {
         _statsTimer = nullptr;
     }
     if (!_socket) {
+        if (abort && _closingSocket) {
+            // Reached from the wait below, which then returns
+            _closingSocket->abort();
+            _closeWait->quit();
+        }
         return;
     }
     QWebSocket* socket = _socket;
     _socket = nullptr;
     socket->disconnect(&_context);
-    if (socket->state() == QAbstractSocket::ConnectedState) {
+    if (!abort && !_destroying && socket->state() == QAbstractSocket::ConnectedState) {
         // Give the close handshake a moment so the server sees a clean close, not a reset
         QEventLoop loop;
         connect(socket, &QWebSocket::disconnected, &loop, &QEventLoop::quit);
         QTimer::singleShot(CLOSE_WAIT_MSEC, &loop, &QEventLoop::quit);
         socket->close();
         if (socket->state() != QAbstractSocket::UnconnectedState) {
+            _closingSocket = socket;
+            _closeWait = &loop;
             loop.exec();
+            _closingSocket = nullptr;
+            _closeWait = nullptr;
         }
     } else {
         socket->abort();

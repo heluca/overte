@@ -78,10 +78,16 @@ public:
     QUrl url(const QString& path) const { return QUrl(QString("ws://127.0.0.1:%1%2").arg(_port).arg(path)); }
     QUrl refusingUrl() const { return QUrl(QString("ws://127.0.0.1:%1/ears").arg(_refusingPort)); }
 
-    // Blocks the server's thread, so it reads nothing for that long
-    void stall(int msec) {
-        QMetaObject::invokeMethod(&_context, [msec] { QThread::msleep(msec); }, Qt::QueuedConnection);
+    // Blocks the server's thread until release(), so it reads nothing
+    void hold() {
+        _held = true;
+        QMetaObject::invokeMethod(&_context, [this] {
+            while (_held) {
+                QThread::msleep(1);
+            }
+        }, Qt::QueuedConnection);
     }
+    void release() { _held = false; }
     void closeClients() {
         QMetaObject::invokeMethod(&_context, [this] {
             for (auto& socket : _sockets) {
@@ -143,6 +149,7 @@ private:
     quint16 _refusingPort { 0 };
     QList<QPointer<QWebSocket>> _sockets;
     std::atomic<int> _disconnections { 0 };
+    std::atomic<bool> _held { false };
 
     std::mutex _mutex;
     std::vector<QByteArray> _messages;
@@ -266,28 +273,26 @@ void AudioStreamSinkTests::testStalledServerDropsOldest() {
     QTRY_VERIFY_WITH_TIMEOUT(sink->isOpen(), 5000);
     server->takeMessages();
 
-    // Ten times real time while the server reads nothing, so the kernel's socket buffers fill and the ring overflows
-    const int STALL_MSEC = 3000;
-    server->stall(STALL_MSEC);
+    // Ten times real time while the server reads nothing, until the kernel's socket buffers, however large this host
+    // makes them, are full and the ring overflows
+    server->hold();
     QElapsedTimer clock;
     clock.start();
     int written = 0;
-    qint64 burstNsecs = -1;
-    while (clock.elapsed() < STALL_MSEC - 200) {
-        if (burstNsecs < 0 && clock.elapsed() >= STALL_MSEC / 2) {
-            // The writer never waits on the network, however far behind it is
-            QElapsedTimer burst;
-            burst.start();
-            for (int i = 0; i < 1000; i++) {
-                writeTaggedFrame(*sink, written++);
-            }
-            burstNsecs = burst.nsecsElapsed();
-        }
+    while (sink->getFramesDropped() == 0 && clock.elapsed() < 60 * 1000) {
         writeTaggedFrame(*sink, written++);
         QThread::usleep(1000);
     }
+    // The writer never waits on the network, however far behind it is
+    QElapsedTimer burst;
+    burst.start();
+    for (int i = 0; i < 1000; i++) {
+        writeTaggedFrame(*sink, written++);
+    }
+    const qint64 burstNsecs = burst.nsecsElapsed();
     const quint64 droppedDuringStall = sink->getFramesDropped();
-    waitUntil(clock, STALL_MSEC + 200);
+    qDebug() << "the ring overflowed after" << clock.elapsed() << "ms of writing to a held server";
+    server->release();
 
     // Back to real time: the newest frames arrive promptly once the server reads again
     for (int i = 0; i < 50; i++) {
@@ -369,6 +374,73 @@ void AudioStreamSinkTests::testStopClosesConnection() {
     sink->stop();
     QTest::qWait(200);
     QCOMPARE(finished.reasons.size(), 1);
+}
+
+void AudioStreamSinkTests::testStopDuringStallDoesNotBlock() {
+    auto sink = AudioStreamSink::create(server->url("/ears"), AudioConstants::STEREO);
+    Finished finished;
+    finished.watch(sink.get());
+    std::atomic<int> closed { 0 };
+    QObject::connect(sink.get(), &AudioStreamSink::closed, &finished, [&closed] { closed++; });
+    sink->start();
+    QTRY_VERIFY_WITH_TIMEOUT(sink->isOpen(), 5000);
+
+    // A backlog in Qt's buffer as well as the kernel's, so the close frame waits behind it
+    server->hold();
+    QElapsedTimer clock;
+    clock.start();
+    int written = 0;
+    while (sink->getFramesDropped() == 0 && clock.elapsed() < 60 * 1000) {
+        writeTaggedFrame(*sink, written++);
+        QThread::usleep(1000);
+    }
+    QVERIFY(sink->getFramesDropped() > 0);
+
+    QElapsedTimer stopping;
+    stopping.start();
+    sink->stop();
+    const qint64 stopNsecs = stopping.nsecsElapsed();
+    QTRY_COMPARE_WITH_TIMEOUT(closed.load(), 1, 5000);
+    const qint64 closedMsec = stopping.elapsed();
+    QElapsedTimer destroying;
+    destroying.start();
+    sink.reset();
+    const qint64 destroyMsec = destroying.elapsed();
+    server->release();
+    qDebug() << "stop() took" << stopNsecs / 1000 << "us, closed after" << closedMsec << "ms, destroying took"
+             << destroyMsec << "ms";
+
+    QVERIFY2(stopNsecs < 5 * 1000 * 1000, qPrintable(QString::number(stopNsecs)));
+    QCOMPARE(finished.reasons, QStringList({ "stopped" }));
+    // Destroying a closed sink has nothing to wait for
+    QVERIFY2(destroyMsec < 100, qPrintable(QString::number(destroyMsec)));
+    QTest::qWait(200);
+}
+
+void AudioStreamSinkTests::testDestroyDuringCloseAborts() {
+    auto sink = AudioStreamSink::create(server->url("/ears"), AudioConstants::STEREO);
+    sink->start();
+    QTRY_VERIFY_WITH_TIMEOUT(sink->isOpen(), 5000);
+    server->hold();
+    QElapsedTimer clock;
+    clock.start();
+    int written = 0;
+    while (sink->getFramesDropped() == 0 && clock.elapsed() < 60 * 1000) {
+        writeTaggedFrame(*sink, written++);
+        QThread::usleep(1000);
+    }
+
+    // The close handshake cannot finish while the server is held; destroying the sink cuts its wait short
+    sink->stop();
+    QThread::msleep(50);
+    QElapsedTimer destroying;
+    destroying.start();
+    sink.reset();
+    const qint64 destroyMsec = destroying.elapsed();
+    server->release();
+    qDebug() << "destroying a closing sink took" << destroyMsec << "ms";
+    QVERIFY2(destroyMsec < 300, qPrintable(QString::number(destroyMsec)));
+    QTest::qWait(200);
 }
 
 void AudioStreamSinkTests::testServerCloseFinishesOnce() {
