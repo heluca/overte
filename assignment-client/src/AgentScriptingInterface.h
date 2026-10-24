@@ -14,6 +14,7 @@
 #define hifi_AgentScriptingInterface_h
 
 #include <QObject>
+#include <QVariantMap>
 
 #include "Agent.h"
 
@@ -48,6 +49,9 @@
  *     <code>Avatar.position</code> in the position the agent sends the audio mixer, both for the audio it plays and for
  *     where it listens. Defaults to <code>Vec3.ZERO</code>, which is the avatar's position (its hips). Set it to, e.g.,
  *     <code>{ x: 0, y: 0.6, z: 0 }</code> to put the mouth and ears at head height.
+ * @property {boolean} isAudioSinkActive - <code>true</code> from a successful {@link Agent.startAudioSink|startAudioSink}
+ *     call until {@link Agent.audioSinkFinished|audioSinkFinished} is triggered, including while the WebSocket
+ *     connects, otherwise <code>false</code>. <em>Read-only.</em>
  */
 class AgentScriptingInterface : public QObject {
     Q_OBJECT
@@ -59,6 +63,7 @@ class AgentScriptingInterface : public QObject {
     Q_PROPERTY(QUuid sessionUUID READ getSessionUUID)
     Q_PROPERTY(QStringList audioCodecs READ getAudioCodecs WRITE setAudioCodecs)
     Q_PROPERTY(glm::vec3 audioPositionOffset READ getAudioPositionOffset WRITE setAudioPositionOffset)
+    Q_PROPERTY(bool isAudioSinkActive READ isAudioSinkActive)
 
 public:
     AgentScriptingInterface(Agent* agent);
@@ -79,6 +84,8 @@ public:
 
     glm::vec3 getAudioPositionOffset() const { return _agent->getAudioPositionOffset(); }
     void setAudioPositionOffset(const glm::vec3& offset) const { _agent->setAudioPositionOffset(offset); }
+
+    bool isAudioSinkActive() const { return _agent->isAudioSinkActive(); }
 
 public slots:
     /*@jsdoc
@@ -121,6 +128,66 @@ public slots:
      * }());
      */
     void playAvatarSound(SharedSoundPointer avatarSound) const { _agent->playAvatarSound(avatarSound); }
+
+    /*@jsdoc
+     * Sends the audio the agent hears to a WebSocket server, as binary messages, until the server closes the connection
+     * or the script calls {@link Agent.stopAudioSink|stopAudioSink}. This is the agent's own spatial mix from the audio
+     * mixer, so its other listeners' voices come from where their avatars are relative to this one.
+     * <p>Each message is <code>framesPerMessage</code> frames of 10 ms of 24000 Hz stereo audio: interleaved signed
+     * 16-bit little-endian samples, left first, with no header. At the default of 2 frames a message is 1920 bytes.</p>
+     * <p>The mixer sends a mix only while both <code>isAvatar</code> and <code>isListeningToAudioStream</code> are
+     * <code>true</code>; at other times nothing is sent. The mix leaves out the agent's own sound, such as
+     * {@link Agent.playAvatarSound|playAvatarSound}, as the mixer does for every listener. Silence from the mixer is
+     * sent as frames of zeros, so the messages keep real time.</p>
+     * <p>If the server reads more slowly than the audio arrives, the connection's operating-system buffers fill first;
+     * after that up to about 200 ms of audio waits in the sink and the oldest frames are dropped. Writing to the sink
+     * never delays the agent.</p>
+     * <p>The upgrade request carries an <code>Authorization</code> header when a script credential of the domain
+     * covers the URL with its scheme read as http (for ws) or https (for wss). Script credentials only accept http
+     * prefixes on a loopback host, so use wss for a server on another host.</p>
+     * <p>Starting a sink while one is active stops the active one first. Reconnecting is up to the script: call
+     * <code>startAudioSink</code> again from {@link Agent.audioSinkFinished|audioSinkFinished}, with a back-off.</p>
+     * @function Agent.startAudioSink
+     * @param {string} url - The WebSocket URL, <code>ws://</code> or <code>wss://</code>.
+     * @param {object} [options] - Options.
+     * @param {number} [options.framesPerMessage=2] - The 10 ms frames in each message, <code>1</code> &ndash;
+     *     <code>10</code>.
+     * @returns {boolean} <code>true</code> if the sink is connecting, <code>false</code> if the URL is not ws or wss or
+     *     <code>framesPerMessage</code> is out of range.
+     * @example <caption>Send what the agent hears to a local recorder, reconnecting after a second.</caption>
+     * Agent.isAvatar = true;
+     * Agent.isListeningToAudioStream = true;
+     * function connect() {
+     *     Agent.startAudioSink("ws://127.0.0.1:9000/ears", { framesPerMessage: 2 });
+     * }
+     * Agent.audioSinkFinished.connect(function (reason) {
+     *     print("Audio sink finished: " + reason);
+     *     if (reason !== "stopped") {
+     *         Script.setTimeout(connect, 1000);
+     *     }
+     * });
+     * connect();
+     */
+    bool startAudioSink(const QString& url, const QVariantMap& options = QVariantMap()) const;
+
+    /*@jsdoc
+     * Stops sending the audio the agent hears, if {@link Agent.startAudioSink|startAudioSink} is active, closing the
+     * WebSocket. {@link Agent.audioSinkFinished|audioSinkFinished} is triggered with <code>"stopped"</code>.
+     * @function Agent.stopAudioSink
+     */
+    void stopAudioSink() const { _agent->stopAudioSink(); }
+
+signals:
+    /*@jsdoc
+     * Triggered once when the audio sink started by {@link Agent.startAudioSink|startAudioSink} ends. It is not
+     * triggered after the script has stopped.
+     * @function Agent.audioSinkFinished
+     * @param {string} reason - <code>"closed"</code> if the server closed the connection, <code>"http &lt;status&gt;"</code>
+     *     (e.g., <code>"http 401"</code>) if the server refused the WebSocket upgrade, <code>"error: &lt;description&gt;"</code>
+     *     if the connection failed otherwise, or <code>"stopped"</code> if the script stopped it.
+     * @returns {Signal}
+     */
+    void audioSinkFinished(const QString& reason);
 
 private:
     Agent* _agent;

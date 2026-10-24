@@ -24,3 +24,20 @@ print("Offering " + offered.join(", "));
 Agent.audioPositionOffset = { x: 0, y: 0.6, z: 0 };
 const offset: Vec3 = Agent.audioPositionOffset;
 print("Audio offset " + JSON.stringify(offset));
+
+// Ears: send the agent's mix to a WebSocket and reconnect when it ends, unless stopped.
+function startEars(): void {
+    const started: boolean = Agent.startAudioSink("ws://127.0.0.1:9000/ears", { framesPerMessage: 2 });
+    print("Audio sink " + (started ? "connecting" : "refused"));
+}
+Agent.audioSinkFinished.connect(function (reason: string) {
+    if (reason !== "stopped") {
+        Script.setTimeout(startEars, 1000);
+    }
+});
+startEars();
+Agent.startAudioSink("wss://127.0.0.1:9443/ears");
+const sinkActive: boolean = Agent.isAudioSinkActive;
+if (sinkActive) {
+    Agent.stopAudioSink();
+}
