@@ -12,8 +12,9 @@
 
 #include "AgentAvatarAudio.h"
 
+#include <chrono>
+
 #include <NodeList.h>
-#include <SharedUtil.h>
 #include <udt/PacketHeaders.h>
 
 #include <plugins/PluginManager.h>
@@ -91,10 +92,11 @@ AgentAvatarAudio::~AgentAvatarAudio() {
 }
 
 void AgentAvatarAudio::setAvatarSound(SharedSoundPointer avatarSound) {
+    _avatarSound = avatarSound;
+    // After the swap, as in playVoiceStream, so a stream played from the signal clears the sound
     if (avatarSound) {
         stopVoiceStream();
     }
-    _avatarSound = avatarSound;
 }
 
 void AgentAvatarAudio::playVoiceStream(std::unique_ptr<AvatarVoiceStream> voiceStream) {
@@ -323,8 +325,10 @@ void AgentAvatarAudio::processAgentAvatarAudio() {
         return;
     }
     // A QTimer skips the ticks a stalled script misses rather than catching up, while the stream's producer keeps real
-    // time: without making them up the source's ring stays fuller after each stall until it drops audio
-    const int framesDue = _voiceStream->framesDue(usecTimestampNow());
+    // time: without making them up the source's ring stays fuller after each stall until it drops audio. A steady
+    // clock, not usecTimestampNow(): a wall clock stepping back would hold the voice for as long as the step.
+    const int framesDue = _voiceStream->framesDue((quint64)std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
     for (int i = 0; i < framesDue; ++i) {
         if (!sendAvatarAudioFrame()) {
             break;
