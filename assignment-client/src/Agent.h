@@ -18,7 +18,9 @@
 #include <vector>
 
 #include <QtCore/QJsonObject>
+#include <QtCore/QMutex>
 #include <QtCore/QObject>
+#include <QtCore/QStringList>
 #include <QtCore/QSharedPointer>
 #include <QtCore/QUrl>
 #include <QtCore/QTimer>
@@ -66,6 +68,9 @@ public:
 
     float getLastReceivedAudioLoudness() const { return _lastReceivedAudioLoudness; }
     QUuid getSessionUUID() const;
+
+    QStringList getAudioCodecs() const;
+    void setAudioCodecs(const QStringList& audioCodecs);
 
     virtual void aboutToFinish() override;
 
@@ -125,6 +130,12 @@ private:
     AudioGate _audioGate;
     bool _audioGateOpen { true };
     bool _isNoiseGateEnabled { false };
+
+    QStringList _availableCodecs;  // set in the constructor
+
+    // Settings the script thread writes and the Agent's thread reads.
+    mutable QMutex _audioSettingsMutex;
+    QStringList _audioCodecs;
 
     CodecPluginPointer _codec;
     QString _selectedCodecName;

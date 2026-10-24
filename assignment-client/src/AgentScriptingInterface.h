@@ -37,6 +37,11 @@
  * @property {number} lastReceivedAudioLoudness - The current loudness of the audio input. Nominal range [<code>0.0</code> (no 
  *     sound) &ndash; <code>1.0</code> (the onset of clipping)]. <em>Read-only.</em>
  * @property {Uuid} sessionUUID - The unique ID associated with the agent's current session in the domain. <em>Read-only.</em>
+ * @property {string[]} audioCodecs - The audio codecs the agent offers the audio mixer, which picks one by the domain's
+ *     codec preference order. Defaults to every codec the assignment client has, e.g., <code>["opus", "pcm", "zlib"]</code>.
+ *     Names the assignment client does not have are dropped with a warning; if none is left, every codec is offered.
+ *     Setting the property negotiates the codec again if the agent is connected to an audio mixer. Set it to
+ *     <code>["pcm"]</code> for uncompressed audio from one agent while Interface users keep Opus.
  */
 class AgentScriptingInterface : public QObject {
     Q_OBJECT
@@ -46,6 +51,7 @@ class AgentScriptingInterface : public QObject {
     Q_PROPERTY(bool isNoiseGateEnabled READ isNoiseGateEnabled WRITE setIsNoiseGateEnabled)
     Q_PROPERTY(float lastReceivedAudioLoudness READ getLastReceivedAudioLoudness)
     Q_PROPERTY(QUuid sessionUUID READ getSessionUUID)
+    Q_PROPERTY(QStringList audioCodecs READ getAudioCodecs WRITE setAudioCodecs)
 
 public:
     AgentScriptingInterface(Agent* agent);
@@ -60,6 +66,9 @@ public:
 
     float getLastReceivedAudioLoudness() const { return _agent->getLastReceivedAudioLoudness(); }
     QUuid getSessionUUID() const { return _agent->getSessionUUID(); }
+
+    QStringList getAudioCodecs() const { return _agent->getAudioCodecs(); }
+    void setAudioCodecs(const QStringList& audioCodecs) const { _agent->setAudioCodecs(audioCodecs); }
 
 public slots:
     /*@jsdoc

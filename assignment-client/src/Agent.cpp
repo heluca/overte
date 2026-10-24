@@ -64,6 +64,7 @@
 #include "AssignmentDynamicFactory.h"
 #include <recording/RecordingScriptingInterface.h>
 #include "AbstractAudioInterface.h"
+#include "AgentAudioSettings.h"
 #include "AgentScriptingInterface.h"
 
 static const int RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES = 10;
@@ -92,6 +93,10 @@ Agent::Agent(ReceivedMessage& message) :
 
     DependencyManager::set<ResourceManager>();
     DependencyManager::set<PluginManager>()->instantiate();
+    for (const auto& plugin : PluginManager::getInstance()->getCodecPlugins()) {
+        _availableCodecs.append(plugin->getName());
+    }
+    _audioCodecs = _availableCodecs;
 
     DependencyManager::registerInheritance<SpatialParentFinder, AssignmentParentFinder>();
 
@@ -309,14 +314,30 @@ void Agent::nodeKilled(SharedNodePointer killedNode) {
     }
 }
 
+QStringList Agent::getAudioCodecs() const {
+    QMutexLocker locker(&_audioSettingsMutex);
+    return _audioCodecs;
+}
+
+void Agent::setAudioCodecs(const QStringList& audioCodecs) {
+    QStringList dropped;
+    {
+        QMutexLocker locker(&_audioSettingsMutex);
+        _audioCodecs = AgentAudioSettings::offeredCodecs(audioCodecs, _availableCodecs, dropped);
+    }
+    if (!dropped.isEmpty()) {
+        qWarning() << "Agent.audioCodecs: dropped unknown codecs" << dropped << "- available:" << _availableCodecs;
+    }
+    QMetaObject::invokeMethod(this, [this] { negotiateAudioFormat(); });
+}
+
 void Agent::negotiateAudioFormat() {
     auto nodeList = DependencyManager::get<NodeList>();
     auto negotiateFormatPacket = NLPacket::create(PacketType::NegotiateAudioFormat);
-    const auto& codecPlugins = PluginManager::getInstance()->getCodecPlugins();
-    quint8 numberOfCodecs = (quint8)codecPlugins.size();
-    negotiateFormatPacket->writePrimitive(numberOfCodecs);
-    for (const auto& plugin : codecPlugins) {
-        auto codecName = plugin->getName();
+    const QStringList codecs = getAudioCodecs();
+    qDebug() << "Offering audio codecs" << codecs;
+    negotiateFormatPacket->writePrimitive((quint8)codecs.size());
+    for (const auto& codecName : codecs) {
         negotiateFormatPacket->writeString(codecName);
     }
 
