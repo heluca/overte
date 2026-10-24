@@ -16,10 +16,6 @@
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QThread>
-#include <QtCore/QTimer>
-#include <QtCore/QtEndian>
-#include <QtNetwork/QTcpServer>
-#include <QtNetwork/QTcpSocket>
 
 #include <AccountManager.h>
 #include <AddressManager.h>
@@ -33,32 +29,18 @@
 #include <ResourceManager.h>
 #include <StatTracker.h>
 
+#include "PcmTestServer.h"
+
 QTEST_MAIN(AudioStreamTests)
 
 using Frame = AudioStreamSource::Frame;
 
 namespace {
 
+using namespace pcmtest;
+
 const int SAMPLES_PER_SECOND = AudioConstants::SAMPLE_RATE;
 const int FRAME_SAMPLES = AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL;
-// Odd, so the HTTP chunks split samples and the stereo channels of a sample
-const int CHUNK_BYTES = 777;
-
-// Never zero, so audio is told apart from the silence played on an underrun
-int16_t sampleValue(int index) {
-    return (int16_t)(index % 30000 + 1);
-}
-
-// Each step sends that many samples per channel, waits minus that many milliseconds, or ends the response at zero
-struct Plan {
-    int channels { 1 };
-    QVector<int> steps;
-    bool repeat { false };
-    // Counts in burstsFlushed when the socket has handed all of a step's audio to the OS
-    bool signalsFlush { false };
-};
-
-std::atomic<int> burstsFlushed { 0 };
 
 Plan planFor(const QByteArray& path) {
     Plan plan;
@@ -67,127 +49,26 @@ Plan planFor(const QByteArray& path) {
         // A second in tenths, a half-second pause, another second, then the end
         for (int part = 0; part < 2; part++) {
             for (int i = 0; i < 10; i++) {
-                plan.steps << tenth << -100;
+                plan.steps << Step::audio(tenth) << Step::wait(100);
             }
-            plan.steps << (part == 0 ? -400 : 0);
+            plan.steps << (part == 0 ? Step::wait(400) : Step::end());
         }
     } else if (path == "/burst") {
-        plan.steps << SAMPLES_PER_SECOND << -2000 << 0;
+        plan.steps << Step::audio(SAMPLES_PER_SECOND) << Step::wait(2000) << Step::end();
         plan.signalsFlush = true;
     } else if (path == "/stereo") {
         plan.channels = 2;
-        plan.steps << tenth << -50 << 0;
+        plan.steps << Step::audio(tenth) << Step::wait(50) << Step::end();
     } else if (path == "/forever") {
-        plan.steps << tenth << -100;
+        plan.steps << Step::audio(tenth) << Step::wait(100);
         plan.repeat = true;
+    } else if (path == "/lone") {
+        // One frame, then three more after a second
+        plan.steps << Step::audio(FRAME_SAMPLES) << Step::wait(1000) << Step::audio(3 * FRAME_SAMPLES) << Step::wait(300)
+                   << Step::end();
     }
     return plan;
 }
-
-struct Connection {
-    Plan plan;
-    int step { 0 };
-    int nextSample { 0 };
-};
-
-void runPlan(QTcpSocket* socket, std::shared_ptr<Connection> connection) {
-    while (true) {
-        if (connection->step == connection->plan.steps.size()) {
-            if (!connection->plan.repeat) {
-                return;
-            }
-            connection->step = 0;
-        }
-        const int step = connection->plan.steps[connection->step++];
-        if (step > 0) {
-            const int count = step * connection->plan.channels;
-            QByteArray pcm(count * AudioConstants::SAMPLE_SIZE, Qt::Uninitialized);
-            for (int i = 0; i < count; i++) {
-                qToLittleEndian<qint16>(sampleValue(connection->nextSample++), pcm.data() + i * AudioConstants::SAMPLE_SIZE);
-            }
-            for (int offset = 0; offset < pcm.size(); offset += CHUNK_BYTES) {
-                const QByteArray chunk = pcm.mid(offset, CHUNK_BYTES);
-                socket->write(QByteArray::number(chunk.size(), 16) + "\r\n" + chunk + "\r\n");
-            }
-            if (connection->plan.signalsFlush) {
-                auto flushed = std::make_shared<QMetaObject::Connection>();
-                *flushed = QObject::connect(socket, &QTcpSocket::bytesWritten, socket, [socket, flushed] {
-                    if (socket->bytesToWrite() == 0) {
-                        burstsFlushed++;
-                        QObject::disconnect(*flushed);
-                    }
-                });
-            }
-        } else if (step < 0) {
-            QTimer::singleShot(-step, socket, [socket, connection] { runPlan(socket, connection); });
-            return;
-        } else {
-            socket->write("0\r\n\r\n");
-            socket->disconnectFromHost();
-            return;
-        }
-    }
-}
-
-// Serves PCM as chunked HTTP responses on 127.0.0.1, from a thread of its own so it never waits on the test
-class PcmTestServer {
-public:
-    PcmTestServer() {
-        _context.moveToThread(&_thread);
-        _thread.start();
-        QMetaObject::invokeMethod(&_context, [this] {
-            _server = new QTcpServer();
-            _server->listen(QHostAddress::LocalHost, 0);
-            _port = _server->serverPort();
-            QObject::connect(_server, &QTcpServer::newConnection, _server, [this] {
-                while (QTcpSocket* socket = _server->nextPendingConnection()) {
-                    serve(socket);
-                }
-            });
-        }, Qt::BlockingQueuedConnection);
-    }
-    ~PcmTestServer() {
-        QMetaObject::invokeMethod(&_context, [this] { delete _server; }, Qt::BlockingQueuedConnection);
-        _thread.quit();
-        _thread.wait();
-    }
-    QUrl url(const QString& path) const { return QUrl(QString("http://127.0.0.1:%1%2").arg(_port).arg(path)); }
-    int closedConnections() const { return _closed; }
-
-private:
-    void serve(QTcpSocket* socket) {
-        auto received = std::make_shared<QByteArray>();
-        QObject::connect(socket, &QTcpSocket::disconnected, socket, [this, socket] {
-            _closed++;
-            socket->deleteLater();
-        });
-        QObject::connect(socket, &QTcpSocket::readyRead, socket, [socket, received] {
-            if (received->contains("\r\n\r\n")) {
-                return;
-            }
-            received->append(socket->readAll());
-            if (!received->contains("\r\n\r\n")) {
-                return;
-            }
-            const QByteArray path = received->split(' ').value(1);
-            auto connection = std::make_shared<Connection>();
-            connection->plan = planFor(path);
-            if (connection->plan.steps.isEmpty()) {
-                socket->write("HTTP/1.1 404 Not Found\r\nContent-Length: 7\r\nConnection: close\r\n\r\nmissing");
-                socket->disconnectFromHost();
-                return;
-            }
-            socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n");
-            runPlan(socket, connection);
-        });
-    }
-
-    QThread _thread;
-    QObject _context;
-    QTcpServer* _server { nullptr };
-    quint16 _port { 0 };
-    std::atomic<int> _closed { 0 };
-};
 
 std::unique_ptr<PcmTestServer> server;
 
@@ -276,7 +157,7 @@ void AudioStreamTests::initTestCase() {
     DependencyManager::set<NodeList>(NodeType::Agent, 0);
     DependencyManager::set<ResourceManager>(false);
     DependencyManager::set<AudioInjectorManager>();
-    server = std::make_unique<PcmTestServer>();
+    server = std::make_unique<PcmTestServer>(planFor);
 }
 
 void AudioStreamTests::cleanupTestCase() {
@@ -313,11 +194,11 @@ void AudioStreamTests::testPacedStreamWithPause() {
 
 void AudioStreamTests::testOverrunKeepsNewest() {
     auto source = AudioStreamSource::create(server->url("/burst"), AudioConstants::MONO);
-    const int flushedBefore = burstsFlushed;
+    const int flushedBefore = server->burstsFlushed();
     source->start(true, false);
     // The whole second arrives while nothing reads; only the newest 200 ms is kept. Once the server has handed it to
     // the OS, loopback delivery to the reply is a matter of milliseconds.
-    QTRY_VERIFY_WITH_TIMEOUT(burstsFlushed > flushedBefore, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(server->burstsFlushed() > flushedBefore, 5000);
     QThread::msleep(200);
     const Pulled pulled = pullFrames(*source, 5000);
 
@@ -447,4 +328,30 @@ void AudioStreamTests::testErrorResponseFinishes() {
     QTRY_VERIFY_WITH_TIMEOUT(finished.load(), 2000);
     // The error page is not played
     QCOMPARE(injector->getLoudness(), 0.0f);
+}
+
+void AudioStreamTests::testPrebufferDefaultsToZero() {
+    // By default a lone frame plays as soon as it is whole, as Audio.playStream always has
+    auto source = AudioStreamSource::create(server->url("/lone"), AudioConstants::MONO);
+    source->start(true, false);
+    Pulled pulled = pullFrames(*source, 3000);
+    int firstAudio = pulled.frames.indexOf(Frame::Audio);
+    qDebug() << "default: first audio at frame" << firstAudio << "audio" << pulled.frames.count(Frame::Audio);
+    QCOMPARE(pulled.frames.count(Frame::Audio), 4);
+    QVERIFY2(firstAudio >= 0 && firstAudio < 50, qPrintable(QString::number(firstAudio)));
+    QVERIFY(isSequenceFrom(pulled.samples, 0));
+    QCOMPARE(pulled.frames.last(), Frame::Ended);
+
+    // With a prebuffer of two frames the lone frame waits for the next ones, and nothing is lost
+    source = AudioStreamSource::create(server->url("/lone"), AudioConstants::MONO);
+    source->setPrebufferFrames(2);
+    source->start(true, false);
+    pulled = pullFrames(*source, 3000);
+    firstAudio = pulled.frames.indexOf(Frame::Audio);
+    qDebug() << "prebuffer 2: first audio at frame" << firstAudio << "audio" << pulled.frames.count(Frame::Audio);
+    QCOMPARE(pulled.frames.count(Frame::Audio), 4);
+    QVERIFY2(firstAudio >= 90, qPrintable(QString::number(firstAudio)));
+    QVERIFY(isSequenceFrom(pulled.samples, 0));
+    QCOMPARE(pulled.frames.last(), Frame::Ended);
+    QCOMPARE(source->getEndReason(), QString("ended"));
 }

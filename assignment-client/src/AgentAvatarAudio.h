@@ -21,8 +21,12 @@
 #include <QtCore/QTimer>
 #include <QUuid>
 
+#include <memory>
+
 #include <glm/glm.hpp>
 
+#include <AudioConstants.h>
+#include <AvatarVoiceStream.h>
 #include <plugins/CodecPlugin.h>
 #include <ReceivedMessage.h>
 #include <Sound.h>
@@ -34,7 +38,8 @@ class Agent;
 class ScriptableAvatar;
 
 /// The audio an Agent sends as its avatar: codec negotiation with the audio mixer, the 100 Hz send loop for
-/// Agent.playAvatarSound, and the audio frames of a playing recording. Lives on the Agent's thread as its child.
+/// Agent.playAvatarSound and Agent.playVoiceStream, and the audio frames of a playing recording. Lives on the Agent's
+/// thread as its child.
 class AgentAvatarAudio : public QObject {
     Q_OBJECT
 
@@ -43,7 +48,16 @@ public:
     ~AgentAvatarAudio();
 
     bool isPlayingAvatarSound() const { return _avatarSound != NULL; }
-    void setAvatarSound(SharedSoundPointer avatarSound) { _avatarSound = avatarSound; }
+    // A sound stops a playing voice stream, with voiceStreamFinished("stopped")
+    void setAvatarSound(SharedSoundPointer avatarSound);
+
+    // The Agent's thread only. A voice stream replaces a playing sound, and a voice stream it replaces finishes with
+    // "stopped".
+    bool isPlayingVoiceStream() const { return (bool)_voiceStream; }
+    void playVoiceStream(std::unique_ptr<AvatarVoiceStream> voiceStream);
+    void stopVoiceStream();
+    // Drops the voice stream without voiceStreamFinished, for teardown
+    void resetVoiceStream();
 
     QStringList getAudioCodecs() const;
     void setAudioCodecs(const QStringList& audioCodecs);
@@ -60,12 +74,18 @@ public:
     void handleRecordingAudioFrame(const QByteArray& frameData, float volume,
         const QSharedPointer<ScriptableAvatar>& scriptedAvatar);
 
+signals:
+    // Emitted on the Agent's thread from the send loop, or from stopVoiceStream and what replaces the stream
+    void voiceStreamFinished(const QString& reason);
+
 private slots:
     void handleSelectedAudioFormat(QSharedPointer<ReceivedMessage> message);
     void processAgentAvatarAudio();
 
 private:
     void selectAudioFormat(const QString& selectedCodecName);
+    // Sends one frame; false once a voice stream has ended in it
+    bool sendAvatarAudioFrame();
     void encodeFrameOfZeros(QByteArray& encodedZeros);
     void computeLoudness(const QByteArray* decodedBuffer, QSharedPointer<ScriptableAvatar>);
     glm::vec3 audioPosition(const ScriptableAvatar& avatar) const;
@@ -74,6 +94,9 @@ private:
     MixedAudioStream& _receivedAudioStream;
 
     SharedSoundPointer _avatarSound;
+    // Unlocked: the script, the send timer, executeScript and aboutToFinish all run on the Agent's thread
+    std::unique_ptr<AvatarVoiceStream> _voiceStream;
+    int16_t _voiceFrame[AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL];
     bool _shouldMuteRecordingAudio { false };
     int _numAvatarSoundSentBytes = 0;
     QHash<QUuid, quint16> _outgoingScriptAudioSequenceNumbers;
