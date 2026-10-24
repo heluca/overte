@@ -51,6 +51,9 @@ public:
     // The reason of an Ended frame: the source's, or "idle" after idleTimeoutFrames frames in a row without audio
     const QString& getEndReason() const { return _endReason; }
 
+    // Whether the last frame read was Audio, so the encoder needs a frame of zeros before anything else
+    bool wasAudible() const { return _audible; }
+
     // The frames to send on a timer tick at nowUsecs, a monotonic clock's, 0 to MAX_FRAMES_PER_TICK, keeping one frame
     // per 10 ms from the first call. A tick that comes late, as a QTimer's does behind a stalled script, is made up on
     // the next ticks; a stall longer than the source's ring is not, since the ring has already dropped that audio.

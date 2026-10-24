@@ -15,11 +15,13 @@
 // Header-only: SetupHifiTestCase builds each *Tests.cpp on its own and ignores any other .cpp file
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
+#include <QtCore/QUrl>
 #include <QtCore/QVector>
 #include <QtCore/QtEndian>
 #include <QtNetwork/QTcpServer>
@@ -118,8 +120,10 @@ private:
                 return;
             }
             if (connection->plan.status != 200) {
-                socket->write(QString("HTTP/1.1 %1 Refused\r\nContent-Length: 7\r\nConnection: close\r\n\r\nrefused")
-                                  .arg(connection->plan.status).toLatin1());
+                // A real server's 401 names its scheme, and Qt's authentication handling reads it
+                const QByteArray challenge = connection->plan.status == 401 ? "WWW-Authenticate: Bearer\r\n" : "";
+                socket->write(QString("HTTP/1.1 %1 Refused\r\n").arg(connection->plan.status).toLatin1() + challenge +
+                              "Content-Length: 7\r\nConnection: close\r\n\r\nrefused");
                 socket->disconnectFromHost();
                 return;
             }

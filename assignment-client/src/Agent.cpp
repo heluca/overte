@@ -253,6 +253,12 @@ void Agent::resetAudioSink() {
 
 bool Agent::playVoiceStream(const QUrl& url, int prebufferFrames, int idleTimeoutFrames,
                             const AudioStreamCredential& credential) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    // The send loop reads the stream only while the agent is an avatar
+    if (!_isAvatar) {
+        qWarning() << "Agent.playVoiceStream: the agent is not an avatar; set Agent.isAvatar first";
+        return false;
+    }
     auto voiceStream = AvatarVoiceStream::create(url, prebufferFrames, idleTimeoutFrames, credential);
     if (!voiceStream || !_avatarAudio) {
         return false;
@@ -262,6 +268,7 @@ bool Agent::playVoiceStream(const QUrl& url, int prebufferFrames, int idleTimeou
 }
 
 void Agent::stopVoiceStream() {
+    Q_ASSERT(QThread::currentThread() == thread());
     if (_avatarAudio) {
         _avatarAudio->stopVoiceStream();
     }
@@ -657,6 +664,8 @@ void Agent::setIsAvatar(bool isAvatar) {
 
             if (_avatarAudio) {
                 _avatarAudio->stopSending();
+                // A live stream that is not read cannot be paused, only ended
+                _avatarAudio->stopVoiceStream();
             }
         }
 

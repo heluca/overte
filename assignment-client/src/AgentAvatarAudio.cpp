@@ -101,11 +101,11 @@ void AgentAvatarAudio::setAvatarSound(SharedSoundPointer avatarSound) {
 
 void AgentAvatarAudio::playVoiceStream(std::unique_ptr<AvatarVoiceStream> voiceStream) {
     const bool replacesStream = (bool)_voiceStream;
-    if (_avatarSound || replacesStream) {
-        _avatarSound.clear();
-        _numAvatarSoundSentBytes = 0;
+    if (_avatarSound || (replacesStream && _voiceStream->wasAudible())) {
         _flushEncoder = true;
     }
+    _avatarSound.clear();
+    _numAvatarSoundSentBytes = 0;
     _shouldMuteRecordingAudio = false;
     _voiceStream = std::move(voiceStream);
     // After the swap, so a script that starts another stream from the signal is not undone
@@ -116,8 +116,9 @@ void AgentAvatarAudio::playVoiceStream(std::unique_ptr<AvatarVoiceStream> voiceS
 
 void AgentAvatarAudio::stopVoiceStream() {
     if (_voiceStream) {
+        // A flush left pending would replace the first frame of the next sound
+        _flushEncoder = _flushEncoder || _voiceStream->wasAudible();
         resetVoiceStream();
-        _flushEncoder = true;
         emit voiceStreamFinished("stopped");
     }
 }
@@ -368,8 +369,8 @@ bool AgentAvatarAudio::sendAvatarAudioFrame() {
                 case AvatarVoiceStream::Frame::Ended:
                     voiceStreamEnded = true;
                     voiceStreamEndReason = _voiceStream->getEndReason();
+                    _flushEncoder = _flushEncoder || _voiceStream->wasAudible();
                     resetVoiceStream();
-                    _flushEncoder = true;
                     break;
             }
         } else if (_avatarSound && _avatarSound->isReady()) {

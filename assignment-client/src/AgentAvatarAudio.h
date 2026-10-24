@@ -94,6 +94,7 @@ private:
     MixedAudioStream& _receivedAudioStream;
 
     SharedSoundPointer _avatarSound;
+    // Unlocked: the script, the send timer, executeScript and aboutToFinish all run on the Agent's thread
     std::unique_ptr<AvatarVoiceStream> _voiceStream;
     int16_t _voiceFrame[AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL];
     bool _shouldMuteRecordingAudio { false };
