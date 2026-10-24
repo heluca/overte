@@ -31,4 +31,5 @@ CONTEXTS.forEach(context => {
 });
 ok = run("-p sample/tsconfig.json", ["-p", "sample/tsconfig.json"]) && ok;
 ok = run("-p sample/interface/tsconfig.json", ["-p", "sample/interface/tsconfig.json"]) && ok;
+ok = run("-p sample/agent/tsconfig.json", ["-p", "sample/agent/tsconfig.json"]) && ok;
 process.exit(ok ? 0 : 1);

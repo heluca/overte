@@ -64,6 +64,7 @@
 #include "AssignmentDynamicFactory.h"
 #include <recording/RecordingScriptingInterface.h>
 #include "AbstractAudioInterface.h"
+#include "AgentAudioSettings.h"
 #include "AgentScriptingInterface.h"
 
 static const int RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES = 10;
@@ -72,7 +73,8 @@ Agent::Agent(ReceivedMessage& message) :
     ThreadedAssignment(message),
     _receivedAudioStream(RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES, RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES),
     _audioGate(AudioConstants::SAMPLE_RATE, AudioConstants::MONO),
-    _avatarAudioTimer(this)
+    _avatarAudioTimer(this),
+    _negotiateAudioFormatRetryTimer(this)
 {
     DependencyManager::set<ScriptableAvatar>();
 
@@ -92,6 +94,10 @@ Agent::Agent(ReceivedMessage& message) :
 
     DependencyManager::set<ResourceManager>();
     DependencyManager::set<PluginManager>()->instantiate();
+    for (const auto& plugin : PluginManager::getInstance()->getCodecPlugins()) {
+        _availableCodecs.append(plugin->getName());
+    }
+    _audioCodecs = _availableCodecs;
 
     DependencyManager::registerInheritance<SpatialParentFinder, AssignmentParentFinder>();
 
@@ -128,12 +134,37 @@ Agent::Agent(ReceivedMessage& message) :
     packetReceiver.registerListener(PacketType::SelectedAudioFormat,
         PacketReceiver::makeUnsourcedListenerReference<Agent>(this, &Agent::handleSelectedAudioFormat));
 
+    // A lost SelectedAudioFormat leaves the Agent without a codec while the mixer sends Opus (#57); adopt the
+    // codec the mixer is using, as AudioClient does. Queued: the signal fires inside _receivedAudioStream.parseData,
+    // and selectAudioFormat replaces that stream's decoder.
+    connect(&_receivedAudioStream, &InboundAudioStream::mismatchedAudioCodec, this,
+        [this](SharedNodePointer node, const QString& currentCodec, const QString& receivedCodec) {
+            qDebug() << "Audio codec mismatch from" << node->getUUID() << "- selected" << currentCodec
+                << "received" << receivedCodec;
+            selectAudioFormat(receivedCodec);
+        }, Qt::QueuedConnection);
+
     // 100Hz timer for audio
     const int TARGET_INTERVAL_MSEC = 10; // 10ms
     connect(&_avatarAudioTimer, &QTimer::timeout, this, &Agent::processAgentAvatarAudio);
     _avatarAudioTimer.setSingleShot(false);
     _avatarAudioTimer.setInterval(TARGET_INTERVAL_MSEC);
     _avatarAudioTimer.setTimerType(Qt::PreciseTimer);
+
+    // The mixer can answer NegotiateAudioFormat before its own socket to this Agent is active, and then drops the
+    // SelectedAudioFormat reply (#57). Ask again until a reply arrives.
+    const int NEGOTIATE_AUDIO_FORMAT_RETRY_MSEC = 1000;
+    _negotiateAudioFormatRetryTimer.setSingleShot(true);
+    _negotiateAudioFormatRetryTimer.setInterval(NEGOTIATE_AUDIO_FORMAT_RETRY_MSEC);
+    connect(&_negotiateAudioFormatRetryTimer, &QTimer::timeout, this, [this] {
+        ++_negotiateAudioFormatRetries;
+        const int RETRY_LOG_INTERVAL = 10;
+        if (_negotiateAudioFormatRetries == 1 || _negotiateAudioFormatRetries % RETRY_LOG_INTERVAL == 0) {
+            qDebug() << "No SelectedAudioFormat from the audio mixer - negotiating again, attempt"
+                << _negotiateAudioFormatRetries;
+        }
+        negotiateAudioFormat();
+    });
 }
 
 void Agent::playAvatarSound(SharedSoundPointer sound) {
@@ -299,38 +330,76 @@ void Agent::nodeKilled(SharedNodePointer killedNode) {
     }
 }
 
+QStringList Agent::getAudioCodecs() const {
+    QMutexLocker locker(&_audioSettingsMutex);
+    return _audioCodecs;
+}
+
+void Agent::setAudioCodecs(const QStringList& audioCodecs) {
+    QStringList dropped;
+    {
+        QMutexLocker locker(&_audioSettingsMutex);
+        _audioCodecs = AgentAudioSettings::offeredCodecs(audioCodecs, _availableCodecs, dropped);
+    }
+    if (!dropped.isEmpty()) {
+        qWarning() << "Agent.audioCodecs: dropped unknown codecs" << dropped << "- available:" << _availableCodecs;
+    }
+    QMetaObject::invokeMethod(this, [this] { negotiateAudioFormat(); });
+}
+
+glm::vec3 Agent::getAudioPositionOffset() const {
+    QMutexLocker locker(&_audioSettingsMutex);
+    return _audioPositionOffset;
+}
+
+void Agent::setAudioPositionOffset(const glm::vec3& audioPositionOffset) {
+    QMutexLocker locker(&_audioSettingsMutex);
+    _audioPositionOffset = audioPositionOffset;
+}
+
+glm::vec3 Agent::audioPosition(const ScriptableAvatar& avatar) const {
+    return AgentAudioSettings::audioPosition(avatar.getWorldPosition(), avatar.getWorldOrientation(),
+        getAudioPositionOffset());
+}
+
 void Agent::negotiateAudioFormat() {
     auto nodeList = DependencyManager::get<NodeList>();
     auto negotiateFormatPacket = NLPacket::create(PacketType::NegotiateAudioFormat);
-    const auto& codecPlugins = PluginManager::getInstance()->getCodecPlugins();
-    quint8 numberOfCodecs = (quint8)codecPlugins.size();
-    negotiateFormatPacket->writePrimitive(numberOfCodecs);
-    for (const auto& plugin : codecPlugins) {
-        auto codecName = plugin->getName();
+    const QStringList codecs = getAudioCodecs();
+    if (codecs != _lastOfferedCodecs) {
+        qDebug() << "Offering audio codecs" << codecs;
+        _lastOfferedCodecs = codecs;
+    }
+    negotiateFormatPacket->writePrimitive((quint8)codecs.size());
+    for (const auto& codecName : codecs) {
         negotiateFormatPacket->writeString(codecName);
     }
 
     // grab our audio mixer from the NodeList, if it exists
     SharedNodePointer audioMixer = nodeList->soloNodeOfType(NodeType::AudioMixer);
 
-    if (audioMixer) {
-        // send off this mute packet
+    if (audioMixer && !_isFinished) {
         nodeList->sendPacket(std::move(negotiateFormatPacket), *audioMixer);
+        _negotiateAudioFormatRetryTimer.start();
     }
 }
 
 void Agent::handleSelectedAudioFormat(QSharedPointer<ReceivedMessage> message) {
+    _negotiateAudioFormatRetryTimer.stop();
+    _negotiateAudioFormatRetries = 0;
     QString selectedCodecName = message->readString();
     selectAudioFormat(selectedCodecName);
 }
 
 void Agent::selectAudioFormat(const QString& selectedCodecName) {
-    if (_selectedCodecName == selectedCodecName) {
+    // both callers are queued and can land after aboutToFinish has destroyed the PluginManager
+    if (_isFinished || _selectedCodecName == selectedCodecName) {
         return;
     }
-    _selectedCodecName = selectedCodecName;
+    qDebug() << "Selected Codec:" << selectedCodecName;
 
-    qDebug() << "Selected Codec:" << _selectedCodecName;
+    QMutexLocker codecLocker(&_codecMutex);
+    _selectedCodecName = selectedCodecName;
 
     // release any old codec encoder/decoder first...
     if (_codec && _encoder) {
@@ -495,19 +564,25 @@ void Agent::executeScript() {
 
             Transform audioTransform;
             auto headOrientation = scriptedAvatar->getHeadOrientation();
-            audioTransform.setTranslation(scriptedAvatar->getWorldPosition());
+            audioTransform.setTranslation(audioPosition(*scriptedAvatar));
             audioTransform.setRotation(headOrientation);
 
+            // this handler runs on the main thread, selectAudioFormat on the Agent's
             QByteArray encodedBuffer;
-            if (_encoder) {
-                _encoder->encode(audio, encodedBuffer);
-            } else {
-                encodedBuffer = audio;
+            QString codecName;
+            {
+                QMutexLocker codecLocker(&_codecMutex);
+                if (_encoder) {
+                    _encoder->encode(audio, encodedBuffer);
+                } else {
+                    encodedBuffer = audio;
+                }
+                codecName = _selectedCodecName;
             }
 
             AbstractAudioInterface::emitAudioPacket(encodedBuffer.data(), encodedBuffer.size(), audioSequenceNumber, false,
                                                     audioTransform, scriptedAvatar->getWorldPosition(), glm::vec3(0),
-                                                    packetType, _selectedCodecName);
+                                                    packetType, codecName);
         });
 
         auto avatarHashMap = DependencyManager::set<AvatarHashMap>();
@@ -567,7 +642,7 @@ void Agent::setIsListeningToAudioStream(bool isListeningToAudioStream) {
         QMetaObject::invokeMethod(this, "setIsListeningToAudioStream", Q_ARG(bool, isListeningToAudioStream));
         return;
     }
-    if (_isListeningToAudioStream) {
+    if (_isListeningToAudioStream && !isListeningToAudioStream) {
         // have to tell just the audio mixer to KillAvatar.
 
         auto nodeList = DependencyManager::get<NodeList>();
@@ -788,7 +863,7 @@ void Agent::processAgentAvatarAudio() {
             audioPacket->writePrimitive(numAvailableSamples);
 
             // use the orientation and position of this avatar for the source of this audio
-            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
+            audioPacket->writePrimitive(audioPosition(*scriptedAvatar));
             glm::quat headOrientation = scriptedAvatar->getHeadOrientation();
             audioPacket->writePrimitive(headOrientation);
             audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
@@ -805,10 +880,11 @@ void Agent::processAgentAvatarAudio() {
             audioPacket->writePrimitive((quint8)0);
 
             // use the orientation and position of this avatar for the source of this audio
-            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
+            audioPacket->writePrimitive(audioPosition(*scriptedAvatar));
             glm::quat headOrientation = scriptedAvatar->getHeadOrientation();
             audioPacket->writePrimitive(headOrientation);
-            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition()); // HUH? why do we write this twice??
+            // the bounding box corner, unused while the box scale below is zero
+            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
             audioPacket->writePrimitive(glm::vec3(0));
 
             QByteArray encodedBuffer;
@@ -904,7 +980,10 @@ void Agent::aboutToFinish() {
 
     DependencyManager::destroy<ScriptableAvatar>();
 
+    _negotiateAudioFormatRetryTimer.stop();
+
     // cleanup codec & encoder
+    QMutexLocker codecLocker(&_codecMutex);
     if (_codec && _encoder) {
         _codec->releaseEncoder(_encoder);
         _encoder = nullptr;
