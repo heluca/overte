@@ -18,7 +18,6 @@
 #include <vector>
 
 #include <QtCore/QJsonObject>
-#include <QtCore/QMutex>
 #include <QtCore/QObject>
 #include <QtCore/QStringList>
 #include <QtCore/QSharedPointer>
@@ -32,10 +31,8 @@
 #include <ScriptEngine.h>
 #include <ThreadedAssignment.h>
 
-#include <plugins/CodecPlugin.h>
-
 #include <Sound.h>
-#include "AudioGate.h"
+#include "AgentAvatarAudio.h"
 #include "MixedAudioStream.h"
 #include "entities/EntityTreeHeadlessViewer.h"
 #include "avatars/ScriptableAvatar.h"
@@ -58,7 +55,7 @@ class Agent : public ThreadedAssignment {
 public:
     Agent(ReceivedMessage& message);
 
-    bool isPlayingAvatarSound() const { return _avatarSound != NULL; }
+    bool isPlayingAvatarSound() const { return _avatarAudio && _avatarAudio->isPlayingAvatarSound(); }
 
     bool isListeningToAudioStream() const { return _isListeningToAudioStream; }
     void setIsListeningToAudioStream(bool isListeningToAudioStream);
@@ -74,6 +71,8 @@ public:
 
     glm::vec3 getAudioPositionOffset() const;
     void setAudioPositionOffset(const glm::vec3& audioPositionOffset);
+
+    bool isFinished() const { return _isFinished; }
 
     virtual void aboutToFinish() override;
 
@@ -95,20 +94,11 @@ private slots:
 
     void handleAudioPacket(QSharedPointer<ReceivedMessage> message);
     void handleOctreePacket(QSharedPointer<ReceivedMessage> message, SharedNodePointer senderNode);
-    void handleSelectedAudioFormat(QSharedPointer<ReceivedMessage> message);
 
     void nodeActivated(SharedNodePointer activatedNode);
     void nodeKilled(SharedNodePointer killedNode);
 
-    void processAgentAvatarAudio();
-
 private:
-    void negotiateAudioFormat();
-    void selectAudioFormat(const QString& selectedCodecName);
-    void encodeFrameOfZeros(QByteArray& encodedZeros);
-    void computeLoudness(const QByteArray* decodedBuffer, QSharedPointer<ScriptableAvatar>);
-    glm::vec3 audioPosition(const ScriptableAvatar& avatar) const;
-
     ScriptManagerPointer _scriptManager;
     EntityEditPacketSender _entityEditSender;
     EntityTreeHeadlessViewer _entityViewer;
@@ -116,44 +106,18 @@ private:
     MixedAudioStream _receivedAudioStream;
     float _lastReceivedAudioLoudness;
 
-    void setAvatarSound(SharedSoundPointer avatarSound) { _avatarSound = avatarSound; }
-
     void queryAvatars();
 
     QString _scriptContents;
     QTimer* _scriptRequestTimeout { nullptr };
     ResourceRequest* _pendingScriptRequest { nullptr };
     bool _isListeningToAudioStream = false;
-    SharedSoundPointer _avatarSound;
-    bool _shouldMuteRecordingAudio { false };
-    int _numAvatarSoundSentBytes = 0;
     bool _isAvatar = false;
     QTimer* _avatarQueryTimer = nullptr;
-    QHash<QUuid, quint16> _outgoingScriptAudioSequenceNumbers;
-
-    AudioGate _audioGate;
-    bool _audioGateOpen { true };
     bool _isNoiseGateEnabled { false };
 
-    QStringList _availableCodecs;  // set in the constructor
-
-    // The script and the audio send loop share the Agent's thread; recording playback's audio frame handler runs on
-    // the main thread and reads the offset through audioPosition.
-    mutable QMutex _audioSettingsMutex;
-    QStringList _audioCodecs;
-    glm::vec3 _audioPositionOffset { 0.0f };
-
-    // Written only by selectAudioFormat and aboutToFinish on the Agent's thread, which therefore reads them unlocked;
-    // the lock is for recording playback's audio frame handler on the main thread.
-    QMutex _codecMutex;
-    CodecPluginPointer _codec;
-    QString _selectedCodecName;
-    Encoder* _encoder { nullptr };
-    QTimer _avatarAudioTimer;
-    QTimer _negotiateAudioFormatRetryTimer;
-    int _negotiateAudioFormatRetries { 0 };
-    QStringList _lastOfferedCodecs;
-    bool _flushEncoder { false };
+    // created in the constructor, destroyed in aboutToFinish
+    std::unique_ptr<AgentAvatarAudio> _avatarAudio;
 };
 
 #endif // hifi_Agent_h
