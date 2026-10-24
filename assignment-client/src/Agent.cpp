@@ -128,6 +128,16 @@ Agent::Agent(ReceivedMessage& message) :
     packetReceiver.registerListener(PacketType::SelectedAudioFormat,
         PacketReceiver::makeUnsourcedListenerReference<Agent>(this, &Agent::handleSelectedAudioFormat));
 
+    // A lost SelectedAudioFormat leaves the Agent without a codec while the mixer sends Opus (#57); adopt the
+    // codec the mixer is using, as AudioClient does. Queued: the signal fires inside _receivedAudioStream.parseData,
+    // and selectAudioFormat replaces that stream's decoder.
+    connect(&_receivedAudioStream, &InboundAudioStream::mismatchedAudioCodec, this,
+        [this](SharedNodePointer node, const QString& currentCodec, const QString& receivedCodec) {
+            qDebug() << "Audio codec mismatch from" << node->getUUID() << "- selected" << currentCodec
+                << "received" << receivedCodec;
+            selectAudioFormat(receivedCodec);
+        }, Qt::QueuedConnection);
+
     // 100Hz timer for audio
     const int TARGET_INTERVAL_MSEC = 10; // 10ms
     connect(&_avatarAudioTimer, &QTimer::timeout, this, &Agent::processAgentAvatarAudio);
@@ -325,7 +335,8 @@ void Agent::handleSelectedAudioFormat(QSharedPointer<ReceivedMessage> message) {
 }
 
 void Agent::selectAudioFormat(const QString& selectedCodecName) {
-    if (_selectedCodecName == selectedCodecName) {
+    // both callers are queued and can land after aboutToFinish has destroyed the PluginManager
+    if (_isFinished || _selectedCodecName == selectedCodecName) {
         return;
     }
     _selectedCodecName = selectedCodecName;
