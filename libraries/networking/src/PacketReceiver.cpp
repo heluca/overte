@@ -104,7 +104,8 @@ void PacketReceiver::registerVerifiedListener(PacketType type, const ListenerRef
     Q_ASSERT_X(listener, "PacketReceiver::registerVerifiedListener", "No listener to register");
     QMutexLocker locker(&_packetListenerLock);
 
-    if (_messageListenerMap.contains(type)) {
+    auto existing = _messageListenerMap.constFind(type);
+    if (existing != _messageListenerMap.constEnd() && existing->listener) {
         qCWarning(networking) << "Registering a packet listener for packet type" << type
             << "that will remove a previously registered listener";
     }
@@ -123,7 +124,8 @@ void PacketReceiver::unregisterListener(QObject* listener) {
         auto it = _messageListenerMap.begin();
         
         while (it != _messageListenerMap.end()) {
-            if (it.value().listener->getObject() == listener) {
+            // handleVerifiedMessage inserts a null listener for unregistered packet types
+            if (it.value().listener && it.value().listener->getObject() == listener) {
                 it = _messageListenerMap.erase(it);
             } else {
                 ++it;
