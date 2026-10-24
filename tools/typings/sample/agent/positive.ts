@@ -41,3 +41,20 @@ const sinkActive: boolean = Agent.isAudioSinkActive;
 if (sinkActive) {
     Agent.stopAudioSink();
 }
+
+// Mouth: play a live 24 kHz mono stream as the avatar's voice and reconnect when it ends, unless stopped.
+function speak(): void {
+    const started: boolean = Agent.playVoiceStream("http://127.0.0.1:9000/voice", { prebuffer: 0.04, idleTimeout: 10 });
+    print("Voice stream " + (started ? "connecting" : "refused"));
+}
+Agent.voiceStreamFinished.connect(function (reason: string) {
+    if (reason !== "stopped") {
+        Script.setTimeout(speak, 1000);
+    }
+});
+speak();
+Agent.playVoiceStream("https://127.0.0.1:9443/voice");
+const speaking: boolean = Agent.isPlayingVoiceStream;
+if (speaking) {
+    Agent.stopVoiceStream();
+}

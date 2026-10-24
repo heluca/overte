@@ -92,6 +92,7 @@ Agent::Agent(ReceivedMessage& message) :
     DependencyManager::set<ResourceManager>();
     DependencyManager::set<PluginManager>()->instantiate();
     _avatarAudio = std::make_unique<AgentAvatarAudio>(*this, _receivedAudioStream);
+    connect(_avatarAudio.get(), &AgentAvatarAudio::voiceStreamFinished, this, &Agent::voiceStreamFinished);
 
     DependencyManager::registerInheritance<SpatialParentFinder, AssignmentParentFinder>();
 
@@ -247,6 +248,22 @@ void Agent::resetAudioSink() {
     if (_audioSink) {
         _audioSink->disconnect(this);
         _audioSink.reset();
+    }
+}
+
+bool Agent::playVoiceStream(const QUrl& url, int prebufferFrames, int idleTimeoutFrames,
+                            const AudioStreamCredential& credential) {
+    auto voiceStream = AvatarVoiceStream::create(url, prebufferFrames, idleTimeoutFrames, credential);
+    if (!voiceStream || !_avatarAudio) {
+        return false;
+    }
+    _avatarAudio->playVoiceStream(std::move(voiceStream));
+    return true;
+}
+
+void Agent::stopVoiceStream() {
+    if (_avatarAudio) {
+        _avatarAudio->stopVoiceStream();
     }
 }
 
@@ -516,8 +533,9 @@ void Agent::executeScript() {
         DependencyManager::get<ScriptEngines>()->runScriptInitializers(_scriptManager);
         _scriptManager->run();
 
-        // audioSinkFinished is never emitted once the script has ended
+        // audioSinkFinished and voiceStreamFinished are never emitted once the script has ended
         retireAudioSink();
+        _avatarAudio->resetVoiceStream();
 
         Frame::clearFrameHandler(AUDIO_FRAME_TYPE);
         Frame::clearFrameHandler(AVATAR_FRAME_TYPE);
@@ -677,6 +695,10 @@ void Agent::aboutToFinish() {
     // Aborts rather than waiting for a close handshake
     resetAudioSink();
     _retiredAudioSinks.clear();
+    // before the ResourceManager, whose thread the voice stream's source lives on, goes
+    if (_avatarAudio) {
+        _avatarAudio->resetVoiceStream();
+    }
 
     // our entity tree is going to go away so tell that to the EntityScriptingInterface
     DependencyManager::get<EntityScriptingInterface>()->setEntityTree(nullptr);

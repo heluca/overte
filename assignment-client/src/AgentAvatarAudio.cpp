@@ -13,6 +13,7 @@
 #include "AgentAvatarAudio.h"
 
 #include <NodeList.h>
+#include <SharedUtil.h>
 #include <udt/PacketHeaders.h>
 
 #include <plugins/PluginManager.h>
@@ -86,6 +87,43 @@ AgentAvatarAudio::~AgentAvatarAudio() {
     if (_codec && _encoder) {
         _codec->releaseEncoder(_encoder);
         _encoder = nullptr;
+    }
+}
+
+void AgentAvatarAudio::setAvatarSound(SharedSoundPointer avatarSound) {
+    if (avatarSound) {
+        stopVoiceStream();
+    }
+    _avatarSound = avatarSound;
+}
+
+void AgentAvatarAudio::playVoiceStream(std::unique_ptr<AvatarVoiceStream> voiceStream) {
+    const bool replacesStream = (bool)_voiceStream;
+    if (_avatarSound || replacesStream) {
+        _avatarSound.clear();
+        _numAvatarSoundSentBytes = 0;
+        _flushEncoder = true;
+    }
+    _shouldMuteRecordingAudio = false;
+    _voiceStream = std::move(voiceStream);
+    // After the swap, so a script that starts another stream from the signal is not undone
+    if (replacesStream) {
+        emit voiceStreamFinished("stopped");
+    }
+}
+
+void AgentAvatarAudio::stopVoiceStream() {
+    if (_voiceStream) {
+        resetVoiceStream();
+        _flushEncoder = true;
+        emit voiceStreamFinished("stopped");
+    }
+}
+
+void AgentAvatarAudio::resetVoiceStream() {
+    if (_voiceStream) {
+        _voiceStream.reset();
+        _shouldMuteRecordingAudio = false;
     }
 }
 
@@ -280,10 +318,28 @@ void AgentAvatarAudio::computeLoudness(const QByteArray* decodedBuffer, QSharedP
 }
 
 void AgentAvatarAudio::processAgentAvatarAudio() {
+    if (!_voiceStream) {
+        sendAvatarAudioFrame();
+        return;
+    }
+    // A QTimer skips the ticks a stalled script misses rather than catching up, while the stream's producer keeps real
+    // time: without making them up the source's ring stays fuller after each stall until it drops audio
+    const int framesDue = _voiceStream->framesDue(usecTimestampNow());
+    for (int i = 0; i < framesDue; ++i) {
+        if (!sendAvatarAudioFrame()) {
+            break;
+        }
+    }
+}
+
+bool AgentAvatarAudio::sendAvatarAudioFrame() {
     auto recordingInterface = DependencyManager::get<RecordingScriptingInterface>();
     bool isPlayingRecording = recordingInterface->isPlaying();
+    bool voiceStreamEnded = false;
+    QString voiceStreamEndReason;
 
-    if (_agent.isAvatar() && ((_agent.isListeningToAudioStream() && !isPlayingRecording) || _avatarSound)) {
+    if (_agent.isAvatar() &&
+        ((_agent.isListeningToAudioStream() && !isPlayingRecording) || _avatarSound || _voiceStream)) {
         // if we have an avatar audio stream then send it out to our audio-mixer
         auto scriptedAvatar = DependencyManager::get<ScriptableAvatar>();
         bool silentFrame = true;
@@ -291,7 +347,28 @@ void AgentAvatarAudio::processAgentAvatarAudio() {
         int16_t numAvailableSamples = AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL;
         const int16_t* nextSoundOutput = NULL;
 
-        if (_avatarSound && _avatarSound->isReady()) {
+        if (_voiceStream) {
+            if (isPlayingRecording && !_shouldMuteRecordingAudio) {
+                _shouldMuteRecordingAudio = true;
+            }
+            switch (_voiceStream->nextFrame(_voiceFrame)) {
+                case AvatarVoiceStream::Frame::Audio:
+                    nextSoundOutput = _voiceFrame;
+                    silentFrame = false;
+                    break;
+                case AvatarVoiceStream::Frame::Silence:
+                    break;
+                case AvatarVoiceStream::Frame::Flush:
+                    _flushEncoder = true;
+                    break;
+                case AvatarVoiceStream::Frame::Ended:
+                    voiceStreamEnded = true;
+                    voiceStreamEndReason = _voiceStream->getEndReason();
+                    resetVoiceStream();
+                    _flushEncoder = true;
+                    break;
+            }
+        } else if (_avatarSound && _avatarSound->isReady()) {
             if (isPlayingRecording && !_shouldMuteRecordingAudio) {
                 _shouldMuteRecordingAudio = true;
             }
@@ -339,7 +416,7 @@ void AgentAvatarAudio::processAgentAvatarAudio() {
 
             if (!_agent.isListeningToAudioStream()) {
                 // if we have a silent frame and we're not listening then just send nothing and break out of here
-                return;
+                return true;
             }
 
             // write the codec
@@ -409,4 +486,10 @@ void AgentAvatarAudio::processAgentAvatarAudio() {
             }
         });
     }
+
+    // Last, as the script's handler may start another stream
+    if (voiceStreamEnded) {
+        emit voiceStreamFinished(voiceStreamEndReason);
+    }
+    return !voiceStreamEnded;
 }
