@@ -157,7 +157,12 @@ Agent::Agent(ReceivedMessage& message) :
     _negotiateAudioFormatRetryTimer.setSingleShot(true);
     _negotiateAudioFormatRetryTimer.setInterval(NEGOTIATE_AUDIO_FORMAT_RETRY_MSEC);
     connect(&_negotiateAudioFormatRetryTimer, &QTimer::timeout, this, [this] {
-        qDebug() << "No SelectedAudioFormat from the audio mixer - negotiating again";
+        ++_negotiateAudioFormatRetries;
+        const int RETRY_LOG_INTERVAL = 10;
+        if (_negotiateAudioFormatRetries == 1 || _negotiateAudioFormatRetries % RETRY_LOG_INTERVAL == 0) {
+            qDebug() << "No SelectedAudioFormat from the audio mixer - negotiating again, attempt"
+                << _negotiateAudioFormatRetries;
+        }
         negotiateAudioFormat();
     });
 }
@@ -361,7 +366,10 @@ void Agent::negotiateAudioFormat() {
     auto nodeList = DependencyManager::get<NodeList>();
     auto negotiateFormatPacket = NLPacket::create(PacketType::NegotiateAudioFormat);
     const QStringList codecs = getAudioCodecs();
-    qDebug() << "Offering audio codecs" << codecs;
+    if (codecs != _lastOfferedCodecs) {
+        qDebug() << "Offering audio codecs" << codecs;
+        _lastOfferedCodecs = codecs;
+    }
     negotiateFormatPacket->writePrimitive((quint8)codecs.size());
     for (const auto& codecName : codecs) {
         negotiateFormatPacket->writeString(codecName);
@@ -378,6 +386,7 @@ void Agent::negotiateAudioFormat() {
 
 void Agent::handleSelectedAudioFormat(QSharedPointer<ReceivedMessage> message) {
     _negotiateAudioFormatRetryTimer.stop();
+    _negotiateAudioFormatRetries = 0;
     QString selectedCodecName = message->readString();
     selectAudioFormat(selectedCodecName);
 }
@@ -387,9 +396,10 @@ void Agent::selectAudioFormat(const QString& selectedCodecName) {
     if (_isFinished || _selectedCodecName == selectedCodecName) {
         return;
     }
-    _selectedCodecName = selectedCodecName;
+    qDebug() << "Selected Codec:" << selectedCodecName;
 
-    qDebug() << "Selected Codec:" << _selectedCodecName;
+    QMutexLocker codecLocker(&_codecMutex);
+    _selectedCodecName = selectedCodecName;
 
     // release any old codec encoder/decoder first...
     if (_codec && _encoder) {
@@ -557,16 +567,22 @@ void Agent::executeScript() {
             audioTransform.setTranslation(audioPosition(*scriptedAvatar));
             audioTransform.setRotation(headOrientation);
 
+            // this handler runs on the main thread, selectAudioFormat on the Agent's
             QByteArray encodedBuffer;
-            if (_encoder) {
-                _encoder->encode(audio, encodedBuffer);
-            } else {
-                encodedBuffer = audio;
+            QString codecName;
+            {
+                QMutexLocker codecLocker(&_codecMutex);
+                if (_encoder) {
+                    _encoder->encode(audio, encodedBuffer);
+                } else {
+                    encodedBuffer = audio;
+                }
+                codecName = _selectedCodecName;
             }
 
             AbstractAudioInterface::emitAudioPacket(encodedBuffer.data(), encodedBuffer.size(), audioSequenceNumber, false,
                                                     audioTransform, scriptedAvatar->getWorldPosition(), glm::vec3(0),
-                                                    packetType, _selectedCodecName);
+                                                    packetType, codecName);
         });
 
         auto avatarHashMap = DependencyManager::set<AvatarHashMap>();
@@ -964,7 +980,10 @@ void Agent::aboutToFinish() {
 
     DependencyManager::destroy<ScriptableAvatar>();
 
+    _negotiateAudioFormatRetryTimer.stop();
+
     // cleanup codec & encoder
+    QMutexLocker codecLocker(&_codecMutex);
     if (_codec && _encoder) {
         _codec->releaseEncoder(_encoder);
         _encoder = nullptr;

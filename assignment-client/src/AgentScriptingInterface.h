@@ -39,7 +39,8 @@
  * @property {Uuid} sessionUUID - The unique ID associated with the agent's current session in the domain. <em>Read-only.</em>
  * @property {string[]} audioCodecs - The audio codecs the agent offers the audio mixer, which picks one by the domain's
  *     codec preference order. Defaults to every codec the assignment client has, e.g., <code>["opus", "pcm", "zlib"]</code>.
- *     Names the assignment client does not have are dropped with a warning; if none is left, every codec is offered.
+ *     Names the assignment client does not have are dropped with a warning. An empty array, or one with no name the
+ *     assignment client has, offers every codec.
  *     Setting the property negotiates the codec again if the agent is connected to an audio mixer. Set it to
  *     <code>["pcm"]</code> for uncompressed audio from one agent while Interface users keep Opus.
  * @property {Vec3} audioPositionOffset - Where the agent's audio comes from and is heard, relative to the avatar's

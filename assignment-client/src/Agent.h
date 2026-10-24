@@ -137,16 +137,22 @@ private:
 
     QStringList _availableCodecs;  // set in the constructor
 
-    // Settings the script thread writes and the Agent's thread reads.
+    // The script and the audio send loop share the Agent's thread; recording playback's audio frame handler runs on
+    // the main thread and reads the offset through audioPosition.
     mutable QMutex _audioSettingsMutex;
     QStringList _audioCodecs;
     glm::vec3 _audioPositionOffset { 0.0f };
 
+    // Written only by selectAudioFormat and aboutToFinish on the Agent's thread, which therefore reads them unlocked;
+    // the lock is for recording playback's audio frame handler on the main thread.
+    QMutex _codecMutex;
     CodecPluginPointer _codec;
     QString _selectedCodecName;
     Encoder* _encoder { nullptr };
     QTimer _avatarAudioTimer;
     QTimer _negotiateAudioFormatRetryTimer;
+    int _negotiateAudioFormatRetries { 0 };
+    QStringList _lastOfferedCodecs;
     bool _flushEncoder { false };
 };
 
