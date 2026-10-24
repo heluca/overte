@@ -15,7 +15,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
     parseConfig, withStatus, statusOf, compactStatus, pollDelay, Backoff, formatDuration, formatStatus, formatSongs,
-    DEFAULT_VOLUME, ACTIVE_POLL_MS, IDLE_POLL_MS
+    parseDisplayURL, parseDisplayGeometry,
+    DEFAULT_VOLUME, ACTIVE_POLL_MS, IDLE_POLL_MS, QUEUE_SHOWN
 } from "../piano-core.mjs";
 
 const BASE = "http://orpheus.example:8080";
@@ -70,12 +71,14 @@ test("withStatus replaces piano.status and keeps everything else", () => {
 
 test("compactStatus: idle, playing, paused and the start-up phases", () => {
     assert.deepEqual(compactStatus(playback(), SYNTH), {
-        state: "idle", title: null, output: null, progress: null, elapsed: null, synth: true, error: null
+        state: "idle", title: null, output: null, progress: null, elapsed: null, duration: null, queue: [], queued: 0,
+        synth: true, error: null
     });
     const playing = playback({ is_playing: true, status: "playing", title: "Gymnopedie No. 1", playback_id: 7,
-        output: "synth", progress: 0.4567 });
+        output: "synth", progress: 0.4567, duration: 179.6 });
     assert.deepEqual(compactStatus(playing, SYNTH), {
-        state: "playing", title: "Gymnopedie No. 1", output: "synth", progress: 46, elapsed: null, synth: true, error: null
+        state: "playing", title: "Gymnopedie No. 1", output: "synth", progress: 46, elapsed: null, duration: 180,
+        queue: [], queued: 0, synth: true, error: null
     });
     assert.equal(compactStatus({ ...playing, is_paused: true }, SYNTH).state, "paused");
     assert.equal(compactStatus({ ...playing, status: "connecting" }, SYNTH).state, "connecting");
@@ -89,11 +92,26 @@ test("compactStatus: errors, a failed synth request and an unreachable Orpheus",
     assert.equal(compactStatus(playback(), null).synth, false);
     assert.equal(compactStatus(playback(), { ...SYNTH, enabled: false }).synth, false);
     assert.deepEqual(compactStatus(null, null, "Error: HTTP 401"), {
-        state: "offline", title: null, output: null, progress: null, elapsed: null, synth: false, error: "Error: HTTP 401"
+        state: "offline", title: null, output: null, progress: null, elapsed: null, duration: null, queue: [], queued: 0,
+        synth: false, error: "Error: HTTP 401"
     });
     // Polled replies that differ only in what is not displayed compact to the same status
     assert.deepEqual(compactStatus(failed, { ...SYNTH, active_voices: 9 }),
         compactStatus({ ...failed, last_error: { ...failed.last_error, seconds_ago: 8.0 } }, SYNTH));
+});
+
+test("compactStatus: the queue's first titles and its length, the duration only while a piece is active", () => {
+    const row = (id, title) => ({ id, title, tempo_bpm: null, output: "synth", created_at: "2026-10-22T19:02:20Z" });
+    const queue = [row(4, "Clair de Lune"), row(5, "Prelude in C"), row(6, "Ode to Joy"), row(7, "Nocturne"),
+        row(8, "Arabesque"), row(9, "Reverie"), { id: 10 }];
+    const playing = compactStatus(playback({ is_playing: true, status: "playing", title: "Gymnopedie No. 1",
+        progress: 0.1, duration: 180, queue, queue_length: 7 }), SYNTH);
+    assert.deepEqual(playing.queue, ["Clair de Lune", "Prelude in C", "Ode to Joy", "Nocturne", "Arabesque"]);
+    assert.equal(playing.queue.length, QUEUE_SHOWN);
+    assert.equal(playing.queued, 7);
+    assert.equal(compactStatus(playback({ queue: [{ id: 3 }] }), SYNTH).queue[0], "Untitled");
+    assert.equal(compactStatus(playback({ duration: 180 }), SYNTH).duration, null, "idle: Orpheus keeps the last duration");
+    assert.equal(compactStatus(playback({ is_playing: true, status: "starting", duration: 0 }), SYNTH).duration, null);
 });
 
 test("pollDelay is fast only while something is active", () => {
@@ -138,3 +156,54 @@ test("formatSongs lists title, composer and duration, and says how many are left
     assert.equal(formatDuration(59.9), "0:59");
     assert.equal(formatDuration(3600), "60:00");
 });
+
+test("parseDisplayURL: an http(s) page with no default and no placeholders", () => {
+    const url = "https://assets.example:8443/piano/piano-display.html?v=2";
+    assert.deepEqual(parseDisplayURL(JSON.stringify({ piano: { displayURL: url } })), { displayURL: url });
+    for (const userData of ["", JSON.stringify({ piano: {} }), JSON.stringify({ piano: { displayURL: "ftp://x/y" } }),
+        JSON.stringify({ piano: { displayURL: "https://<asset-host>/piano/piano-display.html" } })]) {
+        assert.match(/** @type {any} */ (parseDisplayURL(userData)).error, /piano\.displayURL must be/, userData);
+    }
+});
+
+test("parseDisplayGeometry: by default the desk face, 1600 page pixels wide, scaled with the piano", () => {
+    for (const width of [1.48, 0.74, undefined]) {
+        const { geometry, problems, source } = parseDisplayGeometry("", width === undefined ? undefined : { x: width });
+        const scale = width === undefined ? 1 : width / 1.48;
+        assertNear(geometry.dimensions, { x: 0.80 * scale, y: 0.275 * scale, z: 0.01 });
+        assertNear(geometry.localPosition, { x: 0, y: 0.0275 * scale, z: 0.013 * scale });
+        assert.equal(Math.round(geometry.dimensions.x * 39.3701 * geometry.dpi), 1600);
+        assert.equal(Math.round(geometry.dimensions.y * 39.3701 * geometry.dpi), 550);
+        assert.deepEqual(problems, []);
+        assert.equal(source, "null");
+    }
+});
+
+test("parseDisplayGeometry: piano.display overrides any key; bad values are reported and defaulted", () => {
+    const display = { width: 0.6, offset: { y: 0.05 }, pagePixelsWide: 1200 };
+    const { geometry, problems, source } = parseDisplayGeometry(JSON.stringify({ piano: { display } }), { x: 1.48 });
+    assertNear(geometry.dimensions, { x: 0.6, y: 0.275, z: 0.01 });
+    assertNear(geometry.localPosition, { x: 0, y: 0.05, z: 0.013 });
+    assert.equal(Math.round(0.6 * 39.3701 * geometry.dpi), 1200);
+    assert.deepEqual(problems, []);
+    assert.equal(source, JSON.stringify(display));
+
+    const bad = parseDisplayGeometry(JSON.stringify({ piano: { display: {
+        width: -1, height: "tall", offset: { x: 5, z: 0.02 }, pagePixelsWide: 10_000
+    } } }), undefined);
+    assertNear(bad.geometry.dimensions, { x: 0.80, y: 0.275, z: 0.01 });
+    assertNear(bad.geometry.localPosition, { x: 0, y: 0.0275, z: 0.02 });
+    assert.equal(bad.problems.length, 4);
+    assert.match(bad.problems.join("\n"), /piano\.display\.width must be a number from 0\.05 to 3, got -1; using 0\.8/);
+    assert.match(bad.problems.join("\n"), /piano\.display\.offset\.x must be a number from -1 to 1, got 5/);
+
+    assert.match(parseDisplayGeometry(JSON.stringify({ piano: { display: 3 } }), undefined).problems[0],
+        /piano\.display must be an object, got 3; using the defaults/);
+});
+
+/** @param {Record<string, number>} actual @param {Record<string, number>} expected */
+function assertNear(actual, expected) {
+    for (const key of Object.keys(expected)) {
+        assert.ok(Math.abs(actual[key] - expected[key]) < 1e-9, key + ": " + actual[key] + " != " + expected[key]);
+    }
+}
