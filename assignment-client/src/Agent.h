@@ -33,6 +33,7 @@
 
 #include <Sound.h>
 #include "AgentAvatarAudio.h"
+#include "AudioStreamSink.h"
 #include "MixedAudioStream.h"
 #include "entities/EntityTreeHeadlessViewer.h"
 #include "avatars/ScriptableAvatar.h"
@@ -74,6 +75,11 @@ public:
 
     bool isFinished() const { return _isFinished; }
 
+    // The Agent's thread only, which is also the script's
+    bool startAudioSink(const QUrl& url, int framesPerMessage, const AudioStreamCredential& credential);
+    void stopAudioSink();
+    bool isAudioSinkActive() const { return (bool)_audioSink; }
+
     virtual void aboutToFinish() override;
 
 public slots:
@@ -85,6 +91,9 @@ public slots:
     bool isAvatar() const { return _isAvatar; }
 
     Q_INVOKABLE virtual void stop() override;
+
+signals:
+    void audioSinkFinished(const QString& reason);
 
 private slots:
     void handleSettings(const QJsonObject& settingsObject);
@@ -104,9 +113,11 @@ private:
     EntityTreeHeadlessViewer _entityViewer;
 
     MixedAudioStream _receivedAudioStream;
-    float _lastReceivedAudioLoudness;
+    float _lastReceivedAudioLoudness { 0.0f };
 
     void queryAvatars();
+    void retireAudioSink();
+    void resetAudioSink();
 
     QString _scriptContents;
     QTimer* _scriptRequestTimeout { nullptr };
@@ -118,6 +129,12 @@ private:
 
     // created in the constructor, destroyed in aboutToFinish
     std::unique_ptr<AgentAvatarAudio> _avatarAudio;
+
+    // the received mix forwarded to a WebSocket, while the script runs
+    std::unique_ptr<AudioStreamSink> _audioSink;
+    // stopped or replaced, until closed
+    std::vector<std::unique_ptr<AudioStreamSink>> _retiredAudioSinks;
+    quint32 _audioSinkSerial { 0 };
 };
 
 #endif // hifi_Agent_h

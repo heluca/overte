@@ -13,6 +13,8 @@
 
 #include "Agent.h"
 
+#include <algorithm>
+
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEventLoop>
 #include <QtCore/QStandardPaths>
@@ -173,7 +175,79 @@ void Agent::handleOctreePacket(QSharedPointer<ReceivedMessage> message, SharedNo
 void Agent::handleAudioPacket(QSharedPointer<ReceivedMessage> message) {
     _receivedAudioStream.parseData(*message);
     _lastReceivedAudioLoudness = _receivedAudioStream.getNextOutputFrameLoudness();
+    if (_audioSink) {
+        const int MAX_SAMPLES = AudioConstants::NETWORK_FRAME_SAMPLES_STEREO;
+        int16_t samples[MAX_SAMPLES];
+        int numSamples;
+        // Frames concealed for packets lost before this one, then the packet's own audio. The stream puts 20 ms of
+        // zeros in its ring for a 10 ms silent packet, and the mixer sends a listener one packet every 10 ms, so a
+        // silent packet gives one of its two frames. The Agent clears the ring after every packet, so its jitter
+        // buffer never grows and the stream never drops silent frames to catch up.
+        int frames = _receivedAudioStream.getFramesAvailable();
+        if (message->getType() == PacketType::SilentAudioFrame) {
+            frames--;
+        }
+        while (frames-- > 0 && (numSamples = _receivedAudioStream.readAvailableSamples(samples, MAX_SAMPLES)) > 0) {
+            _audioSink->writeFrame(samples, numSamples);
+        }
+    }
     _receivedAudioStream.clearBuffer();
+}
+
+bool Agent::startAudioSink(const QUrl& url, int framesPerMessage, const AudioStreamCredential& credential) {
+    stopAudioSink();
+    auto sink = AudioStreamSink::create(url, AudioConstants::STEREO, framesPerMessage, credential);
+    if (!sink) {
+        return false;
+    }
+    const quint32 serial = ++_audioSinkSerial;
+    connect(sink.get(), &AudioStreamSink::finished, this, [this, serial](const QString& reason) {
+        // A sink that was stopped or replaced may still have its finished signal queued
+        if (serial != _audioSinkSerial || !_audioSink) {
+            return;
+        }
+        // Closed already, so destroying it does not wait
+        resetAudioSink();
+        emit audioSinkFinished(reason);
+    });
+    _audioSink = std::move(sink);
+    _audioSink->start();
+    return true;
+}
+
+void Agent::stopAudioSink() {
+    if (_audioSink) {
+        retireAudioSink();
+        emit audioSinkFinished("stopped");
+    }
+}
+
+void Agent::retireAudioSink() {
+    ++_audioSinkSerial;
+    if (!_audioSink) {
+        return;
+    }
+    // The close handshake runs on the sink's thread, for up to 500 ms when the server has stopped reading, while this
+    // thread sends the avatar's audio. The sink is destroyed once it has closed, when destroying it no longer waits.
+    AudioStreamSink* sink = _audioSink.get();
+    sink->disconnect(this);
+    connect(sink, &AudioStreamSink::closed, this, [this, sink] {
+        auto retired = std::find_if(_retiredAudioSinks.begin(), _retiredAudioSinks.end(),
+            [sink](const std::unique_ptr<AudioStreamSink>& candidate) { return candidate.get() == sink; });
+        if (retired != _retiredAudioSinks.end()) {
+            _retiredAudioSinks.erase(retired);
+        }
+    });
+    _retiredAudioSinks.push_back(std::move(_audioSink));
+    sink->stop();
+}
+
+void Agent::resetAudioSink() {
+    ++_audioSinkSerial;
+    if (_audioSink) {
+        _audioSink->disconnect(this);
+        _audioSink.reset();
+    }
 }
 
 static const QString AGENT_LOGGING_NAME = "agent";
@@ -442,6 +516,9 @@ void Agent::executeScript() {
         DependencyManager::get<ScriptEngines>()->runScriptInitializers(_scriptManager);
         _scriptManager->run();
 
+        // audioSinkFinished is never emitted once the script has ended
+        retireAudioSink();
+
         Frame::clearFrameHandler(AUDIO_FRAME_TYPE);
         Frame::clearFrameHandler(AVATAR_FRAME_TYPE);
 
@@ -597,6 +674,10 @@ void Agent::queryAvatars() {
 }
 
 void Agent::aboutToFinish() {
+    // Aborts rather than waiting for a close handshake
+    resetAudioSink();
+    _retiredAudioSinks.clear();
+
     // our entity tree is going to go away so tell that to the EntityScriptingInterface
     DependencyManager::get<EntityScriptingInterface>()->setEntityTree(nullptr);
 
