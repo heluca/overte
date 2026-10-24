@@ -37,6 +37,17 @@
  * @property {number} lastReceivedAudioLoudness - The current loudness of the audio input. Nominal range [<code>0.0</code> (no 
  *     sound) &ndash; <code>1.0</code> (the onset of clipping)]. <em>Read-only.</em>
  * @property {Uuid} sessionUUID - The unique ID associated with the agent's current session in the domain. <em>Read-only.</em>
+ * @property {string[]} audioCodecs - The audio codecs the agent offers the audio mixer, which picks one by the domain's
+ *     codec preference order. Defaults to every codec the assignment client has, e.g., <code>["opus", "pcm", "zlib"]</code>.
+ *     Names the assignment client does not have are dropped with a warning. An empty array, or one with no name the
+ *     assignment client has, offers every codec.
+ *     Setting the property negotiates the codec again if the agent is connected to an audio mixer. Set it to
+ *     <code>["pcm"]</code> for uncompressed audio from one agent while Interface users keep Opus.
+ * @property {Vec3} audioPositionOffset - Where the agent's audio comes from and is heard, relative to the avatar's
+ *     position and in the avatar's frame. The offset is rotated by the avatar's orientation and added to
+ *     <code>Avatar.position</code> in the position the agent sends the audio mixer, both for the audio it plays and for
+ *     where it listens. Defaults to <code>Vec3.ZERO</code>, which is the avatar's position (its hips). Set it to, e.g.,
+ *     <code>{ x: 0, y: 0.6, z: 0 }</code> to put the mouth and ears at head height.
  */
 class AgentScriptingInterface : public QObject {
     Q_OBJECT
@@ -46,6 +57,8 @@ class AgentScriptingInterface : public QObject {
     Q_PROPERTY(bool isNoiseGateEnabled READ isNoiseGateEnabled WRITE setIsNoiseGateEnabled)
     Q_PROPERTY(float lastReceivedAudioLoudness READ getLastReceivedAudioLoudness)
     Q_PROPERTY(QUuid sessionUUID READ getSessionUUID)
+    Q_PROPERTY(QStringList audioCodecs READ getAudioCodecs WRITE setAudioCodecs)
+    Q_PROPERTY(glm::vec3 audioPositionOffset READ getAudioPositionOffset WRITE setAudioPositionOffset)
 
 public:
     AgentScriptingInterface(Agent* agent);
@@ -60,6 +73,12 @@ public:
 
     float getLastReceivedAudioLoudness() const { return _agent->getLastReceivedAudioLoudness(); }
     QUuid getSessionUUID() const { return _agent->getSessionUUID(); }
+
+    QStringList getAudioCodecs() const { return _agent->getAudioCodecs(); }
+    void setAudioCodecs(const QStringList& audioCodecs) const { _agent->setAudioCodecs(audioCodecs); }
+
+    glm::vec3 getAudioPositionOffset() const { return _agent->getAudioPositionOffset(); }
+    void setAudioPositionOffset(const glm::vec3& offset) const { _agent->setAudioPositionOffset(offset); }
 
 public slots:
     /*@jsdoc

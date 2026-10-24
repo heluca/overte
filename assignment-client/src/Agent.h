@@ -18,7 +18,9 @@
 #include <vector>
 
 #include <QtCore/QJsonObject>
+#include <QtCore/QMutex>
 #include <QtCore/QObject>
+#include <QtCore/QStringList>
 #include <QtCore/QSharedPointer>
 #include <QtCore/QUrl>
 #include <QtCore/QTimer>
@@ -67,6 +69,12 @@ public:
     float getLastReceivedAudioLoudness() const { return _lastReceivedAudioLoudness; }
     QUuid getSessionUUID() const;
 
+    QStringList getAudioCodecs() const;
+    void setAudioCodecs(const QStringList& audioCodecs);
+
+    glm::vec3 getAudioPositionOffset() const;
+    void setAudioPositionOffset(const glm::vec3& audioPositionOffset);
+
     virtual void aboutToFinish() override;
 
 public slots:
@@ -99,6 +107,7 @@ private:
     void selectAudioFormat(const QString& selectedCodecName);
     void encodeFrameOfZeros(QByteArray& encodedZeros);
     void computeLoudness(const QByteArray* decodedBuffer, QSharedPointer<ScriptableAvatar>);
+    glm::vec3 audioPosition(const ScriptableAvatar& avatar) const;
 
     ScriptManagerPointer _scriptManager;
     EntityEditPacketSender _entityEditSender;
@@ -126,10 +135,24 @@ private:
     bool _audioGateOpen { true };
     bool _isNoiseGateEnabled { false };
 
+    QStringList _availableCodecs;  // set in the constructor
+
+    // The script and the audio send loop share the Agent's thread; recording playback's audio frame handler runs on
+    // the main thread and reads the offset through audioPosition.
+    mutable QMutex _audioSettingsMutex;
+    QStringList _audioCodecs;
+    glm::vec3 _audioPositionOffset { 0.0f };
+
+    // Written only by selectAudioFormat and aboutToFinish on the Agent's thread, which therefore reads them unlocked;
+    // the lock is for recording playback's audio frame handler on the main thread.
+    QMutex _codecMutex;
     CodecPluginPointer _codec;
     QString _selectedCodecName;
     Encoder* _encoder { nullptr };
     QTimer _avatarAudioTimer;
+    QTimer _negotiateAudioFormatRetryTimer;
+    int _negotiateAudioFormatRetries { 0 };
+    QStringList _lastOfferedCodecs;
     bool _flushEncoder { false };
 };
 
