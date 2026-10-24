@@ -1,0 +1,108 @@
+/* The Game Table web module: one column that fits a phone-width frame. */
+
+:root {
+  --bg: #0e1116;
+  --text: #e8ecf1;
+  --muted: #9aa4b2;
+  --line: rgba(255, 255, 255, 0.14);
+  --accent: #e0a526;
+  --ok: #3fb950;
+  --c4-board: #1450be;
+  --c4-hole: #08142c;
+  --red: #d7322d;
+  --black: #2b2f36;
+  --light: #e8d3a8;
+  --dark: #8a5a35;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+}
+
+@media (prefers-color-scheme: light) {
+  :root { --bg: #fafbfd; --text: #1b1f24; --muted: #57606a; --line: rgba(0, 0, 0, 0.14); }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); }
+main { display: grid; gap: 8px; padding: 8px; max-width: 420px; margin: 0 auto; }
+h1 { margin: 0; font-size: 15px; }
+.status { margin: 0; font-size: 14px; }
+.status[data-turn="you"] { color: var(--accent); font-weight: 600; }
+.notice { margin: 0; min-height: 1.2em; font-size: 13px; color: var(--muted); }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-height: 40px;
+}
+button:disabled { opacity: 0.75; }
+
+.seats, .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.seats button { flex: 1; }
+.seat.to-move { border-color: var(--accent); }
+.seat.side0::before, .seat.side1::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.danger { border-color: #f85149; }
+
+.board { display: grid; width: 100%; user-select: none; }
+.board button { min-height: 0; padding: 0; border-radius: 0; border: none; }
+
+/* Connect Four, drawn like the toy: a blue grid of holes. */
+.connect4 {
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--c4-board);
+}
+.connect4 .cell { aspect-ratio: 1; border-radius: 50%; background: var(--c4-hole); display: grid; place-items: center; }
+.connect4 .cell.legal { box-shadow: inset 0 0 0 2px var(--ok); }
+.disc { width: 88%; height: 88%; border-radius: 50%; }
+.disc.win { box-shadow: 0 0 0 3px var(--accent); }
+.disc.last { outline: 2px dashed rgba(255, 255, 255, 0.7); outline-offset: -6px; }
+
+/* Checkers and chess: 8x8 squares. */
+.grid { grid-template-columns: repeat(8, 1fr); border: 1px solid var(--line); }
+.square { aspect-ratio: 1; display: grid; place-items: center; }
+.square.light { background: var(--light); }
+.square.dark { background: var(--dark); }
+.square.last { box-shadow: inset 0 0 0 3px rgba(224, 165, 38, 0.6); }
+.square.movable { box-shadow: inset 0 0 0 2px rgba(63, 185, 80, 0.7); }
+.square.selected { box-shadow: inset 0 0 0 3px var(--accent); }
+.square.target::after { content: ""; width: 30%; height: 30%; border-radius: 50%; background: var(--ok); opacity: 0.85; }
+.piece {
+  width: 78%;
+  height: 78%;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: clamp(12px, 4.5vw, 20px);
+}
+.square.target:has(.piece) { box-shadow: inset 0 0 0 3px var(--ok); }
+.square.target:has(.piece)::after { display: none; }
+.chess .piece.side0 { background: #f4f1ea; color: #1b1f24; border: 2px solid #1b1f24; }
+.chess .piece.side1 { background: #1b1f24; color: #f4f1ea; border: 2px solid #f4f1ea; }
+.checkers .piece.side0 { background: var(--black); color: var(--accent); }
+.checkers .piece.side1 { background: var(--red); color: var(--accent); }
+.piece.king { box-shadow: 0 0 0 3px var(--accent); }
+
+/* Side colours by game: seat 0 is Red in Connect Four, Black in checkers, White in chess. */
+.connect4 .disc.side0, [data-game="connect4"] .seat.side0::before,
+[data-game="checkers"] .seat.side1::before { background: var(--red); }
+.connect4 .disc.side1, [data-game="connect4"] .seat.side1::before,
+[data-game="checkers"] .seat.side0::before, [data-game="chess"] .seat.side1::before {
+  background: var(--black);
+  border: 1px solid var(--muted);
+}
+[data-game="chess"] .seat.side0::before { background: #f4f1ea; border: 1px solid var(--muted); }

@@ -12,7 +12,8 @@
 //  channel "gametable:<board id>", and draws the pieces on the board. It also creates the
 //  children humans click, which run gametable-client.mjs. The game is userData's
 //  gameTableConfig.game, read once at load (game-registry.mjs); its layout module places the
-//  children and draws the pieces.
+//  children and draws the pieces. It also names the board's phone UI, the web module in web/, in
+//  userData.webModule, for hosts that frame one (Morpheus).
 //
 //  The engine shares one module instance per URL between every board that uses it, so all
 //  state lives on the class instance; module scope holds constants only.
@@ -33,6 +34,7 @@ const CHILD_PREFIX = "GT.";
 const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
 const OFFLINE_TEXT = "Game table\nReferee not running";
 const LOCKED_TEXT = "BOARD LOCKED: the game is not saved in userData. Unlock the board and reload its script.";
+const WEB_MODULE = "web/index.html";
 
 /**
  * @param {unknown} text
@@ -47,12 +49,26 @@ function parseObject(text) {
     }
 }
 
+/**
+ * The board's web module: web/index.html under gameTableConfig.webModuleBase, else beside this
+ * script when that was loaded over http(s); null when neither names a place a phone can load.
+ * @param {unknown} base
+ * @param {string} channel
+ * @returns {{ url: string, channel: string } | null}
+ */
+export function webModuleFor(base, channel) {
+    const root = typeof base === "string" && /^https?:\/\/[^/]/.test(base) ? base.replace(/\/?$/, "/")
+        : /^https?:\/\//.test(HERE) ? HERE : null;
+    return root ? { url: root + WEB_MODULE, channel } : null;
+}
+
 export default class GameTableReferee {
     remotelyCallable = ["join", "move", "leave", "state", "newGame", "draw"];
 
     // Set in preload, which the engine calls before any other method.
     /** @type {Uuid} */ entityID;
     /** @type {string} */ channel;
+    /** @type {{ url: string, channel: string } | null} */ webModule = null;
     /** @type {Vec3} */ dimensions;
     /** @type {RefereeCore} */ core;
     /** @type {Connect4Layout | GridLayout} */ layout;
@@ -82,6 +98,7 @@ export default class GameTableReferee {
         }
         const userData = parseObject(properties.userData);
         const config = userData.gameTableConfig || {};
+        this.webModule = webModuleFor(config.webModuleBase, this.channel);
         const game = gameEntry(config.game);
         if (!game.known) {
             print("Game table " + entityID + ": unknown game " + JSON.stringify(config.game) + ", playing " + game.name);
@@ -160,6 +177,11 @@ export default class GameTableReferee {
         if (!this.locked) {
             const userData = parseObject(Entities.getEntityProperties(this.entityID, ["userData"]).userData);
             userData.gameTable = state;
+            if (this.webModule) {
+                userData.webModule = this.webModule;
+            } else {
+                delete userData.webModule;
+            }
             Entities.editEntity(this.entityID, { userData: JSON.stringify(userData) });
             this.showTable(/** @type {{ seats: ({ name: string } | null)[], phase: string, toMove: number | null }} */ (state));
         }

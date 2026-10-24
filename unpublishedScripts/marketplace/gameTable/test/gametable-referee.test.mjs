@@ -49,6 +49,19 @@ test("preload publishes into userData without losing other keys and creates one 
     assert.deepEqual(engine.sent[0], { channel: "gametable:" + BOARD, message: { type: "state", ...userData.gameTable } });
 });
 
+test("userData names the web module under gameTableConfig.webModuleBase, and none without one", () => {
+    const engine = fakeEngine(JSON.stringify({ gameTableConfig: { webModuleBase: "https://assets.example.test/gameTable" } }));
+    loaded(engine);
+    assert.deepEqual(JSON.parse(engine.entities.get(BOARD).userData).webModule,
+        { url: "https://assets.example.test/gameTable/web/index.html", channel: "gametable:" + BOARD });
+    // Loaded from a file here, so there is no http(s) place beside the script to fall back to.
+    for (const base of [undefined, "", "javascript:alert(1)", "/relative/", 42]) {
+        const other = fakeEngine(JSON.stringify({ webModule: { url: "https://stale.example.test/x" }, gameTableConfig: { webModuleBase: base } }));
+        loaded(other);
+        assert.equal(JSON.parse(other.entities.get(BOARD).userData).webModule, undefined, String(base));
+    }
+});
+
 test("seats come from Script.remoteCallerID and moves drop discs on the board", () => {
     const engine = fakeEngine();
     const referee = loaded(engine);
