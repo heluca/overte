@@ -72,8 +72,10 @@ AgentAvatarAudio::AgentAvatarAudio(Agent& agent, MixedAudioStream& receivedAudio
     });
 }
 
-// Runs in Agent::aboutToFinish on the Agent's thread, after the recording frame handlers are cleared: nothing may tick
-// or arrive once the encoder is released (#50, #51, #53).
+// Runs in Agent::aboutToFinish on the Agent's thread, after the recording frame handlers are unregistered: no new
+// recording frame call starts, but Frame::handleFrame calls a copied handler outside its lock, so a call already running
+// on the main thread is not waited for (#81). No timer may tick and no packet may arrive once the encoder is
+// released (#50, #51, #53).
 AgentAvatarAudio::~AgentAvatarAudio() {
     _avatarAudioTimer.stop();
     _negotiateAudioFormatRetryTimer.stop();

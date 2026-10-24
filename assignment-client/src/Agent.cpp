@@ -290,6 +290,7 @@ void Agent::nodeKilled(SharedNodePointer killedNode) {
     }
 }
 
+// Unguarded on purpose: only a script reaches these, and the script engine is gone before _avatarAudio is reset.
 QStringList Agent::getAudioCodecs() const {
     return _avatarAudio->getAudioCodecs();
 }
