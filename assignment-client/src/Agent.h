@@ -146,6 +146,7 @@ private:
     QString _selectedCodecName;
     Encoder* _encoder { nullptr };
     QTimer _avatarAudioTimer;
+    QTimer _negotiateAudioFormatRetryTimer;
     bool _flushEncoder { false };
 };
 

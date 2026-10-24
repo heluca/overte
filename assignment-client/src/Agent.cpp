@@ -73,7 +73,8 @@ Agent::Agent(ReceivedMessage& message) :
     ThreadedAssignment(message),
     _receivedAudioStream(RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES, RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES),
     _audioGate(AudioConstants::SAMPLE_RATE, AudioConstants::MONO),
-    _avatarAudioTimer(this)
+    _avatarAudioTimer(this),
+    _negotiateAudioFormatRetryTimer(this)
 {
     DependencyManager::set<ScriptableAvatar>();
 
@@ -149,6 +150,16 @@ Agent::Agent(ReceivedMessage& message) :
     _avatarAudioTimer.setSingleShot(false);
     _avatarAudioTimer.setInterval(TARGET_INTERVAL_MSEC);
     _avatarAudioTimer.setTimerType(Qt::PreciseTimer);
+
+    // The mixer can answer NegotiateAudioFormat before its own socket to this Agent is active, and then drops the
+    // SelectedAudioFormat reply (#57). Ask again until a reply arrives.
+    const int NEGOTIATE_AUDIO_FORMAT_RETRY_MSEC = 1000;
+    _negotiateAudioFormatRetryTimer.setSingleShot(true);
+    _negotiateAudioFormatRetryTimer.setInterval(NEGOTIATE_AUDIO_FORMAT_RETRY_MSEC);
+    connect(&_negotiateAudioFormatRetryTimer, &QTimer::timeout, this, [this] {
+        qDebug() << "No SelectedAudioFormat from the audio mixer - negotiating again";
+        negotiateAudioFormat();
+    });
 }
 
 void Agent::playAvatarSound(SharedSoundPointer sound) {
@@ -359,13 +370,14 @@ void Agent::negotiateAudioFormat() {
     // grab our audio mixer from the NodeList, if it exists
     SharedNodePointer audioMixer = nodeList->soloNodeOfType(NodeType::AudioMixer);
 
-    if (audioMixer) {
-        // send off this mute packet
+    if (audioMixer && !_isFinished) {
         nodeList->sendPacket(std::move(negotiateFormatPacket), *audioMixer);
+        _negotiateAudioFormatRetryTimer.start();
     }
 }
 
 void Agent::handleSelectedAudioFormat(QSharedPointer<ReceivedMessage> message) {
+    _negotiateAudioFormatRetryTimer.stop();
     QString selectedCodecName = message->readString();
     selectAudioFormat(selectedCodecName);
 }
