@@ -578,7 +578,7 @@ void Agent::setIsListeningToAudioStream(bool isListeningToAudioStream) {
         QMetaObject::invokeMethod(this, "setIsListeningToAudioStream", Q_ARG(bool, isListeningToAudioStream));
         return;
     }
-    if (_isListeningToAudioStream) {
+    if (_isListeningToAudioStream && !isListeningToAudioStream) {
         // have to tell just the audio mixer to KillAvatar.
 
         auto nodeList = DependencyManager::get<NodeList>();
