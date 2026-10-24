@@ -331,6 +331,21 @@ void Agent::setAudioCodecs(const QStringList& audioCodecs) {
     QMetaObject::invokeMethod(this, [this] { negotiateAudioFormat(); });
 }
 
+glm::vec3 Agent::getAudioPositionOffset() const {
+    QMutexLocker locker(&_audioSettingsMutex);
+    return _audioPositionOffset;
+}
+
+void Agent::setAudioPositionOffset(const glm::vec3& audioPositionOffset) {
+    QMutexLocker locker(&_audioSettingsMutex);
+    _audioPositionOffset = audioPositionOffset;
+}
+
+glm::vec3 Agent::audioPosition(const ScriptableAvatar& avatar) const {
+    return AgentAudioSettings::audioPosition(avatar.getWorldPosition(), avatar.getWorldOrientation(),
+        getAudioPositionOffset());
+}
+
 void Agent::negotiateAudioFormat() {
     auto nodeList = DependencyManager::get<NodeList>();
     auto negotiateFormatPacket = NLPacket::create(PacketType::NegotiateAudioFormat);
@@ -527,7 +542,7 @@ void Agent::executeScript() {
 
             Transform audioTransform;
             auto headOrientation = scriptedAvatar->getHeadOrientation();
-            audioTransform.setTranslation(scriptedAvatar->getWorldPosition());
+            audioTransform.setTranslation(audioPosition(*scriptedAvatar));
             audioTransform.setRotation(headOrientation);
 
             QByteArray encodedBuffer;
@@ -820,7 +835,7 @@ void Agent::processAgentAvatarAudio() {
             audioPacket->writePrimitive(numAvailableSamples);
 
             // use the orientation and position of this avatar for the source of this audio
-            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
+            audioPacket->writePrimitive(audioPosition(*scriptedAvatar));
             glm::quat headOrientation = scriptedAvatar->getHeadOrientation();
             audioPacket->writePrimitive(headOrientation);
             audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
@@ -837,10 +852,11 @@ void Agent::processAgentAvatarAudio() {
             audioPacket->writePrimitive((quint8)0);
 
             // use the orientation and position of this avatar for the source of this audio
-            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
+            audioPacket->writePrimitive(audioPosition(*scriptedAvatar));
             glm::quat headOrientation = scriptedAvatar->getHeadOrientation();
             audioPacket->writePrimitive(headOrientation);
-            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition()); // HUH? why do we write this twice??
+            // the bounding box corner, unused while the box scale below is zero
+            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
             audioPacket->writePrimitive(glm::vec3(0));
 
             QByteArray encodedBuffer;

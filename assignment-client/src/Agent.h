@@ -72,6 +72,9 @@ public:
     QStringList getAudioCodecs() const;
     void setAudioCodecs(const QStringList& audioCodecs);
 
+    glm::vec3 getAudioPositionOffset() const;
+    void setAudioPositionOffset(const glm::vec3& audioPositionOffset);
+
     virtual void aboutToFinish() override;
 
 public slots:
@@ -104,6 +107,7 @@ private:
     void selectAudioFormat(const QString& selectedCodecName);
     void encodeFrameOfZeros(QByteArray& encodedZeros);
     void computeLoudness(const QByteArray* decodedBuffer, QSharedPointer<ScriptableAvatar>);
+    glm::vec3 audioPosition(const ScriptableAvatar& avatar) const;
 
     ScriptManagerPointer _scriptManager;
     EntityEditPacketSender _entityEditSender;
@@ -136,6 +140,7 @@ private:
     // Settings the script thread writes and the Agent's thread reads.
     mutable QMutex _audioSettingsMutex;
     QStringList _audioCodecs;
+    glm::vec3 _audioPositionOffset { 0.0f };
 
     CodecPluginPointer _codec;
     QString _selectedCodecName;

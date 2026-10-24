@@ -25,4 +25,8 @@ QStringList offeredCodecs(const QStringList& requested, const QStringList& avail
     return offered.isEmpty() ? available : offered;
 }
 
+glm::vec3 audioPosition(const glm::vec3& worldPosition, const glm::quat& orientation, const glm::vec3& offset) {
+    return worldPosition + orientation * offset;
+}
+
 }

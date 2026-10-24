@@ -21,6 +21,8 @@ private slots:
     void testOfferedDropsUnknown();
     void testOfferedFallsBackToAvailable();
     void testOfferedDuplicates();
+    void testAudioPositionZeroOffset();
+    void testAudioPositionRotated();
 };
 
 #endif // overte_AgentAudioSettingsTests_h
