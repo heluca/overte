@@ -80,6 +80,12 @@ public:
     void stopAudioSink();
     bool isAudioSinkActive() const { return (bool)_audioSink; }
 
+    // The Agent's thread only, which is also the script's
+    bool playVoiceStream(const QUrl& url, int prebufferFrames, int idleTimeoutFrames,
+                         const AudioStreamCredential& credential);
+    void stopVoiceStream();
+    bool isPlayingVoiceStream() const { return _avatarAudio && _avatarAudio->isPlayingVoiceStream(); }
+
     virtual void aboutToFinish() override;
 
 public slots:
@@ -94,6 +100,7 @@ public slots:
 
 signals:
     void audioSinkFinished(const QString& reason);
+    void voiceStreamFinished(const QString& reason);
 
 private slots:
     void handleSettings(const QJsonObject& settingsObject);

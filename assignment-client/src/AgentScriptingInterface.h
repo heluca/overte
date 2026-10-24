@@ -52,6 +52,9 @@
  * @property {boolean} isAudioSinkActive - <code>true</code> from a successful {@link Agent.startAudioSink|startAudioSink}
  *     call until {@link Agent.audioSinkFinished|audioSinkFinished} is triggered, including while the WebSocket
  *     connects, otherwise <code>false</code>. <em>Read-only.</em>
+ * @property {boolean} isPlayingVoiceStream - <code>true</code> from a successful
+ *     {@link Agent.playVoiceStream|playVoiceStream} call until {@link Agent.voiceStreamFinished|voiceStreamFinished} is
+ *     triggered, including while the request connects, otherwise <code>false</code>. <em>Read-only.</em>
  */
 class AgentScriptingInterface : public QObject {
     Q_OBJECT
@@ -64,6 +67,7 @@ class AgentScriptingInterface : public QObject {
     Q_PROPERTY(QStringList audioCodecs READ getAudioCodecs WRITE setAudioCodecs)
     Q_PROPERTY(glm::vec3 audioPositionOffset READ getAudioPositionOffset WRITE setAudioPositionOffset)
     Q_PROPERTY(bool isAudioSinkActive READ isAudioSinkActive)
+    Q_PROPERTY(bool isPlayingVoiceStream READ isPlayingVoiceStream)
 
 public:
     AgentScriptingInterface(Agent* agent);
@@ -86,6 +90,8 @@ public:
     void setAudioPositionOffset(const glm::vec3& offset) const { _agent->setAudioPositionOffset(offset); }
 
     bool isAudioSinkActive() const { return _agent->isAudioSinkActive(); }
+
+    bool isPlayingVoiceStream() const { return _agent->isPlayingVoiceStream(); }
 
 public slots:
     /*@jsdoc
@@ -182,6 +188,72 @@ public slots:
      */
     void stopAudioSink() const { _agent->stopAudioSink(); }
 
+    /*@jsdoc
+     * Plays a live audio stream fetched over HTTP as the avatar's own voice, until the response ends or the script calls
+     * {@link Agent.stopVoiceStream|stopVoiceStream}. Other listeners hear it from the avatar, spatialized by the audio
+     * mixer as Interface users' microphones are, and its loudness drives <code>Avatar.audioLoudness</code>, so the
+     * avatar's mouth moves with it. The agent never hears its own voice in its mix.
+     * <p>The response body is raw 24000 Hz mono audio: signed 16-bit little-endian samples with no header, the same
+     * format as a mono {@link Audio.playStream}. It is played as it arrives, one 10 ms frame every 10 ms; up to about
+     * 200 ms waits in a buffer and the oldest audio is dropped beyond that, so the server should send in real time. A
+     * frame of zeros is silence, and costs the mixer next to nothing.</p>
+     * <p>After the start and after every underrun the stream waits until <code>prebuffer</code> seconds of audio have
+     * arrived before it plays again. During an underrun nothing is sent unless <code>isListeningToAudioStream</code> is
+     * <code>true</code>, in which case the agent sends silence as it always does while listening. A server with nothing to
+     * say should send zeros rather than nothing, so the stream neither underruns nor goes idle: after
+     * <code>idleTimeout</code> seconds of underruns in a row the stream ends with <code>"idle"</code>. The count starts
+     * with the stream and includes connecting and the first prebuffer, so a server that takes longer than
+     * <code>idleTimeout</code> to send its first audio ends the stream too.</p>
+     * <p>The agent must be an avatar: <code>playVoiceStream</code> returns <code>false</code> while
+     * <code>isAvatar</code> is <code>false</code>, and setting <code>isAvatar</code> to <code>false</code> stops a playing
+     * stream with <code>"stopped"</code>. Set <code>isAvatar</code> and <code>isListeningToAudioStream</code> once,
+     * before playing: turning listening off removes the agent from the audio mixer, which drops its stream until the next
+     * frame of audio creates it again, so a voice heard across that change glitches.</p>
+     * <p>A voice stream and {@link Agent.playAvatarSound|playAvatarSound} take turns: playing a voice stream stops a
+     * playing sound, and playing a sound stops the voice stream with {@link Agent.voiceStreamFinished|voiceStreamFinished}
+     * <code>"stopped"</code>. A voice stream also mutes a recording's audio while it plays.</p>
+     * <p>The request carries an <code>Authorization</code> header when a script credential of the domain covers the
+     * URL, as {@link Audio.playStream} does.</p>
+     * <p>Playing a stream while one is playing stops the playing one first, which triggers
+     * {@link Agent.voiceStreamFinished|voiceStreamFinished} with <code>"stopped"</code> for it during the call.
+     * Reconnecting is up to the script: call <code>playVoiceStream</code> again from
+     * {@link Agent.voiceStreamFinished|voiceStreamFinished}, with a back-off, unless the reason is <code>"stopped"</code>.
+     * A handler that plays a stream on <code>"stopped"</code> recurses whenever the script replaces a playing stream, as
+     * each play triggers <code>"stopped"</code> for the one before.</p>
+     * @function Agent.playVoiceStream
+     * @param {string} url - The stream's URL, <code>http://</code> or <code>https://</code>.
+     * @param {object} [options] - Options.
+     * @param {number} [options.prebuffer=0.02] - The seconds of audio to wait for before playing, after the start and after
+     *     an underrun, <code>0</code> &ndash; <code>0.2</code>. Rounded to 10 ms. Keep it at <code>0.1</code> or less:
+     *     the buffer holds 0.2 s, so a larger prebuffer leaves no room and a server even slightly ahead of real time loses
+     *     audio.
+     * @param {number} [options.idleTimeout=10] - The seconds of underruns in a row after which the stream ends with
+     *     <code>"idle"</code>, <code>0</code> &ndash; <code>86400</code>; <code>0</code> never ends it for that.
+     * @returns {boolean} <code>true</code> if the stream is connecting, <code>false</code> if the agent is not an avatar,
+     *     the URL is not http or https, or an option is out of range.
+     * @example <caption>Speak with a voice served by a local process, reconnecting after a second.</caption>
+     * Agent.isAvatar = true;
+     * Agent.isListeningToAudioStream = true;
+     * function speak() {
+     *     Agent.playVoiceStream("http://127.0.0.1:9000/voice", { prebuffer: 0.04 });
+     * }
+     * Agent.voiceStreamFinished.connect(function (reason) {
+     *     print("Voice stream finished: " + reason);
+     *     if (reason !== "stopped") {
+     *         Script.setTimeout(speak, 1000);
+     *     }
+     * });
+     * speak();
+     */
+    bool playVoiceStream(const QString& url, const QVariantMap& options = QVariantMap()) const;
+
+    /*@jsdoc
+     * Stops the voice stream, if {@link Agent.playVoiceStream|playVoiceStream} is playing one, and closes its request.
+     * {@link Agent.voiceStreamFinished|voiceStreamFinished} is triggered with <code>"stopped"</code> during the call.
+     * @function Agent.stopVoiceStream
+     */
+    void stopVoiceStream() const { _agent->stopVoiceStream(); }
+
 signals:
     /*@jsdoc
      * Triggered once when the audio sink started by {@link Agent.startAudioSink|startAudioSink} ends. It is not
@@ -193,6 +265,20 @@ signals:
      * @returns {Signal}
      */
     void audioSinkFinished(const QString& reason);
+
+    /*@jsdoc
+     * Triggered once when the voice stream played by {@link Agent.playVoiceStream|playVoiceStream} ends. It is not
+     * triggered after the script has stopped.
+     * @function Agent.voiceStreamFinished
+     * @param {string} reason - <code>"ended"</code> if the response ended, <code>"http &lt;status&gt;"</code> (e.g.,
+     *     <code>"http 401"</code>) if the server answered with any status of 300 or more, including a redirect that is
+     *     not followed, <code>"idle"</code> after <code>idleTimeout</code> seconds of underruns,
+     *     <code>"error: &lt;description&gt;"</code> if the request failed otherwise, or <code>"stopped"</code> if the
+     *     script stopped it, played another stream, played an avatar sound or set <code>isAvatar</code> to
+     *     <code>false</code>.
+     * @returns {Signal}
+     */
+    void voiceStreamFinished(const QString& reason);
 
 private:
     Agent* _agent;
