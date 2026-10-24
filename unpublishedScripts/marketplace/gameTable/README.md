@@ -21,6 +21,7 @@ Two tables live here:
 | `layout-connect4.mjs`, `layout-grid.mjs` | entity script server | Where each board's children go, and drawing its pieces: the upright Connect Four board (drawn like the toy), and the flat 8x8 board |
 | `layout-controls.mjs` | entity script server | The status display and the seat buttons both layouts share, and what of their look follows the table |
 | `gametable-client.mjs`, `client-grid.mjs` | Interface | The client entity `script` of the board, its click targets and its seat buttons: clicks become server method calls, and the channel becomes announcements and highlights |
+| `web/index.html`, `web/gametable.mjs`, `web/board.mjs` | a phone's browser, framed by a host page | The board's web module: seats, the board, draw, rematch and resign for a phone, over the host's `postMessage` API (see "The web module") |
 
 The modules need the fork's ES module support for entity scripts (`.mjs` `serverScripts` and
 `script` with `export default class`). Imports are relative, so the files and `assets/` must be
@@ -86,6 +87,7 @@ Entities.addEntity({
 | `game` | `"connect4"` | `"connect4"`, `"checkers"` or `"chess"`. Any other value logs a warning and plays Connect Four |
 | `turnTimeoutS` | 180 | How long the player to move has before forfeiting |
 | `waitTimeoutS` | 600 | How long a lone player keeps a seat |
+| `webModuleBase` | the directory the referee was loaded from, if over http(s) | Where this directory is served for phones: `userData.webModule.url` is `<webModuleBase>/web/index.html` |
 
 Timeouts outside 5 to 86400 seconds fall back to the defaults. To change a board's game, edit
 `gameTableConfig.game` and reload the referee (or rez a new board): it removes the other game's
@@ -378,6 +380,9 @@ and for chess (after White's `e2e4`), with two more fields:
 Checkers' repetition and forty-move draws, and chess's repetition and fifty-move draws, are applied
 automatically rather than claimed as FIDE has it, because an agent has no claim action.
 
+`webModule` (above) is written beside `gameTable` on every publish, and removed when there is no
+http(s) place to name.
+
 The state is output only. The referee never reads it back as input (anyone who can edit the board
 can change `userData`), and its next write repairs any change. The one exception is at load: a
 `playing` phase there means the previous instance died mid-game.
@@ -401,6 +406,37 @@ sender ID is whatever the sending client wrote.
 (`column must be one digit 0-6`, `move must be like 11-15 or 22x15x6`,
 `move must be like e2e4 or e7e8q`), and Connect Four's
 `column full`.
+
+### The web module
+
+A phone runs no entity scripts, so a host page that draws the world in a browser (Morpheus) frames
+the board's **web module** instead (Morpheus ADR 0028). The referee names it in the board's
+`userData`, next to `gameTable`:
+
+```json
+{ "webModule": { "url": "https://<asset-host>/gameTable/web/index.html", "channel": "gametable:{board-id}" } }
+```
+
+The host loads it only from an origin it allows, into an iframe sandboxed to an opaque origin
+(`sandbox="allow-scripts"`), so the module sees no cookies, storage, token or other entity. Its
+ES modules are therefore fetched in CORS mode: the asset host must answer them with
+`Access-Control-Allow-Origin: *` (as raw.githubusercontent.com does; a plain static server needs it
+added). The module talks to the host only through `postMessage`:
+
+| Direction | `type` | Fields |
+| --- | --- | --- |
+| host to module | `init` (once) | `nonce`, `entity {id, name, type, userData}`, `you {sessionUUID, displayName}`, `fence {callable}` (the methods it may call; `["*"]` for any), `channel {name, subscribed}` |
+| host to module | `userData` | `userData`, whenever the board's changes |
+| host to module | `message` | `channel`, `senderId`, `message`: what the referee sent on the channel |
+| host to module | `result` | `id`, `ok`, `error?`: the answer to a `call` |
+| module to host | `call` | `nonce`, `id`, `method`, `args`: a server method on this board, checked by the host's fence and rate limits and then by the referee |
+| module to host | `resize` / `close` | `nonce`, `height` / nothing |
+
+Like the Interface client the module keeps no game: it shows `userData.gameTable` and the channel's
+`state`, announces refusals addressed to `you.sessionUUID` and results, and every action is a
+`call` (`join` with the seat, `move` in the game's notation, `draw`, `newGame`, `leave`). In
+checkers and chess a tap on a piece shows its moves and a tap on a destination plays; when several
+moves share both squares (a promotion, two jump paths) it asks which.
 
 ### Playing as a human
 
