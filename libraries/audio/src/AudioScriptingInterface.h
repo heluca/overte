@@ -39,6 +39,10 @@ public:
     virtual ~AudioScriptingInterface() = default;
     void setLocalAudioInterface(AbstractAudioInterface* audioInterface);
 
+    // The script credential for a request to url made by the script that is calling into C++ on this thread. Empty
+    // outside such a call, or in a process without script credentials.
+    static AudioStreamCredential scriptCredentialFor(const QUrl& url);
+
     bool isSoloing() const {
         return _localAudioInterface->getAudioSolo().isSoloing();
     }

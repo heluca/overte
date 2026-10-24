@@ -16,3 +16,12 @@ Agent.audioCodecs = "pcm";
 
 // @ts-expect-error audioPositionOffset is a Vec3, not a height.
 Agent.audioPositionOffset = 0.6;
+
+// @ts-expect-error startAudioSink takes the URL as a string.
+Agent.startAudioSink({ url: "ws://127.0.0.1:9000/ears" });
+
+// @ts-expect-error framesPerMessage is a number of frames.
+Agent.startAudioSink("ws://127.0.0.1:9000/ears", { framesPerMessage: "2" });
+
+// @ts-expect-error isAudioSinkActive is read-only.
+Agent.isAudioSinkActive = true;
