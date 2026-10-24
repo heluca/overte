@@ -113,7 +113,7 @@ private:
     EntityTreeHeadlessViewer _entityViewer;
 
     MixedAudioStream _receivedAudioStream;
-    float _lastReceivedAudioLoudness;
+    float _lastReceivedAudioLoudness { 0.0f };
 
     void queryAvatars();
     void resetAudioSink();
