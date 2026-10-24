@@ -37,7 +37,8 @@ The context files declare the same globals, so two of them in one program confli
 scripts for each context as a separate project. `sample/` holds a port of the Shortbow game
 manager that is type-checked against the server entity context, `sample/positive.ts` lists idioms
 that must compile, and `sample/negative.ts` lists misuse that must fail to compile (each line is a
-`@ts-expect-error`). `sample/interface/` does the same against the Interface context.
+`@ts-expect-error`). `sample/interface/` does the same against the Interface context, and
+`sample/agent/` against the assignment client context.
 
 ## Regenerating
 
