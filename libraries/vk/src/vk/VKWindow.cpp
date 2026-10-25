@@ -366,6 +366,11 @@ bool VKWindow::event(QEvent* event) {
     return QWindow::event(event);
 }
 
+QString VKWindow::describeSurface() const {
+    return QString("window %1x%2 dpr %3 swapchain %4x%5")
+        .arg(width()).arg(height()).arg(devicePixelRatio()).arg(_extent.width).arg(_extent.height);
+}
+
 void VKWindow::resizeFramebuffer() {
     auto qsize = size();
     _extent = VkExtent2D{

@@ -83,6 +83,10 @@ public:
 
     void setValidationEnabled(bool enable);
 
+    // VK_EXT_vertex_attribute_divisor with a zero divisor was enabled on the device: a per-instance vertex binding
+    // can feed every instance of a draw the same element.
+    bool vertexAttributeZeroDivisorEnabled { false };
+
     void createInstance();
 
     void destroyContext();

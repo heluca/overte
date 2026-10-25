@@ -760,6 +760,11 @@ bool OpenXrContext::pollEvents() {
 
                     _vivePoseHack[i] = _viveControllerPath != XR_NULL_PATH && state.interactionProfile == _viveControllerPath;
 
+                    if (state.interactionProfile == XR_NULL_PATH) {
+                        qCInfo(xr_context_cat, "Controller %d was disconnected", i);
+                        continue;
+                    }
+
                     uint32_t bufferCountOutput;
                     char profilePath[XR_MAX_PATH_LENGTH];
                     res = xrPathToString(_instance, state.interactionProfile, XR_MAX_PATH_LENGTH, &bufferCountOutput,
@@ -774,6 +779,10 @@ bool OpenXrContext::pollEvents() {
             case XR_TYPE_EVENT_DATA_USER_PRESENCE_CHANGED_EXT: {
                 const auto& eventdata = *reinterpret_cast<XrEventDataUserPresenceChangedEXT*>(&event);
                 _hmdMounted = eventdata.isUserPresent;
+
+                if (_userPresenceEnabled) {
+                    qCDebug(xr_context_cat, "User present: %s", _hmdMounted ? "true" : "false");
+                }
                 break;
             }
             default:

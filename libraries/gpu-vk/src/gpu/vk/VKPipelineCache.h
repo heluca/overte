@@ -92,6 +92,9 @@ struct Cache {
         gpu::FormatReference format{ GPU_REFERENCE_INIT_VALUE };
         gpu::FramebufferReference framebuffer{ GPU_REFERENCE_INIT_VALUE };
         gpu::Primitive primitiveTopology;
+        // A named call draws one object per instance and its draw call info advances per instance. Any other draw
+        // must read the same draw call info in every instance, as the GL backends' constant vertex attribute does.
+        bool drawCallInfoPerInstance { true };
 
 
         // VKTODO: maybe these should be moved from here to cache object?

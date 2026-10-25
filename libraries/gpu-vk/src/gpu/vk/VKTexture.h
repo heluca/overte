@@ -212,6 +212,8 @@ protected:
         uint16_t height;
         size_t buffer_size;
         struct Mip {
+            uint16_t level;
+            uint8_t face;
             size_t offset;
             size_t size;
             uint32_t width;
@@ -293,7 +295,15 @@ protected:
 class VKStrictResourceTexture: public VKFixedAllocationTexture {
     friend class VKBackend;
 public:
+    struct StagingBuffer {
+        VkBuffer buffer { VK_NULL_HANDLE };
+        VkDeviceMemory memory { VK_NULL_HANDLE };
+    };
+
     void postTransfer(VKBackend &backend) override;
+    // Uploads the mip levels stored in the gpu::Texture since the last transfer (streamed KTX textures get
+    // their levels one at a time) and lets the sampler use them.
+    void transferNewMips(VKBackend &backend);
 
 protected:
     // VKTODO: how to handle mipmaps?
@@ -309,7 +319,14 @@ protected:
     void createTexture(VKBackend &backend) override;
     void transfer(VKBackend &backend) override;
     VkDescriptorImageInfo getDescriptorImageInfo() override;
+    VkImageSubresourceRange wholeImageRange() const;
+    void collectTransferData(uint16_t firstMip, uint16_t lastMip);
+    StagingBuffer recordTransfer(VKBackend &backend, VkCommandBuffer copyCmd);
+    void updateSamplerAndView(VKBackend &backend);
     TransferData _transferData{};
+    // The range of mip levels whose contents have been uploaded; the sampler and view are clamped to it.
+    uint16_t _populatedMinMip { 0 };
+    uint16_t _populatedMaxMip { 0 };
     //VkImage _vkImage { VK_NULL_HANDLE };
     VkImageView _vkImageView { VK_NULL_HANDLE };
     VkImageLayout _vkImageLayout {};
@@ -395,6 +412,9 @@ public:
     void releaseExternalTexture(); // Called on destructor and when new texture is set
     void setSource(GLuint source);
     void transferGL(VKBackend &backend);
+    // The Vulkan image is sized when the object is created; the gpu::Texture can be resized afterwards
+    // (the QML UI texture is, whenever the window changes size), in which case the backend replaces the object.
+    bool matchesGpuObjectSize() const { return _imageWidth == _gpuObject.getWidth() && _imageHeight == _gpuObject.getHeight(); }
 
 protected:
     Size size() const override { return _size; }
@@ -423,6 +443,8 @@ protected:
 #endif
     GLuint _openGLMemoryObject = 0;
     GLuint _openGLId = 0;
+    uint32_t _imageWidth { 0 };
+    uint32_t _imageHeight { 0 };
     GLuint _openGLSourceId = 0;
 };
 
