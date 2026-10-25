@@ -40,6 +40,7 @@ namespace gpu::vk {
     extern PFN_vkGetMemoryFdKHR vkGetMemoryFdKHR;
 }
 
+class QVulkanInstance;
 class VKWindow;
 class VKWidget;
 
@@ -101,6 +102,8 @@ protected:
 public:
     // Vulkan instance, stores all per-application states
     VkInstance instance;
+    // Qt's wrapper of the same instance, used to create window surfaces.
+    QVulkanInstance* qtInstance{ nullptr };
 
     std::vector<VkPhysicalDevice> physicalDevices;
     // Physical device (GPU) that Vulkan will use

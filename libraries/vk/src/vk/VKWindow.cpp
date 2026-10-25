@@ -15,9 +15,6 @@
 #include <QtGui/qevent.h>
 #include <QtCore/QTimer>
 #include <QtCore/QDebug>
-#include <QtPlatformHeaders/QXcbWindowFunctions>
-#include <qpa/qplatformnativeinterface.h>
-#include <QtX11Extras/QX11Info>
 #include <QWidget>
 
 #include "VKWindow.h"
@@ -26,8 +23,13 @@
 #include "VulkanSwapChain.h"
 #include "Context.h"
 
+// After the Vulkan headers: qvulkaninstance.h defines VK_NO_PROTOTYPES before including vulkan.h.
+#include <QtGui/QVulkanInstance>
+
 VKWindow::VKWindow(QScreen* screen) : QWindow(screen) {
     vks::Context::get().registerWindow(this);
+    // The surface type picks the platform window implementation, so it has to be set before the platform window is created.
+    setSurfaceType(QSurface::VulkanSurface);
     setBaseSize(QSize(1280, 720));
     resize(QSize(1280, 720));
     /*_resizeTimer = new QTimer(this);
@@ -49,24 +51,11 @@ VKWindow::VKWindow(QScreen* screen) : QWindow(screen) {
 
 void VKWindow::createSurface() {
     _swapchain.setContext(&_context);
-#ifdef WIN32
-    // TODO
-    _surface = _context.instance.createWin32SurfaceKHR({ {}, GetModuleHandle(NULL), (HWND)winId() });
-#else
-    setSurfaceType(QSurface::VulkanSurface);
-    //VkXcbSurfaceCreateInfoKHR surfaceCreateInfo{};
-    //dynamic_cast<QGuiApplication*>(QGuiApplication::instance())->platformNativeInterface()->connection();
-
-    //auto* platformInterface = QGuiApplication::platformNativeInterface();
-    //auto* handle = platformInterface->nativeResourceForWindow("handle", this);
-    Q_ASSERT(winId());
-    qDebug() << "VKWindow::createSurface winId:" << winId();
-    _swapchain.initSurface(QX11Info::connection(), winId());
-    //_swapchain.initSurface(QX11Info::connection(), QX11Info::appRootWindow());
-    //VkSurfaceKHR surface;
-    //VK_CHECK_RESULT(vkCreateXcbSurfaceKHR(_context.instance, &surfaceCreateInfo, nullptr, &surface));
-#endif
-    //_swapchain.setSurface(_surface);
+    create();
+    setVulkanInstance(_context.qtInstance);
+    _swapchain.initSurface(QVulkanInstance::surfaceForWindow(this));
+    qDebug() << "VKWindow::createSurface platform:" << QGuiApplication::platformName()
+             << "format:" << _swapchain.colorFormat << "color space:" << _swapchain.colorSpace;
 }
 
 void VKWindow::createSwapchain() {
@@ -141,6 +130,9 @@ void VKWindow::vulkanCleanup() {
     }
     _frameBuffers.clear();
 
+    // Qt destroys the surface together with the platform window, which may outlive the Vulkan instance.
+    // Detaching the instance hands the surface over to the swapchain, which destroys it before the instance.
+    setVulkanInstance(nullptr);
     _swapchain.cleanup();
 }
 

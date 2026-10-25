@@ -18,6 +18,9 @@
 #include "VKWindow.h"
 #include "VKWidget.h"
 
+// After the Vulkan headers: qvulkaninstance.h defines VK_NO_PROTOTYPES before including vulkan.h.
+#include <QtGui/QVulkanInstance>
+
 namespace gpu::vk {
 // Extension for sharing memory with OpenGL, needed by QML UI and Web entities.
 PFN_vkGetMemoryFdKHR vkGetMemoryFdKHR;
@@ -140,8 +143,13 @@ void Context::createInstance() {
     instanceExtensions.insert(VK_EXT_DIRECTFB_SURFACE_EXTENSION_NAME);
 #elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
     instanceExtensions.insert(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
-#elif defined(VK_USE_PLATFORM_XCB_KHR)
-    instanceExtensions.insert(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
+#elif defined(Q_OS_LINUX)
+    // Window surfaces are created by Qt, so enable the WSI extension of every Linux platform plugin it may be using.
+    for (const char* extension : { "VK_KHR_wayland_surface", "VK_KHR_xcb_surface" }) {
+        if (isExtensionPresent(extension)) {
+            instanceExtensions.insert(extension);
+        }
+    }
 #elif defined(VK_USE_PLATFORM_IOS_MVK)
     instanceExtensions.insert(VK_MVK_IOS_SURFACE_EXTENSION_NAME);
 #elif defined(VK_USE_PLATFORM_MACOS_MVK)
@@ -188,6 +196,12 @@ void Context::createInstance() {
     VkResult result = vkCreateInstance(&instanceCreateInfo, nullptr, &instance);
     Q_ASSERT(result == VK_SUCCESS);
 
+    qtInstance = new QVulkanInstance();
+    qtInstance->setVkInstance(instance);
+    if (!qtInstance->create()) {
+        qCritical() << "Failed to wrap the Vulkan instance in QVulkanInstance, error" << qtInstance->errorCode();
+    }
+
     if (enableValidation) {
         debug::setupDebugging(instance);
     }
@@ -206,6 +220,8 @@ void Context::destroyContext() {
     if (enableValidation) {
         debug::freeDebugCallback(instance);
     }
+    delete qtInstance;
+    qtInstance = nullptr;
     vkDestroyInstance(instance, nullptr);
 }
 

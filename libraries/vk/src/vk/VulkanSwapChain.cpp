@@ -11,102 +11,11 @@
 #include "Config.h"
 #include "VulkanSwapChain.h"
 
-/** @brief Creates the platform specific surface abstraction of the native platform window used for presentation */    
-#if defined(VK_USE_PLATFORM_WIN32_KHR)
-void VulkanSwapChain::initSurface(void* platformHandle, void* platformWindow)
-#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
-void VulkanSwapChain::initSurface(ANativeWindow* window)
-#elif defined(VK_USE_PLATFORM_DIRECTFB_EXT)
-void VulkanSwapChain::initSurface(IDirectFB* dfb, IDirectFBSurface* window)
-#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-void VulkanSwapChain::initSurface(wl_display *display, wl_surface *window)
-#elif defined(VK_USE_PLATFORM_XCB_KHR)
-void VulkanSwapChain::initSurface(xcb_connection_t* connection, xcb_window_t window)
-#elif (defined(VK_USE_PLATFORM_IOS_MVK) || defined(VK_USE_PLATFORM_MACOS_MVK))
-void VulkanSwapChain::initSurface(void* view)
-#elif defined(VK_USE_PLATFORM_METAL_EXT)
-void VulkanSwapChain::initSurface(CAMetalLayer* metalLayer)
-#elif (defined(_DIRECT2DISPLAY) || defined(VK_USE_PLATFORM_HEADLESS_EXT))
-void VulkanSwapChain::initSurface(uint32_t width, uint32_t height)
-#elif defined(VK_USE_PLATFORM_SCREEN_QNX)
-void VulkanSwapChain::initSurface(screen_context_t screen_context, screen_window_t screen_window)
-#endif
+void VulkanSwapChain::initSurface(VkSurfaceKHR windowSurface)
 {
-    VkResult err = VK_SUCCESS;
-
-    // Create the os-specific surface
-#if defined(VK_USE_PLATFORM_WIN32_KHR)
-    VkWin32SurfaceCreateInfoKHR surfaceCreateInfo = {};
-    surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    surfaceCreateInfo.hinstance = (HINSTANCE)platformHandle;
-    surfaceCreateInfo.hwnd = (HWND)platformWindow;
-    err = vkCreateWin32SurfaceKHR(instance, &surfaceCreateInfo, nullptr, &surface);
-#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
-    VkAndroidSurfaceCreateInfoKHR surfaceCreateInfo = {};
-    surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
-    surfaceCreateInfo.window = window;
-    err = vkCreateAndroidSurfaceKHR(instance, &surfaceCreateInfo, NULL, &surface);
-#elif defined(VK_USE_PLATFORM_IOS_MVK)
-    VkIOSSurfaceCreateInfoMVK surfaceCreateInfo = {};
-    surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_IOS_SURFACE_CREATE_INFO_MVK;
-    surfaceCreateInfo.pNext = NULL;
-    surfaceCreateInfo.flags = 0;
-    surfaceCreateInfo.pView = view;
-    err = vkCreateIOSSurfaceMVK(instance, &surfaceCreateInfo, nullptr, &surface);
-#elif defined(VK_USE_PLATFORM_MACOS_MVK)
-    VkMacOSSurfaceCreateInfoMVK surfaceCreateInfo = {};
-    surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK;
-    surfaceCreateInfo.pNext = NULL;
-    surfaceCreateInfo.flags = 0;
-    surfaceCreateInfo.pView = view;
-    err = vkCreateMacOSSurfaceMVK(instance, &surfaceCreateInfo, NULL, &surface);
-#elif defined(VK_USE_PLATFORM_METAL_EXT)
-    VkMetalSurfaceCreateInfoEXT surfaceCreateInfo = {};
-    surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
-    surfaceCreateInfo.pNext = NULL;
-    surfaceCreateInfo.flags = 0;
-    surfaceCreateInfo.pLayer = metalLayer;
-    err = vkCreateMetalSurfaceEXT(instance, &surfaceCreateInfo, NULL, &surface);
-#elif defined(_DIRECT2DISPLAY)
-    createDirect2DisplaySurface(width, height);
-#elif defined(VK_USE_PLATFORM_DIRECTFB_EXT)
-    VkDirectFBSurfaceCreateInfoEXT surfaceCreateInfo = {};
-    surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_DIRECTFB_SURFACE_CREATE_INFO_EXT;
-    surfaceCreateInfo.dfb = dfb;
-    surfaceCreateInfo.surface = window;
-    err = vkCreateDirectFBSurfaceEXT(instance, &surfaceCreateInfo, nullptr, &surface);
-#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-    VkWaylandSurfaceCreateInfoKHR surfaceCreateInfo = {};
-    surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
-    surfaceCreateInfo.display = display;
-    surfaceCreateInfo.surface = window;
-    err = vkCreateWaylandSurfaceKHR(instance, &surfaceCreateInfo, nullptr, &surface);
-#elif defined(VK_USE_PLATFORM_XCB_KHR)
-    VkXcbSurfaceCreateInfoKHR surfaceCreateInfo = {};
-    surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR;
-    surfaceCreateInfo.connection = connection;
-    surfaceCreateInfo.window = window;
-    err = vkCreateXcbSurfaceKHR(_context->instance, &surfaceCreateInfo, nullptr, &surface);
-#elif defined(VK_USE_PLATFORM_HEADLESS_EXT)
-    VkHeadlessSurfaceCreateInfoEXT surfaceCreateInfo = {};
-    surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
-    PFN_vkCreateHeadlessSurfaceEXT fpCreateHeadlessSurfaceEXT = (PFN_vkCreateHeadlessSurfaceEXT)vkGetInstanceProcAddr(instance, "vkCreateHeadlessSurfaceEXT");
-    if (!fpCreateHeadlessSurfaceEXT){
-        vks::tools::exitFatal("Could not fetch function pointer for the headless extension!", -1);
-    }
-    err = fpCreateHeadlessSurfaceEXT(instance, &surfaceCreateInfo, nullptr, &surface);
-#elif defined(VK_USE_PLATFORM_SCREEN_QNX)
-    VkScreenSurfaceCreateInfoQNX surfaceCreateInfo = {};
-    surfaceCreateInfo.sType = VK_STRUCTURE_TYPE_SCREEN_SURFACE_CREATE_INFO_QNX;
-    surfaceCreateInfo.pNext = NULL;
-    surfaceCreateInfo.flags = 0;
-    surfaceCreateInfo.context = screen_context;
-    surfaceCreateInfo.window = screen_window;
-    err = vkCreateScreenSurfaceQNX(instance, &surfaceCreateInfo, NULL, &surface);
-#endif
-
-    if (err != VK_SUCCESS) {
-        vks::tools::exitFatal("Could not create surface!", err);
+    surface = windowSurface;
+    if (surface == VK_NULL_HANDLE) {
+        vks::tools::exitFatal("Could not create surface!", VK_ERROR_INITIALIZATION_FAILED);
     }
 
     // Get available queue family properties

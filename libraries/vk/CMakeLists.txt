@@ -13,6 +13,5 @@ setup_hifi_library(Gui)
 GroupSources(src)
 link_hifi_libraries(shared shaders gl)
 find_package(Qt6 COMPONENTS Core Gui QUIET REQUIRED)
-target_link_libraries(${TARGET_NAME} Qt6::GuiPrivate)
 
 target_vulkan()
