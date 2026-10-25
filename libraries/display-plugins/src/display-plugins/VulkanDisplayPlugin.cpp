@@ -27,7 +27,7 @@
 
 #include <QtGui/QImage>
 #include <QtGui/QImageWriter>
-#include <QtGui/QOpenGLFramebufferObject>
+#include <QOpenGLFramebufferObject>
 
 #include <NumericalConstants.h>
 #include <DependencyManager.h>
