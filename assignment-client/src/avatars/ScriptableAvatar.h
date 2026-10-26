@@ -219,11 +219,8 @@ private:
     AnimationDetails _animationDetails;
     QStringList _maskedJoints;
     GeometryResource::Pointer _geometryResource;
-    Rig _rig;
-    bool _isRigValid{false};
-    Rig _animationRig;
-    bool _isAnimationRigValid{false};
     std::shared_ptr<AnimSkeleton> _avatarAnimSkeleton;
+    std::shared_ptr<AnimSkeleton> _animationAnimSkeleton;
     QHash<QString, int> _fstJointIndices; ///< 1-based, since zero is returned for missing keys
     QStringList _fstJointNames; ///< in order of depth-first traversal
     QUrl _skeletonModelFilenameURL; // This contains URL from filename field in fst file
