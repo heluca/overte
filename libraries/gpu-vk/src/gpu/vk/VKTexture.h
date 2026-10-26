@@ -14,6 +14,8 @@
 #ifndef hifi_gpu_vk_VKTexture_h
 #define hifi_gpu_vk_VKTexture_h
 
+#include <unordered_map>
+
 #include "VKShared.h"
 
 #include "VKBackend.h"
@@ -212,6 +214,8 @@ protected:
         uint16_t height;
         size_t buffer_size;
         struct Mip {
+            uint16_t level;
+            uint8_t face;
             size_t offset;
             size_t size;
             uint32_t width;
@@ -293,7 +297,15 @@ protected:
 class VKStrictResourceTexture: public VKFixedAllocationTexture {
     friend class VKBackend;
 public:
+    struct StagingBuffer {
+        VkBuffer buffer { VK_NULL_HANDLE };
+        VkDeviceMemory memory { VK_NULL_HANDLE };
+    };
+
     void postTransfer(VKBackend &backend) override;
+    // Uploads the mip levels stored in the gpu::Texture since the last transfer (streamed KTX textures get
+    // their levels one at a time) and lets the sampler use them.
+    void transferNewMips(VKBackend &backend);
 
 protected:
     // VKTODO: how to handle mipmaps?
@@ -309,7 +321,14 @@ protected:
     void createTexture(VKBackend &backend) override;
     void transfer(VKBackend &backend) override;
     VkDescriptorImageInfo getDescriptorImageInfo() override;
+    VkImageSubresourceRange wholeImageRange() const;
+    void collectTransferData(uint16_t firstMip, uint16_t lastMip);
+    StagingBuffer recordTransfer(VKBackend &backend, VkCommandBuffer copyCmd);
+    void updateSamplerAndView(VKBackend &backend);
     TransferData _transferData{};
+    // The range of mip levels whose contents have been uploaded; the sampler and view are clamped to it.
+    uint16_t _populatedMinMip { 0 };
+    uint16_t _populatedMaxMip { 0 };
     //VkImage _vkImage { VK_NULL_HANDLE };
     VkImageView _vkImageView { VK_NULL_HANDLE };
     VkImageLayout _vkImageLayout {};
@@ -395,6 +414,9 @@ public:
     void releaseExternalTexture(); // Called on destructor and when new texture is set
     void setSource(GLuint source);
     void transferGL(VKBackend &backend);
+    // The Vulkan image is sized when the object is created; the gpu::Texture can be resized afterwards
+    // (the QML UI texture is, whenever the window changes size), in which case the backend replaces the object.
+    bool matchesGpuObjectSize() const { return _imageWidth == _gpuObject.getWidth() && _imageHeight == _gpuObject.getHeight(); }
 
 protected:
     Size size() const override { return _size; }
@@ -402,7 +424,7 @@ protected:
     void syncSampler(const Sampler& sampler) override {};
 
     //VmaAllocation _vmaAllocation;
-    VkDeviceMemory _sharedMemory;
+    VkDeviceMemory _sharedMemory { VK_NULL_HANDLE };
     size_t _sharedMemorySize;
     const Size _size{ 0 }; // VKTODO: how is this used?
 
@@ -423,6 +445,37 @@ protected:
 #endif
     GLuint _openGLMemoryObject = 0;
     GLuint _openGLId = 0;
+    uint32_t _imageWidth { 0 };
+    uint32_t _imageHeight { 0 };
+#ifdef Q_OS_MAC
+    // macOS has two ways to get the OpenGL rendered QML texture into Vulkan:
+    //
+    // 1. Zero copy (preferred): the QML texture lives on an IOSurface (see gl/IOSurfaceTexture.h) and the
+    //    same surface is imported as a VkImage through VK_EXT_metal_objects. The QML texture cache rotates
+    //    through a small pool of textures, so one VkImage is kept per surface in _ioSurfaceImages and the
+    //    image view handed to the shader switches with the source texture.
+    // 2. Readback: MoltenVK has no exportable memory and Apple's OpenGL has no GL_EXT_memory_object, so
+    //    without IOSurfaces the texture is read back with glGetTexImage into a host visible staging buffer
+    //    and copied into _vkImage.
+    bool _usingIOSurface { false };
+    struct IOSurfaceImage {
+        void* surface { nullptr };  // IOSurfaceRef, retained through gl::retainIOSurface
+        VkImage image { VK_NULL_HANDLE };
+        VkDeviceMemory memory { VK_NULL_HANDLE };
+        VkImageView view { VK_NULL_HANDLE };
+        uint64_t lastUsed { 0 };
+    };
+    std::unordered_map<void*, IOSurfaceImage> _ioSurfaceImages;
+    uint64_t _ioSurfaceBindCounter { 0 };
+    // Takes ownership of the reference to `surface` obtained from gl::ioSurfaceForTexture.
+    void bindIOSurface(VKBackend& backend, void* surface);
+    void releaseIOSurfaceImages();
+
+    VkBuffer _stagingBuffer { VK_NULL_HANDLE };
+    VkDeviceMemory _stagingMemory { VK_NULL_HANDLE };
+    void* _stagingMapped { nullptr };
+    VkDeviceSize _stagingSize { 0 };
+#endif
     GLuint _openGLSourceId = 0;
 };
 

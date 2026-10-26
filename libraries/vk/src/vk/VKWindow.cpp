@@ -1,13 +1,15 @@
 //
 //  Created by Bradley Austin Davis on 2016/05/26
 //  Copyright 2013-2018 High Fidelity, Inc.
-//  Copyright 2022-2025 Overte e.V.
+//  Copyright 2022-2026 Overte e.V.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 //  Contains parts of Vulkan Samples, Copyright (c) 2018, Sascha Willems, distributed on MIT License.
 //
+
+#include "gl/Context.h"
 
 #include <QtCore/QCoreApplication>
 #include <QGuiApplication>
@@ -17,14 +19,29 @@
 #include <QtCore/QDebug>
 #include <QtPlatformHeaders/QXcbWindowFunctions>
 #include <qpa/qplatformnativeinterface.h>
-#include <QtX11Extras/QX11Info>
+#ifdef Q_OS_LINUX
+    #include <QtX11Extras/QX11Info>
+#endif
 #include <QWidget>
+#include <QWindow>
+#include <QOpenGLContext>
 
 #include "VKWindow.h"
 #include "VKWidget.h"
 #include "Config.h"
 #include "VulkanSwapChain.h"
 #include "Context.h"
+
+// MoltenVK only reports the FIFO and IMMEDIATE present modes, never MAILBOX, so a swapchain created
+// without vsync ends up in IMMEDIATE mode on macOS and tears. FIFO is the only tear-free mode there.
+#ifdef Q_OS_MAC
+static const bool SWAPCHAIN_VSYNC = true;
+#else
+static const bool SWAPCHAIN_VSYNC = false;
+#endif
+#ifdef Q_OS_MAC
+	#include "layerForWindow.h"
+#endif
 
 VKWindow::VKWindow(QScreen* screen) : QWindow(screen) {
     vks::Context::get().registerWindow(this);
@@ -52,7 +69,13 @@ void VKWindow::createSurface() {
 #ifdef WIN32
     // TODO
     _surface = _context.instance.createWin32SurfaceKHR({ {}, GetModuleHandle(NULL), (HWND)winId() });
-#else
+#elif __APPLE__
+    setSurfaceType(QSurface::MetalSurface);
+
+    Q_ASSERT(winId());
+    qDebug() << "VKWindow::createSurface winId:" << winId();
+    _swapchain.initSurface(layerForWindow(this)); // pointer to the CAMetalLayer to render to.
+#else  // Linux
     setSurfaceType(QSurface::VulkanSurface);
     //VkXcbSurfaceCreateInfoKHR surfaceCreateInfo{};
     //dynamic_cast<QGuiApplication*>(QGuiApplication::instance())->platformNativeInterface()->connection();
@@ -74,7 +97,7 @@ void VKWindow::createSwapchain() {
         auto qsize = size();
         _extent = VkExtent2D{(uint32_t)qsize.width(), (uint32_t)qsize.height()};
     }
-    _swapchain.create(&_extent.width, &_extent.height, false, false);
+    _swapchain.create(&_extent.width, &_extent.height, SWAPCHAIN_VSYNC, false);
 
     createCommandBuffers();
     setupRenderPass();
@@ -366,6 +389,18 @@ bool VKWindow::event(QEvent* event) {
     return QWindow::event(event);
 }
 
+QString VKWindow::describeSurface() const {
+    QString description = QString("window %1x%2 dpr %3 swapchain %4x%5")
+        .arg(width()).arg(height()).arg(devicePixelRatio()).arg(_extent.width).arg(_extent.height);
+#ifdef Q_OS_MAC
+    auto metrics = metalLayerMetrics(const_cast<VKWindow*>(this));
+    description += QString(" layer scale %1 bounds %2x%3 drawable %4x%5")
+        .arg(metrics.contentsScale).arg(metrics.boundsWidth).arg(metrics.boundsHeight)
+        .arg(metrics.drawableWidth).arg(metrics.drawableHeight);
+#endif
+    return description;
+}
+
 void VKWindow::resizeFramebuffer() {
     auto qsize = size();
     _extent = VkExtent2D{
@@ -377,7 +412,7 @@ void VKWindow::resizeFramebuffer() {
     }
     //vkQueueWaitIdle();
     VK_CHECK_RESULT(vkDeviceWaitIdle(_context.device->logicalDevice));
-    _swapchain.create(&_extent.width, &_extent.height, false, false);
+    _swapchain.create(&_extent.width, &_extent.height, SWAPCHAIN_VSYNC, false);
     // TODO: add an assert here to see if width and height changed?
     setupDepthStencil();
     setupFramebuffers();

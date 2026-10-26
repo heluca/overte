@@ -84,7 +84,9 @@ int main(int argc, const char* argv[]) {
             hifi::properties::setGraphicsAPI(hifi::properties::GraphicsAPI::GL45);
         }
     } else {
-#ifdef Q_OS_MAC
+#if defined(Q_OS_MAC) && defined(USE_GL)
+        // Apple's OpenGL implementation stops at 4.1. The Vulkan (MoltenVK) backend needs the
+        // glsl450 shader dialect, so only default to GL41 on the OpenGL backend.
         hifi::properties::setGraphicsAPI(hifi::properties::GraphicsAPI::GL41);
 #elif defined(Q_OS_ANDROID) || (defined(Q_OS_LINUX) && defined(__aarch64__))
         // Use GLES on Android and aarch64 Linux

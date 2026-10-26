@@ -16,6 +16,7 @@
 #include <QtCore/QThread>
 #include <NumericalConstants.h>
 #include <gl/GLHelpers.h>
+#include <gl/IOSurfaceTexture.h>
 
 #include "VKBackend.h"
 #include "vk/Allocation.h"
@@ -296,6 +297,10 @@ VkDescriptorImageInfo VKAttachmentTexture::getDescriptorImageInfo() {
 };
 
 
+// A streamed KTX texture only has its smallest mip levels stored in the gpu::Texture when the backend first sees
+// it; the larger ones are assigned one at a time as they are downloaded or read from the cache. The image is
+// created with every level so that they can be uploaded in place as they arrive (transferNewMips), and the
+// sampler and view are clamped to the levels uploaded so far so that the others are never read.
 void VKStrictResourceTexture::createTexture(VKBackend &backend) {
     VkImageCreateInfo imageCI = vks::initializers::imageCreateInfo();
     imageCI.imageType = VK_IMAGE_TYPE_2D;
@@ -303,6 +308,7 @@ void VKStrictResourceTexture::createTexture(VKBackend &backend) {
     imageCI.extent.width = _gpuObject.getWidth();
     imageCI.extent.height = _gpuObject.getHeight();
     imageCI.extent.depth = 1;
+    imageCI.mipLevels = _gpuObject.getNumMips();
     imageCI.arrayLayers = _gpuObject.isArray() ? _gpuObject.getNumSlices() : 1;
     imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
     imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -312,80 +318,14 @@ void VKStrictResourceTexture::createTexture(VKBackend &backend) {
         imageCI.arrayLayers = 6;
     }
 
-    // We need to lock mip data here so that it doesn't change or get deleted before transfer
-
     _transferData.mipLevels = _gpuObject.getNumMips();
     _transferData.width = _gpuObject.getWidth();
     _transferData.height = _gpuObject.getHeight();
-
-    _transferData.buffer_size = 0;
-
-    for (uint16_t sourceMip = 0; sourceMip < _transferData.mipLevels; ++sourceMip) {
-        if (!_gpuObject.isStoredMipFaceAvailable(sourceMip)) {
-            continue;
-        }
-        _transferData.mips.emplace_back();
-        //VKTODO: error out if needed
-        size_t face_count = 1;
-        if (_gpuObject.getType() == Texture::TEX_CUBE) {
-            Q_ASSERT(_gpuObject.getNumFaces() == 6);
-            face_count = 6;
-        } else {
-            Q_ASSERT(_gpuObject.getNumFaces() == 1);
-        }
-
-        // VKTODO: move to a separate function and reuse.
-        // Is conversion from RGB to RGBA needed?
-        bool needsAddingAlpha = false;
-        bool needsBGRToRGB = false;
-        auto storedFormat = _gpuObject.getStoredMipFormat();
-        auto texelFormat = _gpuObject.getTexelFormat();
-        if ((storedFormat.getSemantic() == gpu::BGRA || storedFormat.getSemantic() == gpu::SBGRA) &&
-            !(texelFormat.getSemantic() == gpu::BGRA || texelFormat.getSemantic() == gpu::SBGRA)) {
-            needsBGRToRGB = true;
-        }
-        auto storedVkFormat = evalTexelFormatInternal(_gpuObject.getStoredMipFormat(), backend.getContext());
-        auto texelVkFormat = evalTexelFormatInternal(_gpuObject.getTexelFormat(), backend.getContext());
-        if (storedFormat.getDimension() != texelFormat.getDimension()) {
-            if (storedFormat.getDimension() == gpu::VEC3 && texelFormat.getDimension() == gpu::VEC4) {
-                // It's best to make sure that this is not happening in unexpected cases and causing bugs
-                Q_ASSERT((storedVkFormat == VK_FORMAT_R8G8B8_UNORM && texelVkFormat == VK_FORMAT_R8G8B8A8_UNORM) ||
-                         (storedVkFormat == VK_FORMAT_R8G8B8_UNORM && texelVkFormat == VK_FORMAT_R8G8B8A8_SRGB));
-                needsAddingAlpha = true;
-            } else {
-                qDebug() << "Format mismatch, stored: " << storedVkFormat << " texel: " << texelVkFormat;
-                Q_ASSERT(false);
-            }
-        }
-
-        for (size_t face = 0; face < face_count; face++) {
-            auto dim = _gpuObject.evalMipDimensions(sourceMip);
-            auto mipData = _gpuObject.accessStoredMipFace(sourceMip, face);  // VKTODO: only one face for now
-            auto mipSize = _gpuObject.getStoredMipFaceSize(sourceMip, face);
-            if (mipData) {
-                TransferData::Mip mip{};
-                mip.offset = _transferData.buffer_size;
-                mip.size = mipSize;
-                mip.data = mipData;
-                mip.width = dim.x;
-                mip.height = dim.y;
-                mip.needsAddingAlpha = needsAddingAlpha;
-                mip.needsBGRToRGB = needsBGRToRGB;
-                if (needsAddingAlpha) {
-                    Q_ASSERT(mipSize % 3 == 0);
-                    _transferData.buffer_size += mipSize / 3 * 4;
-                } else {
-                    _transferData.buffer_size += mipSize;
-                }
-                _transferData.mips.back().push_back(mip);
-            } else {
-                qCDebug(gpu_vk_logging) << "Missing mipData level=" << sourceMip
-                                        << " face=" << 0 /*(int)face*/ << " for texture " << _gpuObject.source().c_str();
-            }
-        }
-    }
-
-    imageCI.mipLevels = _transferData.mips.size();
+    collectTransferData(0, _transferData.mipLevels - 1);
+    // VKBackend::syncGPUObject only creates the object once at least one mip level is stored.
+    Q_ASSERT(!_transferData.mips.empty());
+    _populatedMinMip = _transferData.mips.front().front().level;
+    _populatedMaxMip = _transferData.mips.back().front().level;
 
     VmaAllocationCreateInfo allocationCI = {};
     allocationCI.usage = VMA_MEMORY_USAGE_GPU_ONLY;
@@ -393,117 +333,195 @@ void VKStrictResourceTexture::createTexture(VKBackend &backend) {
     VK_CHECK_RESULT(vmaCreateImage(vks::Allocation::getAllocator(), &imageCI, &allocationCI, &_vkImage, &_vmaAllocation, nullptr));
 }
 
-void VKStrictResourceTexture::transfer(VKBackend &backend) {
-    VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
-    VkMemoryRequirements memReqs;
+VkImageSubresourceRange VKStrictResourceTexture::wholeImageRange() const {
+    VkImageSubresourceRange subresourceRange = {};
+    subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    subresourceRange.baseMipLevel = 0;
+    subresourceRange.levelCount = _gpuObject.getNumMips();
+    subresourceRange.baseArrayLayer = 0;
+    subresourceRange.layerCount = (_gpuObject.getType() == Texture::TEX_CUBE) ? 6 : 1;
+    return subresourceRange;
+}
+
+// Records the staging buffer layout of the mip levels in [firstMip, lastMip] whose contents are stored in the
+// gpu::Texture, and holds on to their data until recordTransfer() has copied it.
+void VKStrictResourceTexture::collectTransferData(uint16_t firstMip, uint16_t lastMip) {
+    _transferData.mips.clear();
+    _transferData.buffer_size = 0;
+
+    uint8_t faceCount = 1;
+    if (_gpuObject.getType() == Texture::TEX_CUBE) {
+        Q_ASSERT(_gpuObject.getNumFaces() == 6);
+        faceCount = 6;
+    } else {
+        Q_ASSERT(_gpuObject.getNumFaces() == 1);
+    }
+
+    // Is conversion from RGB to RGBA or from BGRA to RGBA needed?
+    bool needsAddingAlpha = false;
+    bool needsBGRToRGB = false;
+    auto storedFormat = _gpuObject.getStoredMipFormat();
+    auto texelFormat = _gpuObject.getTexelFormat();
+    if ((storedFormat.getSemantic() == gpu::BGRA || storedFormat.getSemantic() == gpu::SBGRA) &&
+        !(texelFormat.getSemantic() == gpu::BGRA || texelFormat.getSemantic() == gpu::SBGRA)) {
+        needsBGRToRGB = true;
+    }
+    if (storedFormat.getDimension() != texelFormat.getDimension()) {
+        auto backend = _backend.lock();
+        auto storedVkFormat = evalTexelFormatInternal(storedFormat, backend->getContext());
+        auto texelVkFormat = evalTexelFormatInternal(texelFormat, backend->getContext());
+        if (storedFormat.getDimension() == gpu::VEC3 && texelFormat.getDimension() == gpu::VEC4) {
+            // It's best to make sure that this is not happening in unexpected cases and causing bugs
+            Q_ASSERT((storedVkFormat == VK_FORMAT_R8G8B8_UNORM && texelVkFormat == VK_FORMAT_R8G8B8A8_UNORM) ||
+                     (storedVkFormat == VK_FORMAT_R8G8B8_UNORM && texelVkFormat == VK_FORMAT_R8G8B8A8_SRGB));
+            needsAddingAlpha = true;
+        } else {
+            qDebug() << "Format mismatch, stored: " << storedVkFormat << " texel: " << texelVkFormat;
+            Q_ASSERT(false);
+        }
+    }
+
+    for (uint16_t sourceMip = firstMip; sourceMip <= lastMip; ++sourceMip) {
+        if (!_gpuObject.isStoredMipFaceAvailable(sourceMip)) {
+            continue;
+        }
+        auto dim = _gpuObject.evalMipDimensions(sourceMip);
+        std::vector<TransferData::Mip> faces;
+        for (uint8_t face = 0; face < faceCount; face++) {
+            auto mipData = _gpuObject.accessStoredMipFace(sourceMip, face);
+            if (!mipData) {
+                qCDebug(gpu_vk_logging) << "Missing mipData level=" << sourceMip << " face=" << (int)face
+                                        << " for texture " << _gpuObject.source().c_str();
+                continue;
+            }
+            TransferData::Mip mip{};
+            mip.level = sourceMip;
+            mip.face = face;
+            mip.offset = _transferData.buffer_size;
+            mip.size = _gpuObject.getStoredMipFaceSize(sourceMip, face);
+            mip.data = mipData;
+            mip.width = dim.x;
+            mip.height = dim.y;
+            mip.needsAddingAlpha = needsAddingAlpha;
+            mip.needsBGRToRGB = needsBGRToRGB;
+            if (needsAddingAlpha) {
+                Q_ASSERT(mip.size % 3 == 0);
+                _transferData.buffer_size += mip.size / 3 * 4;
+            } else {
+                _transferData.buffer_size += mip.size;
+            }
+            faces.push_back(mip);
+        }
+        if (!faces.empty()) {
+            _transferData.mips.push_back(std::move(faces));
+        }
+    }
+}
+
+// Copies the mips collected by collectTransferData() into a host visible staging buffer and records their upload
+// into the image, whose levels must be in VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL. The staging buffer is returned so
+// that it can be destroyed once the command buffer has executed.
+VKStrictResourceTexture::StagingBuffer VKStrictResourceTexture::recordTransfer(VKBackend &backend, VkCommandBuffer copyCmd) {
     auto device = backend.getContext().device;
-
-    // From VKS
-    // Use a separate command buffer for texture loading
-    VkCommandBuffer copyCmd = device->createCommandBuffer(device->transferCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
-
-    // Create a host-visible staging buffer that contains the raw image data
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingMemory;
+    StagingBuffer staging{};
 
     VkBufferCreateInfo bufferCreateInfo = vks::initializers::bufferCreateInfo();
     // This buffer is used as a transfer source for the buffer copy
     bufferCreateInfo.size = _transferData.buffer_size;
     bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VK_CHECK_RESULT(vkCreateBuffer(device->logicalDevice, &bufferCreateInfo, nullptr, &stagingBuffer));
+    VK_CHECK_RESULT(vkCreateBuffer(device->logicalDevice, &bufferCreateInfo, nullptr, &staging.buffer));
 
     // Get memory requirements for the staging buffer (alignment, memory type bits)
-    vkGetBufferMemoryRequirements(device->logicalDevice, stagingBuffer, &memReqs);
-
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(device->logicalDevice, staging.buffer, &memReqs);
+    VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
     memAllocInfo.allocationSize = memReqs.size;
     // Get memory type index for a host visible buffer
     // VKTODO: remove host coherent and synchronize by a command for better performance.
     memAllocInfo.memoryTypeIndex = device->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &stagingMemory));
-    VK_CHECK_RESULT(vkBindBufferMemory(device->logicalDevice, stagingBuffer, stagingMemory, 0));
+    VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &staging.memory));
+    VK_CHECK_RESULT(vkBindBufferMemory(device->logicalDevice, staging.buffer, staging.memory, 0));
 
     // Copy texture data into staging buffer
     uint8_t *data;
-    VK_CHECK_RESULT(vkMapMemory(device->logicalDevice, stagingMemory, 0, memReqs.size, 0, (void **)&data));
+    VK_CHECK_RESULT(vkMapMemory(device->logicalDevice, staging.memory, 0, memReqs.size, 0, (void **)&data));
+    std::vector<VkBufferImageCopy> bufferCopyRegions;
     for (auto &mip : _transferData.mips) {
         for (auto &face : mip) {
+            const uint8_t* source = face.data->data();
+            uint8_t* dest = data + face.offset;
             if (face.needsAddingAlpha) {
                 // VKTODO: adding alpha and swapping channels at the same time
                 Q_ASSERT(!face.needsBGRToRGB);
-                size_t pixels = face.size/3;
+                size_t pixels = face.size / 3;
                 for (size_t i = 0; i < pixels; i++) {
-                    size_t sourcePos = face.offset + i * 3;
+                    size_t sourcePos = i * 3;
                     size_t destPos = i * 4;
-                    data[destPos] = face.data->data()[face.offset + sourcePos];
-                    data[destPos + 1] = face.data->data()[face.offset + sourcePos + 1];
-                    data[destPos + 2] = face.data->data()[face.offset + sourcePos + 2];
-                    data[destPos + 3] = 255;
+                    dest[destPos] = source[sourcePos];
+                    dest[destPos + 1] = source[sourcePos + 1];
+                    dest[destPos + 2] = source[sourcePos + 2];
+                    dest[destPos + 3] = 255;
                 }
             } else if (face.needsBGRToRGB) {
                 Q_ASSERT(face.size % 4 == 0);
-                size_t pixels = face.size/4;
+                size_t pixels = face.size / 4;
                 for (size_t i = 0; i < pixels; i++) {
-                    size_t sourcePos = i * 4;
-                    size_t destPos = face.offset + i * 4;
-                    data[destPos] = face.data->data()[sourcePos + 2];
-                    data[destPos + 1] = face.data->data()[sourcePos + 1];
-                    data[destPos + 2] = face.data->data()[sourcePos];
-                    data[destPos + 3] = face.data->data()[sourcePos + 3];
+                    size_t pos = i * 4;
+                    dest[pos] = source[pos + 2];
+                    dest[pos + 1] = source[pos + 1];
+                    dest[pos + 2] = source[pos];
+                    dest[pos + 3] = source[pos + 3];
                 }
             } else {
-                memcpy(data + face.offset, face.data->data(), face.data->size());
+                memcpy(dest, source, face.size);
             }
-        }
-    }
-    vkUnmapMemory(device->logicalDevice, stagingMemory);
 
-    std::vector<VkBufferImageCopy> bufferCopyRegions;
-
-    for (size_t mipLevel = 0; mipLevel < _transferData.mips.size(); mipLevel++) {
-        for (size_t face = 0; face < _transferData.mips[mipLevel].size(); face++) {
             VkBufferImageCopy bufferCopyRegion = {};
             bufferCopyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            bufferCopyRegion.imageSubresource.mipLevel = mipLevel;
-            bufferCopyRegion.imageSubresource.baseArrayLayer = face;
+            bufferCopyRegion.imageSubresource.mipLevel = face.level;
+            bufferCopyRegion.imageSubresource.baseArrayLayer = face.face;
             bufferCopyRegion.imageSubresource.layerCount = 1;
-            bufferCopyRegion.imageExtent.width = _transferData.mips[mipLevel][face].width;
-            bufferCopyRegion.imageExtent.height = _transferData.mips[mipLevel][face].height;
+            bufferCopyRegion.imageExtent.width = face.width;
+            bufferCopyRegion.imageExtent.height = face.height;
             bufferCopyRegion.imageExtent.depth = 1;
-            bufferCopyRegion.bufferOffset = _transferData.mips[mipLevel][face].offset;
+            bufferCopyRegion.bufferOffset = face.offset;
             bufferCopyRegions.push_back(bufferCopyRegion);
         }
     }
+    vkUnmapMemory(device->logicalDevice, staging.memory);
 
-    // Create optimal tiled target image
-    VkImageCreateInfo imageCreateInfo = vks::initializers::imageCreateInfo();
-    imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageCreateInfo.format = evalTexelFormatInternal(_gpuObject.getTexelFormat(), backend.getContext());
-    imageCreateInfo.mipLevels = _transferData.mips.size();
-    imageCreateInfo.arrayLayers = 1;
-    imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageCreateInfo.extent = { _transferData.width, _transferData.height, 1 };
-    imageCreateInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
-    // Ensure that the TRANSFER_DST bit is set for staging
-    if (!(imageCreateInfo.usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT))
-    {
-        imageCreateInfo.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    }
+    // Copy mip levels from staging buffer
+    vkCmdCopyBufferToImage(
+        copyCmd,
+        staging.buffer,
+        _vkImage,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        static_cast<uint32_t>(bufferCopyRegions.size()),
+        bufferCopyRegions.data()
+    );
 
-    VkImageSubresourceRange subresourceRange = {};
-    subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    subresourceRange.baseMipLevel = 0;
-    subresourceRange.levelCount = _transferData.mips.size();
-    if (_gpuObject.getType() == Texture::TEX_CUBE) {
-        subresourceRange.layerCount = 6;
-    }else{
-        subresourceRange.layerCount = 1;
-    }
+    // The stored mips have been copied to the staging buffer, so they no longer need to be held.
+    _transferData.mips.clear();
+    return staging;
+}
+
+template <typename Device>
+static void destroyStagingBuffer(const Device& device, const VKStrictResourceTexture::StagingBuffer& staging) {
+    vkDestroyBuffer(device->logicalDevice, staging.buffer, nullptr);
+    vkFreeMemory(device->logicalDevice, staging.memory, nullptr);
+}
+
+void VKStrictResourceTexture::transfer(VKBackend &backend) {
+    auto device = backend.getContext().device;
+
+    // From VKS
+    // Use a separate command buffer for texture loading
+    VkCommandBuffer copyCmd = device->createCommandBuffer(device->transferCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+    // Every level is transitioned, including the ones that have no contents yet, so that the whole image ends up
+    // in the layout the descriptors declare.
+    VkImageSubresourceRange subresourceRange = wholeImageRange();
 
     // Image barrier for optimal image (target)
     // Optimal image will be used as destination for the copy
@@ -518,15 +536,7 @@ void VKStrictResourceTexture::transfer(VKBackend &backend) {
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-    // Copy mip levels from staging buffer
-    vkCmdCopyBufferToImage(
-        copyCmd,
-        stagingBuffer,
-        _vkImage,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        bufferCopyRegions.size(),
-        bufferCopyRegions.data()
-    );
+    auto staging = recordTransfer(backend, copyCmd);
 
     // Change texture image layout to shader read after all mip levels have been copied
     // The barrier command needs to be run on both transfer and graphics queues. Only then image layout changes.
@@ -545,8 +555,7 @@ void VKStrictResourceTexture::transfer(VKBackend &backend) {
     device->flushCommandBuffer(copyCmd, backend.getContext().transferQueue, device->transferCommandPool);
 
     // Clean up staging resources
-    vkDestroyBuffer(device->logicalDevice, stagingBuffer, nullptr);
-    vkFreeMemory(device->logicalDevice, stagingMemory, nullptr);
+    destroyStagingBuffer(device, staging);
 }
 
 void VKStrictResourceTexture::postTransfer(VKBackend &backend) {
@@ -554,21 +563,12 @@ void VKStrictResourceTexture::postTransfer(VKBackend &backend) {
     // VKTODO: in the future this needs to be streamlined as a part of frame command buffer.
     VkCommandBuffer graphicsCmd = device->createCommandBuffer(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
 
-    VkImageSubresourceRange subresourceRange = {};
-    subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    subresourceRange.baseMipLevel = 0;
-    subresourceRange.levelCount = _transferData.mips.size();
-    if (_gpuObject.getType() == Texture::TEX_CUBE) {
-        subresourceRange.layerCount = 6;
-    }else{
-        subresourceRange.layerCount = 1;
-    }
     vks::tools::setImageLayout(
         graphicsCmd,
         _vkImage,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        subresourceRange,
+        wholeImageRange(),
         device->queueFamilyIndices.transfer,
         device->queueFamilyIndices.graphics,
         VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -577,6 +577,76 @@ void VKStrictResourceTexture::postTransfer(VKBackend &backend) {
     device->flushCommandBuffer(graphicsCmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
     // Image is ready to use now.
     _vkImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    updateSamplerAndView(backend);
+}
+
+// Uploads the mip levels that have been stored in the gpu::Texture since the last transfer, then lets the
+// sampler use them.
+void VKStrictResourceTexture::transferNewMips(VKBackend &backend) {
+    const uint16_t minAvailableMip = _gpuObject.minAvailableMipLevel();
+    if (minAvailableMip >= _populatedMinMip) {
+        return;
+    }
+    collectTransferData(minAvailableMip, _populatedMinMip - 1);
+    if (_transferData.mips.empty()) {
+        return;
+    }
+    const uint16_t firstMip = _transferData.mips.front().front().level;
+
+    auto device = backend.getContext().device;
+    // The levels being written are below the sampler's minimum LOD, so no frame in flight reads them; doing the
+    // whole upload on the graphics queue also avoids handing the image back and forth between queue families.
+    VkCommandBuffer copyCmd = device->createCommandBuffer(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+    VkImageSubresourceRange subresourceRange = wholeImageRange();
+    subresourceRange.baseMipLevel = firstMip;
+    subresourceRange.levelCount = _populatedMinMip - firstMip;
+
+    vks::tools::setImageLayout(
+        copyCmd,
+        _vkImage,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        subresourceRange,
+        device->queueFamilyIndices.graphics,
+        device->queueFamilyIndices.graphics,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+    auto staging = recordTransfer(backend, copyCmd);
+
+    vks::tools::setImageLayout(
+        copyCmd,
+        _vkImage,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        subresourceRange,
+        device->queueFamilyIndices.graphics,
+        device->queueFamilyIndices.graphics,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+
+    device->flushCommandBuffer(copyCmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
+    destroyStagingBuffer(device, staging);
+
+    _populatedMinMip = firstMip;
+    updateSamplerAndView(backend);
+}
+
+// (Re)creates the sampler and image view so that only the levels in [_populatedMinMip, _populatedMaxMip] can be
+// sampled: the sampler's LOD range starts at the first populated level and the view ends at the last one.
+void VKStrictResourceTexture::updateSamplerAndView(VKBackend &backend) {
+    auto device = backend.getContext().device;
+    auto &recycler = backend.getContext().recycler;
+    if (_vkSampler) {
+        recycler.trashVkSampler(_vkSampler);
+        _vkSampler = VK_NULL_HANDLE;
+    }
+    if (_vkImageView) {
+        recycler.trashVkImageView(_vkImageView);
+        _vkImageView = VK_NULL_HANDLE;
+    }
+    const uint32_t levelCount = _populatedMaxMip + 1;
 
     // Create sampler
     VkSamplerCreateInfo samplerCreateInfo = {};
@@ -589,8 +659,8 @@ void VKStrictResourceTexture::postTransfer(VKBackend &backend) {
     samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerCreateInfo.mipLodBias = 0.0f;
     samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
-    samplerCreateInfo.minLod = 0.0f;
-    samplerCreateInfo.maxLod = static_cast<float>(_transferData.mips.size());//1.0f;
+    samplerCreateInfo.minLod = static_cast<float>(_populatedMinMip);
+    samplerCreateInfo.maxLod = static_cast<float>(levelCount);
     samplerCreateInfo.maxAnisotropy = 1.0f;
     VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
 
@@ -601,7 +671,7 @@ void VKStrictResourceTexture::postTransfer(VKBackend &backend) {
     viewCreateInfo.viewType = getVKTextureType(_gpuObject);
     viewCreateInfo.format = evalTexelFormatInternal(_gpuObject.getTexelFormat(), backend.getContext());
     viewCreateInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    viewCreateInfo.subresourceRange.levelCount = _transferData.mips.size();
+    viewCreateInfo.subresourceRange.levelCount = levelCount;
     if (_gpuObject.getType() == Texture::TEX_CUBE) {
         viewCreateInfo.subresourceRange.layerCount = 6;
     } else {
@@ -625,12 +695,25 @@ VKStrictResourceTexture::~VKStrictResourceTexture() {
 void VKExternalTexture::createTexture(VKBackend &backend) {
     auto device = backend.getContext().device;
 
+#ifdef Q_OS_MAC
+    if (backend.getContext().metalObjectsEnabled && ::gl::useIOSurfaceTextures()) {
+        // Zero copy path: images are created per IOSurface in bindIOSurface, nothing fixed to allocate here.
+        _usingIOSurface = true;
+        _imageWidth = _gpuObject.getWidth();
+        _imageHeight = _gpuObject.getHeight();
+        _vkImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        return;
+    }
+#endif
+
     VkImageCreateInfo imageCI = vks::initializers::imageCreateInfo();
     imageCI.imageType = VK_IMAGE_TYPE_2D;
     imageCI.format = evalTexelFormatInternal(_gpuObject.getTexelFormat(), backend.getContext());
     imageCI.extent.width = _gpuObject.getWidth();
     imageCI.extent.height = _gpuObject.getHeight();
     imageCI.extent.depth = 1;
+    _imageWidth = imageCI.extent.width;
+    _imageHeight = imageCI.extent.height;
     imageCI.arrayLayers = _gpuObject.isArray() ? _gpuObject.getNumSlices() : 1;
     imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -716,6 +799,7 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
 
     imageCI.mipLevels = 1;
 
+#ifndef Q_OS_MAC
     VkExternalMemoryImageCreateInfo externalMemoryImageCI {};
     externalMemoryImageCI.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
 #ifdef WIN32
@@ -724,6 +808,7 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
     externalMemoryImageCI.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
 #endif
     imageCI.pNext = &externalMemoryImageCI;
+#endif
 
     VK_CHECK_RESULT(vkCreateImage(device->logicalDevice, &imageCI, nullptr, &_vkImage));
 
@@ -761,10 +846,17 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
     memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     memoryAllocateInfo.allocationSize = memoryRequirements2.memoryRequirements.size;
     memoryAllocateInfo.memoryTypeIndex = device->getMemoryType(memoryRequirements2.memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+#ifdef Q_OS_MAC
+    // Plain device memory: the image is filled from a staging buffer instead of being shared with OpenGL.
+    memoryAllocateInfo.pNext = nullptr;
+#else
     memoryAllocateInfo.pNext = &exportMemoryAllocateInfo;
+#endif
 
     VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memoryAllocateInfo, nullptr, &_sharedMemory));
-#ifdef WIN32
+#if defined(Q_OS_MAC)
+    // Nothing to export.
+#elif defined(WIN32)
     VkMemoryGetWin32HandleInfoKHR memoryGetWin32HandleInfoKHR {};
     memoryGetWin32HandleInfoKHR.sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
     memoryGetWin32HandleInfoKHR.memory = _sharedMemory,
@@ -802,7 +894,12 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT);
 
+#ifdef Q_OS_MAC
+    // Fully transparent until the first UI frame is read back, so the HUD does not tint the scene.
+    VkClearColorValue color = { .float32 = {0.0, 0.0, 0.0, 0.0} };
+#else
     VkClearColorValue color = { .float32 = {0.5, 0.0, 0.0} };
+#endif
     VkImageSubresourceRange imageSubresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     vkCmdClearColorImage(transferCmd, _vkImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &imageSubresourceRange);
 
@@ -821,6 +918,240 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
 
     device->flushCommandBuffer(transferCmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
 }
+
+#ifdef Q_OS_MAC
+
+void VKExternalTexture::initGL(gpu::vk::VKBackend& backend) {
+    if (_usingIOSurface) {
+        return;
+    }
+    // No OpenGL side objects are needed: the source texture is read back with glGetTexImage.
+    // Create the persistently mapped, host visible staging buffer used for the readback.
+    auto device = backend.getContext().device;
+    Q_ASSERT(evalTexelFormatInternal(_gpuObject.getTexelFormat(), backend.getContext()) == VK_FORMAT_R8G8B8A8_UNORM);
+    _stagingSize = (VkDeviceSize)_gpuObject.getWidth() * _gpuObject.getHeight() * 4;
+
+    VkBufferCreateInfo bufferCreateInfo = vks::initializers::bufferCreateInfo();
+    bufferCreateInfo.size = _stagingSize;
+    bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VK_CHECK_RESULT(vkCreateBuffer(device->logicalDevice, &bufferCreateInfo, nullptr, &_stagingBuffer));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(device->logicalDevice, _stagingBuffer, &memReqs);
+    VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = device->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &_stagingMemory));
+    VK_CHECK_RESULT(vkBindBufferMemory(device->logicalDevice, _stagingBuffer, _stagingMemory, 0));
+    VK_CHECK_RESULT(vkMapMemory(device->logicalDevice, _stagingMemory, 0, memReqs.size, 0, &_stagingMapped));
+}
+
+void VKExternalTexture::transferGL(VKBackend &backend) {
+    if (!_openGLSourceId) {
+        return;
+    }
+    if (_usingIOSurface) {
+        uint32_t surfaceWidth = 0, surfaceHeight = 0;
+        void* surface = ::gl::ioSurfaceForTexture(_openGLSourceId, &surfaceWidth, &surfaceHeight);
+        if (!surface) {
+            qCWarning(gpu_vk_logging) << "VKExternalTexture::transferGL: OpenGL texture" << _openGLSourceId
+                                      << "is not IOSurface backed; the UI texture cannot be shared";
+            return;
+        }
+        if (surfaceWidth != _imageWidth || surfaceHeight != _imageHeight) {
+            // The QML surface was resized but the gpu::Texture has not caught up yet (or vice versa);
+            // the backend replaces this object once the sizes agree.
+            qCDebug(gpu_vk_logging) << "VKExternalTexture::transferGL: IOSurface is" << surfaceWidth << "x" << surfaceHeight
+                                    << "but the texture is" << _imageWidth << "x" << _imageHeight << "; waiting for resize";
+            ::gl::releaseIOSurface(surface);
+            return;
+        }
+        // bindIOSurface takes over the reference returned by ioSurfaceForTexture.
+        bindIOSurface(backend, surface);
+        return;
+    }
+    if (!_stagingMapped) {
+        return;
+    }
+    auto device = backend.getContext().device;
+
+    // Read the QML texture back from OpenGL. The caller has already issued glWaitSync on the fence that
+    // guards the source texture, and glGetTexImage blocks until the GPU has finished producing it.
+    GLint previousPackAlignment = 4;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, _openGLSourceId);
+    // glGetTexImage writes the whole source texture; never let it run past the staging buffer.
+    GLint sourceWidth = 0, sourceHeight = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &sourceWidth);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &sourceHeight);
+    if (sourceWidth == (GLint)_imageWidth && sourceHeight == (GLint)_imageHeight) {
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, _stagingMapped);
+    } else {
+        qCWarning(gpu_vk_logging) << "VKExternalTexture::transferGL: source texture is" << sourceWidth << "x" << sourceHeight
+                                  << "but the Vulkan image is" << _imageWidth << "x" << _imageHeight << "; skipping readback";
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+        return;
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+    ::gl::checkGLError("GL to VK readback");
+
+    // Copy the staging buffer into the image. The image stays in VK_IMAGE_LAYOUT_GENERAL, which is what
+    // getDescriptorImageInfo reports and what the shared-memory path on other platforms uses.
+    VkCommandBuffer copyCmd = device->createCommandBuffer(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+    VkImageSubresourceRange subresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    vks::tools::insertImageMemoryBarrier(
+        copyCmd,
+        _vkImage,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        subresourceRange);
+
+    VkBufferImageCopy region {};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    region.imageOffset = { 0, 0, 0 };
+    region.imageExtent = { _imageWidth, _imageHeight, 1 };
+    vkCmdCopyBufferToImage(copyCmd, _stagingBuffer, _vkImage, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+
+    vks::tools::insertImageMemoryBarrier(
+        copyCmd,
+        _vkImage,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        subresourceRange);
+
+    // VKTODO: fold this into the frame command buffer instead of a synchronous submit.
+    device->flushCommandBuffer(copyCmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
+}
+
+// Makes the VkImage wrapping `surface` the one sampled by the shader, creating it on first use.
+void VKExternalTexture::bindIOSurface(VKBackend& backend, void* surface) {
+    ++_ioSurfaceBindCounter;
+    auto existing = _ioSurfaceImages.find(surface);
+    if (existing != _ioSurfaceImages.end()) {
+        existing->second.lastUsed = _ioSurfaceBindCounter;
+        _vkImageView = existing->second.view;
+        // The cache entry already holds its own reference.
+        ::gl::releaseIOSurface(surface);
+        return;
+    }
+
+    auto device = backend.getContext().device;
+    auto& recycler = backend.getContext().recycler;
+    // The IOSurface is allocated as BGRA (the format both CGL and Metal accept); the shader still
+    // receives the channels in RGBA order, so no swizzle is needed.
+    const VkFormat format = VK_FORMAT_B8G8R8A8_UNORM;
+
+    IOSurfaceImage entry;
+    entry.surface = surface;
+    entry.lastUsed = _ioSurfaceBindCounter;
+
+    VkImportMetalIOSurfaceInfoEXT importInfo {};
+    importInfo.sType = VK_STRUCTURE_TYPE_IMPORT_METAL_IO_SURFACE_INFO_EXT;
+    importInfo.ioSurface = static_cast<IOSurfaceRef>(surface);
+
+    VkImageCreateInfo imageCI = vks::initializers::imageCreateInfo();
+    imageCI.pNext = &importInfo;
+    imageCI.imageType = VK_IMAGE_TYPE_2D;
+    imageCI.format = format;
+    imageCI.extent = { _imageWidth, _imageHeight, 1 };
+    imageCI.mipLevels = 1;
+    imageCI.arrayLayers = 1;
+    imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageCI.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkResult result = vkCreateImage(device->logicalDevice, &imageCI, nullptr, &entry.image);
+    if (result != VK_SUCCESS) {
+        qCWarning(gpu_vk_logging) << "VKExternalTexture::bindIOSurface: vkCreateImage failed:" << vks::tools::errorString(result).c_str();
+        return;
+    }
+
+    // MoltenVK backs the MTLTexture with the IOSurface itself, but Vulkan still requires memory to be bound.
+    VkMemoryRequirements memReqs {};
+    vkGetImageMemoryRequirements(device->logicalDevice, entry.image, &memReqs);
+    VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = device->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &entry.memory));
+    VK_CHECK_RESULT(vkBindImageMemory(device->logicalDevice, entry.image, entry.memory, 0));
+
+    VkImageViewCreateInfo viewCI = vks::initializers::imageViewCreateInfo();
+    viewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewCI.format = format;
+    viewCI.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    viewCI.image = entry.image;
+    VK_CHECK_RESULT(vkCreateImageView(device->logicalDevice, &viewCI, nullptr, &entry.view));
+
+    // Move the image to the layout getDescriptorImageInfo reports. Layouts are a formality on Metal, but
+    // keep the Vulkan side consistent with the readback path.
+    VkCommandBuffer cmd = device->createCommandBuffer(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+    vks::tools::setImageLayout(cmd, entry.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                               viewCI.subresourceRange, device->queueFamilyIndices.graphics, device->queueFamilyIndices.graphics,
+                               VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    device->flushCommandBuffer(cmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
+
+    // The cache entry keeps the reference handed to us by the caller.
+    _ioSurfaceImages[surface] = entry;
+    _vkImageView = entry.view;
+    if (_ioSurfaceImages.size() == 1) {
+        qCDebug(gpu_vk_logging) << "External texture" << _imageWidth << "x" << _imageHeight
+                               << "is shared with OpenGL through an IOSurface (zero copy)";
+    }
+
+    // The QML texture cache keeps a handful of textures per size; anything beyond that is a surface that
+    // was destroyed and whose address got reused, so drop the least recently bound entries.
+    const size_t MAX_CACHED_SURFACES = 8;
+    while (_ioSurfaceImages.size() > MAX_CACHED_SURFACES) {
+        auto oldest = _ioSurfaceImages.end();
+        for (auto it = _ioSurfaceImages.begin(); it != _ioSurfaceImages.end(); ++it) {
+            if (it->first != surface && (oldest == _ioSurfaceImages.end() || it->second.lastUsed < oldest->second.lastUsed)) {
+                oldest = it;
+            }
+        }
+        recycler.trashVkImageView(oldest->second.view);
+        recycler.trashVkImage(oldest->second.image);
+        recycler.trashVkDeviceMemory(oldest->second.memory);
+        ::gl::releaseIOSurface(oldest->first);
+        _ioSurfaceImages.erase(oldest);
+    }
+}
+
+void VKExternalTexture::releaseIOSurfaceImages() {
+    auto backend = _backend.lock();
+    if (!backend) {
+        return;
+    }
+    auto& recycler = backend->getContext().recycler;
+    for (auto& pair : _ioSurfaceImages) {
+        recycler.trashVkImageView(pair.second.view);
+        recycler.trashVkImage(pair.second.image);
+        recycler.trashVkDeviceMemory(pair.second.memory);
+        ::gl::releaseIOSurface(pair.first);
+    }
+    _ioSurfaceImages.clear();
+    if (_usingIOSurface) {
+        // The view belonged to one of the cached images; never hand it to the destructor twice.
+        _vkImageView = VK_NULL_HANDLE;
+    }
+}
+
+#else
 
 void VKExternalTexture::initGL(gpu::vk::VKBackend& backend) {
     glCreateMemoryObjectsEXT(1, &_openGLMemoryObject); // VKTODO: clean these up later
@@ -856,6 +1187,8 @@ void VKExternalTexture::transferGL(VKBackend &backend) {
     // VKTODO: generate mipmaps
 }
 
+#endif // Q_OS_MAC
+
 void VKExternalTexture::postTransfer(VKBackend &backend) {
     auto device = backend.getContext().device;
     // Create sampler
@@ -873,6 +1206,11 @@ void VKExternalTexture::postTransfer(VKBackend &backend) {
     samplerCreateInfo.maxLod = 0.0f;
     samplerCreateInfo.maxAnisotropy = 1.0f;
     VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
+
+    if (_vkImage == VK_NULL_HANDLE) {
+        // IOSurface mode: views are created per surface in bindIOSurface.
+        return;
+    }
 
     // Create image view
     VkImageViewCreateInfo viewCreateInfo = {};
@@ -916,18 +1254,39 @@ VKExternalTexture::~VKExternalTexture() {
     releaseExternalTexture();
     auto backend = _backend.lock();
     auto &recycler = backend->getContext().recycler;
-    recycler.trashVkImageView(_vkImageView);
+#ifdef Q_OS_MAC
+    releaseIOSurfaceImages();
+#endif
+    if (_vkImageView) {
+        recycler.trashVkImageView(_vkImageView);
+    }
     if (_vkSampler) {
         recycler.trashVkSampler(_vkSampler);
     }
-    recycler.trashVkImage(_vkImage);
-    recycler.trashVkDeviceMemory(_sharedMemory);
+    if (_vkImage) {
+        recycler.trashVkImage(_vkImage);
+    }
+    if (_sharedMemory) {
+        recycler.trashVkDeviceMemory(_sharedMemory);
+    }
+#ifdef Q_OS_MAC
+    if (_stagingBuffer) {
+        if (_stagingMapped) {
+            vkUnmapMemory(backend->getContext().device->logicalDevice, _stagingMemory);
+            _stagingMapped = nullptr;
+        }
+        recycler.trashVkBuffer(_stagingBuffer);
+        recycler.trashVkDeviceMemory(_stagingMemory);
+    }
+#endif
 }
 
 VkDescriptorImageInfo VKExternalTexture::getDescriptorImageInfo() {
     VkDescriptorImageInfo result {};
     result.sampler = _vkSampler;
-    result.imageLayout = _vkImageLayout;
+    // No view yet (IOSurface mode before the first surface was bound): report UNDEFINED so the backend
+    // substitutes its default texture instead of writing a null view into the descriptor set.
+    result.imageLayout = _vkImageView ? _vkImageLayout : VK_IMAGE_LAYOUT_UNDEFINED;
     result.imageView = _vkImageView;
     return result;
 }

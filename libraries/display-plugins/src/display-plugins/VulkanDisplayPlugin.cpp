@@ -2,7 +2,7 @@
 //  Created by dr Karol Suprynowicz on 2024/08/12
 //  Based on OpenGLDisplayPlugin.cpp, originally created by Bradley Austin Davis on 2015/05/29
 //  Copyright 2015 High Fidelity, Inc.
-//  Copyright 2025 Overte e.V.
+//  Copyright 2025-2026 Overte e.V.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
@@ -197,7 +197,10 @@ public:
             }
 
 #if defined(Q_OS_MAC)
-            _context->makeCurrent();
+            // The QML readback needs an OpenGL context on this thread. It must not be the window's context:
+            // making that current from a secondary thread while the window is being resized makes Qt call
+            // -[NSOpenGLContext update], which AppKit only allows on the main thread (it traps otherwise).
+            _glCanvas->makeCurrent();
 #endif
             // Execute the frame and present it to the display device.
             {
@@ -208,18 +211,28 @@ public:
                 //CHECK_GL_ERROR();
             }
 #if defined(Q_OS_MAC)
-            _context->doneCurrent();
+            _glCanvas->doneCurrent();
 #endif
 
             _refreshRateController->sleepThreadIfNeeded(this, currentPlugin->isHmd());
         }
 
         //_context->doneCurrent();
+#if defined(Q_OS_MAC)
+        delete _glCanvas;
+        _glCanvas = nullptr;
+#endif
         Lock lock(_mutex);
         //_context->moveToThread(qApp->thread()); // VKTODO: is this needed?
         _shutdown = false;
         _condition.notify_one();
     }
+
+#if defined(Q_OS_MAC)
+    // Offscreen OpenGL context used by this thread, shared with the window's context. Created on the main
+    // thread and moved here before the thread starts; destroyed at the end of run().
+    void setGLCanvas(OffscreenGLCanvas* canvas) { _glCanvas = canvas; }
+#endif
 
     void withOtherThreadContext(std::function<void()> f) {
         // Signal to the thread that there is work to be done on the main thread
@@ -259,6 +272,9 @@ private:
     std::queue<VulkanDisplayPlugin*> _newPluginQueue;
     vks::Context* _context { nullptr };
     std::shared_ptr<RefreshRateController> _refreshRateController { nullptr };
+#if defined(Q_OS_MAC)
+    OffscreenGLCanvas* _glCanvas { nullptr };
+#endif
 };
 
 bool VulkanDisplayPlugin::activate() {
@@ -296,7 +312,17 @@ bool VulkanDisplayPlugin::activate() {
         }
         //CHECK_GL_ERROR();
         widget->context()->doneCurrent();
+#if defined(Q_OS_MAC)
+        // The present thread gets an offscreen context in the window context's share group instead of the
+        // window context itself; see VulkanPresentThread::run for why.
+        auto presentCanvas = new OffscreenGLCanvas();
+        presentCanvas->setObjectName("VulkanPresentThreadContext");
+        presentCanvas->create(widget->context()->qglContext());
+        presentCanvas->moveToThreadWithContext(presentThread.get());
+        presentThread->setGLCanvas(presentCanvas);
+#else
         widget->context()->moveToThread(presentThread.get());
+#endif
 #ifdef USE_GL
 #else
         VKWidget *vkWidget = _container->getPrimaryWidget();
@@ -304,6 +330,7 @@ bool VulkanDisplayPlugin::activate() {
         _vkWindow->setVisible(true);
         _vkWindow->createSurface();
         _vkWindow->createSwapchain();
+        vkWidget->moveToThread(presentThread.get());
         _vkWindow->moveToThread(presentThread.get());
 #endif
         //_vkWindow->connectResizeTimer(presentThread.get());
@@ -755,9 +782,21 @@ void VulkanDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
             VK_CHECK_RESULT(vkCreateSemaphore(_vkWindow->_context.device->logicalDevice, &semaphoreCreateInfo, nullptr, &_vkWindow->_acquireCompleteSemaphore));
         }
 
-        if(_vkWindow->_swapchain.acquireNextImage(_vkWindow->_acquireCompleteSemaphore, &currentImageIndex) != VK_SUCCESS) {
-            qDebug() << "_vkWindow->_swapchain.acquireNextImage fail";
+        VkResult acquireResult = _vkWindow->_swapchain.acquireNextImage(_vkWindow->_acquireCompleteSemaphore, &currentImageIndex);
+        if (acquireResult != VK_SUCCESS) {
+            // Log the first few failures and then one in every few hundred, so a persistent failure
+            // (which shows as a black window) is diagnosable without flooding the log.
+            static uint64_t acquireFailures = 0;
+            const uint64_t ACQUIRE_FAILURE_LOG_INTERVAL = 300;
+            if (acquireFailures < 10 || acquireFailures % ACQUIRE_FAILURE_LOG_INTERVAL == 0) {
+                qCWarning(displayPlugins) << "Swapchain acquireNextImage failed:" << vks::tools::errorString(acquireResult).c_str()
+                                          << "(" << acquireFailures << "failures so far ) before recreate:" << _vkWindow->describeSurface();
+            }
+            acquireFailures++;
             _vkWindow->resizeFramebuffer(); //VKTODO: workaround
+            if (acquireFailures <= 10) {
+                qCWarning(displayPlugins) << "After recreate:" << _vkWindow->describeSurface();
+            }
         }
         if (currentImageIndex == UINT32_MAX) {
             refreshRateController->clockEndTime();
@@ -783,12 +822,17 @@ void VulkanDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
             });
             // Execute the frame rendering commands
             PROFILE_RANGE_EX(render, "execute", 0xff00ff00, frameId)
+#if !defined(Q_OS_MAC)
             auto context = _container->getPrimaryWidget()->context();
             context->moveToThread(QThread::currentThread());
             context->makeCurrent();
+#endif
+            // On macOS the present thread's own offscreen context is current (VulkanPresentThread::run).
             vkBackend->setDrawCommandBuffer(commandBuffer);
             _gpuContext->executeFrame(_currentFrame);
+#if !defined(Q_OS_MAC)
             context->doneCurrent();
+#endif
             _renderedFrameCount++;
         }
 
@@ -922,18 +966,21 @@ void VulkanDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
             VkFence frameFence;
             vkCreateFence(vkDevice, &fenceCI, nullptr, &frameFence);
             vkQueueSubmit(vkBackend->getContext().graphicsQueue, 1, &submitInfo, frameFence);
-            if (_vkWindow->_previousFrameFence != VK_NULL_HANDLE) {
-                VK_CHECK_RESULT(vkWaitForFences(vkDevice, 1, &frameFence, VK_TRUE, DEFAULT_FENCE_TIMEOUT));
-                vkDestroyFence(vkDevice, frameFence, nullptr);
-            }
+            // Rendering is synchronous: the next frame's perFrameCleanup destroys everything this frame
+            // trashed, so this frame must have finished on the GPU before we return. That includes the
+            // very first frame; skipping its wait let a startup resize free attachments the first frame
+            // was still sampling, which faulted the GPU and lost the device (a black window).
+            VK_CHECK_RESULT(vkWaitForFences(vkDevice, 1, &frameFence, VK_TRUE, DEFAULT_FENCE_TIMEOUT));
+            vkDestroyFence(vkDevice, frameFence, nullptr);
             if (_vkWindow->_previousCommandBuffer != VK_NULL_HANDLE) {
                 VK_CHECK_RESULT(vkResetCommandBuffer(commandBuffer, 0));
             }
 
-            // Recycles frame to which _previousFrameFence and _previousCommandBuffer belongs.
+            // Recycles frame to which _previousCommandBuffer belongs.
             vkBackend->recyclePreviousFrame();
 
-            _vkWindow->_previousFrameFence = frameFence;
+            // The fence was waited on and destroyed above; never leave a dangling handle for the window to trash.
+            _vkWindow->_previousFrameFence = VK_NULL_HANDLE;
             _vkWindow->_previousCommandBuffer = commandBuffer;
             if (_vkWindow->_previousAcquireCompleteSemaphore) {
                 _vkWindow->_context.recycler.trashVkSemaphore(_vkWindow->_previousAcquireCompleteSemaphore);
@@ -943,6 +990,19 @@ void VulkanDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
             }
         }
         _vkWindow->_swapchain.queuePresent(_vkWindow->_context.graphicsQueue, currentImageIndex, _vkWindow->_renderCompleteSemaphore);
+
+        { // If we have any snapshots this frame, handle them. Done after the frame is submitted so the readback sees it.
+            PROFILE_RANGE_EX(render, "snapshotOperators", 0xffff00ff, frameId)
+            while (!_currentFrame->snapshotOperators.empty()) {
+                auto& snapshotOperator = _currentFrame->snapshotOperators.front();
+                if (std::get<2>(snapshotOperator)) {
+                    std::get<0>(snapshotOperator)(getScreenshot(std::get<1>(snapshotOperator)));
+                } else {
+                    std::get<0>(snapshotOperator)(getSecondaryCameraScreenshot());
+                }
+                _currentFrame->snapshotOperators.pop();
+            }
+        }
         _vkWindow->_previousAcquireCompleteSemaphore = _vkWindow->_acquireCompleteSemaphore;
         _vkWindow->_previousRenderCompleteSemaphore = _vkWindow->_renderCompleteSemaphore;
         _vkWindow->_acquireCompleteSemaphore = VK_NULL_HANDLE;
@@ -1017,7 +1077,14 @@ bool VulkanDisplayPlugin::setDisplayTexture(const QString& name) {
 }
 
 QImage VulkanDisplayPlugin::getScreenshot(float aspectRatio) {
-    auto size = _compositeFramebuffer->getSize();
+    // The Vulkan plugin doesn't composite into _compositeFramebuffer yet; the frame that reaches the swapchain
+    // is the backend's output framebuffer, so read that back. Runs on the present thread.
+    auto vkBackend = std::dynamic_pointer_cast<gpu::vk::VKBackend>(getBackend());
+    auto size = vkBackend->getOutputFramebufferSize();
+    if (size.x == 0 || size.y == 0) {
+        qWarning() << "VulkanDisplayPlugin::getScreenshot: no output framebuffer available yet";
+        return QImage();
+    }
     if (isHmd()) {
         size.x /= 2;
     }
@@ -1033,9 +1100,7 @@ QImage VulkanDisplayPlugin::getScreenshot(float aspectRatio) {
         corner.y = round((size.y - bestSize.y) / 2.0f);
     }
     QImage screenshot(bestSize.x, bestSize.y, QImage::Format_ARGB32);
-    withOtherThreadContext([&] {
-        getBackend()->downloadFramebuffer(_compositeFramebuffer, ivec4(corner, bestSize), screenshot);
-    });
+    vkBackend->downloadOutputFramebuffer(ivec4(corner, bestSize), screenshot);
     return screenshot.mirrored(false, true);
 }
 
@@ -1045,9 +1110,8 @@ QImage VulkanDisplayPlugin::getSecondaryCameraScreenshot() {
     gpu::Vec4i region(0, 0, secondaryCameraFramebuffer->getWidth(), secondaryCameraFramebuffer->getHeight());
 
     QImage screenshot(region.z, region.w, QImage::Format_ARGB32);
-    withOtherThreadContext([&] {
-        getBackend()->downloadFramebuffer(secondaryCameraFramebuffer, region, screenshot);
-    });
+    // Runs on the present thread, which owns the Vulkan queue; no context switch needed.
+    getBackend()->downloadFramebuffer(secondaryCameraFramebuffer, region, screenshot);
     return screenshot.mirrored(false, true);
 }
 

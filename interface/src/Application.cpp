@@ -263,6 +263,15 @@ Application::Application(
     qInstallMessageHandler(messageHandler);
 
     DependencyManager::set<PathUtils>();
+
+#if defined(Q_OS_MAC)
+    // The crash recovery and display mode dialogs are shown before the settings are loaded, which is
+    // where the Fusion style and the dark/light palette are normally applied (loadSettings). Qt 5.15's
+    // native macOS style predates macOS 26 and draws the keyboard focus ring with older control
+    // metrics, so it floats below the display mode combo box. Apply the theme now so those dialogs
+    // use Fusion with a readable palette, matching the rest of the UI.
+    updateThemeColors();
+#endif
 }
 
 Application::~Application() {
