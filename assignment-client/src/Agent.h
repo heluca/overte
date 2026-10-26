@@ -103,6 +103,9 @@ private slots:
     void processAgentAvatarAudio();
 
 private:
+    void retryScriptRequest();
+    void abandonScriptRequest();
+
     void negotiateAudioFormat();
     void selectAudioFormat(const QString& selectedCodecName);
     void encodeFrameOfZeros(QByteArray& encodedZeros);
@@ -121,7 +124,10 @@ private:
     void queryAvatars();
 
     QString _scriptContents;
-    QTimer* _scriptRequestTimeout { nullptr };
+    QTimer _scriptRequestTimeout;
+    QTimer _scriptRetryTimer;
+    int _scriptRequestFailures { 0 };
+    ResourceRequest* _scriptRequest { nullptr };
     ResourceRequest* _pendingScriptRequest { nullptr };
     bool _isListeningToAudioStream = false;
     SharedSoundPointer _avatarSound;

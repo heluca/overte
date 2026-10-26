@@ -13,6 +13,8 @@
 
 #include "Agent.h"
 
+#include <algorithm>
+
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEventLoop>
 #include <QtCore/QStandardPaths>
@@ -72,6 +74,8 @@ static const int RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES = 10;
 Agent::Agent(ReceivedMessage& message) :
     ThreadedAssignment(message),
     _receivedAudioStream(RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES, RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES),
+    _scriptRequestTimeout(this),
+    _scriptRetryTimer(this),
     _audioGate(AudioConstants::SAMPLE_RATE, AudioConstants::MONO),
     _avatarAudioTimer(this),
     _negotiateAudioFormatRetryTimer(this)
@@ -165,6 +169,18 @@ Agent::Agent(ReceivedMessage& message) :
         }
         negotiateAudioFormat();
     });
+
+    static const int SCRIPT_TIMEOUT_MS = 10000;
+    _scriptRequestTimeout.setSingleShot(true);
+    _scriptRequestTimeout.setInterval(SCRIPT_TIMEOUT_MS);
+    connect(&_scriptRequestTimeout, &QTimer::timeout, this, [this] {
+        qWarning() << "Failed to download script - request timed out.";
+        abandonScriptRequest();
+        retryScriptRequest();
+    });
+
+    _scriptRetryTimer.setSingleShot(true);
+    connect(&_scriptRetryTimer, &QTimer::timeout, this, &Agent::requestScript);
 }
 
 void Agent::playAvatarSound(SharedSoundPointer sound) {
@@ -256,6 +272,10 @@ void Agent::requestScript() {
     auto nodeList = DependencyManager::get<NodeList>();
     disconnect(&nodeList->getDomainHandler(), &DomainHandler::connectedToDomain, this, &Agent::requestScript);
 
+    if (_isFinished) {
+        return;
+    }
+
     // figure out the URL for the script for this agent assignment
     QUrl scriptURL;
     if (_payload.isEmpty())  {
@@ -270,7 +290,7 @@ void Agent::requestScript() {
     // make sure this is not a script request for the file scheme
     if (scriptURL.scheme() == HIFI_URL_SCHEME_FILE) {
         qWarning() << "Cannot load script for Agent from local filesystem.";
-        scriptRequestFinished();
+        retryScriptRequest();
         return;
     }
 
@@ -279,15 +299,12 @@ void Agent::requestScript() {
 
     if (!request) {
         qWarning() << "Could not create ResourceRequest for Agent script at" << scriptURL.toString();
-        scriptRequestFinished();
+        retryScriptRequest();
         return;
     }
 
-    // setup a timeout for script request
-    static const int SCRIPT_TIMEOUT_MS = 10000;
-    _scriptRequestTimeout = new QTimer;
-    connect(_scriptRequestTimeout, &QTimer::timeout, this, &Agent::scriptRequestFinished);
-    _scriptRequestTimeout->start(SCRIPT_TIMEOUT_MS);
+    _scriptRequest = request;
+    _scriptRequestTimeout.start();
 
     connect(request, &ResourceRequest::finished, this, &Agent::scriptRequestFinished);
 
@@ -424,13 +441,14 @@ void Agent::selectAudioFormat(const QString& selectedCodecName) {
 void Agent::scriptRequestFinished() {
     auto request = qobject_cast<ResourceRequest*>(sender());
 
-    // stop the script request timeout, if it's running
-    if (_scriptRequestTimeout) {
-        QMetaObject::invokeMethod(_scriptRequestTimeout, "stop");
-        _scriptRequestTimeout->deleteLater();
+    // a request abandoned on timeout can still report in
+    if (!request || request != _scriptRequest) {
+        return;
     }
+    _scriptRequest = nullptr;
+    _scriptRequestTimeout.stop();
 
-    if (request && request->getResult() == ResourceRequest::Success) {
+    if (request->getResult() == ResourceRequest::Success) {
         _scriptContents = request->getData();
         qInfo() << "Downloaded script:" << _scriptContents;
 
@@ -438,17 +456,33 @@ void Agent::scriptRequestFinished() {
         // to return before calling executeScript
         QMetaObject::invokeMethod(this, "executeScript", Qt::QueuedConnection);
     } else {
-        if (request) {
-            qWarning() << "Failed to download script at" << request->getUrl().toString() << " - bailing on assignment.";
-            qWarning() << "ResourceRequest error was" << request->getResult();
-        } else {
-            qWarning() << "Failed to download script - request timed out. Bailing on assignment.";
-        }
-
-        setFinished(true);
+        qWarning() << "Failed to download script at" << request->getUrl().toString()
+            << "- ResourceRequest error was" << request->getResult();
+        retryScriptRequest();
     }
 
     request->deleteLater();
+}
+
+void Agent::retryScriptRequest() {
+    // Finishing here would have the domain-server hand a persistent script's assignment straight back, once a second
+    // for as long as its host is down, and each finished assignment costs the assignment-client memory (#93).
+    static const int FIRST_RETRY_MSEC = 1000;
+    static const int MAX_RETRY_MSEC = 5 * 60 * 1000;
+    static const int MAX_DOUBLINGS = 16;
+    const int retryMsec = std::min(FIRST_RETRY_MSEC << std::min(_scriptRequestFailures, MAX_DOUBLINGS), MAX_RETRY_MSEC);
+    ++_scriptRequestFailures;
+
+    qWarning() << "Retrying the script download in" << retryMsec << "ms - failed attempts so far:" << _scriptRequestFailures;
+    _scriptRetryTimer.start(retryMsec);
+}
+
+void Agent::abandonScriptRequest() {
+    if (_scriptRequest) {
+        _scriptRequest->deleteLater();
+        _scriptRequest = nullptr;
+    }
+    _pendingScriptRequest = nullptr;
 }
 
 void Agent::executeScript() {
@@ -926,6 +960,11 @@ void Agent::processAgentAvatarAudio() {
 }
 
 void Agent::aboutToFinish() {
+    _scriptRetryTimer.stop();
+    _scriptRequestTimeout.stop();
+    // before ResourceManager::cleanup stops the thread the request lives on, so the deferred delete still runs
+    abandonScriptRequest();
+
     // our entity tree is going to go away so tell that to the EntityScriptingInterface
     DependencyManager::get<EntityScriptingInterface>()->setEntityTree(nullptr);
 
