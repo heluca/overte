@@ -73,7 +73,12 @@ private:
             QByteArray status = "200 OK";
             QByteArray extra;
             QByteArray content;
-            if (path == "/text") {
+            // .../redirect-to/<status>/<absolute URL>, so that another server's URL is another origin
+            const int redirectTo = path.indexOf("/redirect-to/");
+            if (redirectTo >= 0) {
+                status = path.mid(redirectTo + 13, 3) + " Redirect";
+                extra = "Location: " + path.mid(redirectTo + 17) + "\r\n";
+            } else if (path == "/text") {
                 extra = "Content-Type: text/plain\r\n";
                 content = "hello fetch";
             } else if (path == "/redirect") {
@@ -88,7 +93,8 @@ private:
             } else if (path == "/echo") {
                 extra = "X-Echo-Method: " + method + "\r\nX-Echo-Test: " + headers.value("x-test") +
                     "\r\nX-Echo-Type: " + headers.value("content-type") + "\r\nX-Echo-Agent: " +
-                    headers.value("user-agent") + "\r\n";
+                    headers.value("user-agent") + "\r\nX-Echo-Authorization: " + headers.value("authorization", "none") +
+                    "\r\n";
                 content = body;
             } else if (path == "/400") {
                 status = "400 Bad Request";

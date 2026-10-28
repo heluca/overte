@@ -14,6 +14,7 @@
 
 #include "ScriptEngineNetworkedTests.h"
 #include "DependencyManager.h"
+#include "FetchTestServer.h"
 
 #include "ScriptEngines.h"
 #include "ScriptEngine.h"
@@ -73,8 +74,9 @@ void ScriptEngineNetworkedTests::initTestCase() {
 
 }
 
-ScriptManagerPointer ScriptEngineNetworkedTests::makeManager(const QString &scriptSource, const QString &scriptFilename) {
-    ScriptManagerPointer sm = scriptManagerFactory(ScriptManager::CLIENT_SCRIPT, scriptSource, scriptFilename);
+ScriptManagerPointer ScriptEngineNetworkedTests::makeManager(const QString &scriptSource, const QString &scriptFilename,
+                                                             ScriptManager::Context context) {
+    ScriptManagerPointer sm = scriptManagerFactory(context, scriptSource, scriptFilename);
 
 
     sm->setAbortOnUncaughtException(true);
@@ -221,4 +223,81 @@ void ScriptEngineNetworkedTests::testRequireInfinite() {
 
     // Acceptable results: either failing, or realizing a prior module is already included
     QVERIFY(errors.contains("Maximum call stack size exceeded") || printed.contains("Done") );
+}
+
+QString ScriptEngineNetworkedTests::runWithMetaverseToken(const QString& base, const QString& source,
+                                                          ScriptManager::Context context) {
+    qputenv("HIFI_METAVERSE_URL", base.toUtf8());
+    OAuthAccessToken token;
+    token.token = "mv-t0ken";
+    DependencyManager::get<AccountManager>()->getAccountInfo().setAccessToken(token);
+
+    auto sm = makeManager(source, "testMetaverseToken.js", context);
+    QString printed;
+    connect(sm.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString& engineName) {
+        printed.append(message);
+    });
+    QTimer::singleShot(10000, sm.get(), [manager = sm.get()] { manager->stop(); });
+    sm->run();
+
+    DependencyManager::get<AccountManager>()->getAccountInfo().setAccessToken(OAuthAccessToken());
+    qunsetenv("HIFI_METAVERSE_URL");
+    return printed;
+}
+
+// Each URL by XMLHttpRequest and then fetch, printing what the target saw of the Authorization header
+static const QString METAVERSE_TOKEN_REQUESTS =
+    "var results = [];\n"
+    "function viaXhr(url) {\n"
+    "    return new Promise(function(resolve) {\n"
+    "        var request = new XMLHttpRequest();\n"
+    "        request.onreadystatechange = function() {\n"
+    "            if (request.readyState === request.DONE) {\n"
+    "                resolve(request.status + ':' + request.responseText);\n"
+    "            }\n"
+    "        };\n"
+    "        request.open('GET', url);\n"
+    "        request.send();\n"
+    "    });\n"
+    "}\n"
+    "function viaFetch(url) {\n"
+    "    return fetch(url).then(function(response) {\n"
+    "        return response.text().then(function(text) { return response.status + ':' + text; });\n"
+    "    });\n"
+    "}\n"
+    "var chain = Promise.resolve();\n"
+    "URLS.forEach(function(url) {\n"
+    "    chain = chain.then(function() { return viaXhr(url); }).then(function(value) {\n"
+    "        results.push('xhr ' + value);\n"
+    "        return viaFetch(url);\n"
+    "    }).then(function(value) { results.push('fetch ' + value); });\n"
+    "});\n"
+    "chain.catch(function(e) { results.push('error ' + e); }).then(function() {\n"
+    "    print(results.join('|'));\n"
+    "    Script.stop(true);\n"
+    "});\n";
+
+void ScriptEngineNetworkedTests::testMetaverseTokenRedirect() {
+    FetchTestServer metaverse;
+    FetchTestServer other;
+    QString script = "var URLS = ['" + metaverse.base() + "/api/auth', '" + metaverse.base() + "/api/redirect-out', '" +
+        metaverse.base() + "/api/redirect-to/302/" + other.base() + "/auth', '" + metaverse.base() +
+        "/api/redirect-to/307/" + other.base() + "/auth'];\n" + METAVERSE_TOKEN_REQUESTS;
+
+    QString printed = runWithMetaverseToken(metaverse.base(), script, ScriptManager::CLIENT_SCRIPT);
+    // The token follows a redirect within the metaverse server, even out of /api/, and is left off one to another origin
+    QCOMPARE(printed, QString("xhr 200:Bearer mv-t0ken|fetch 200:Bearer mv-t0ken|"
+        "xhr 200:Bearer mv-t0ken|fetch 200:Bearer mv-t0ken|xhr 200:none|fetch 200:none|xhr 200:none|fetch 200:none"));
+}
+
+void ScriptEngineNetworkedTests::testMetaverseTokenContexts() {
+    FetchTestServer metaverse;
+    QString script = "var URLS = ['" + metaverse.base() + "/api/auth'];\n" + METAVERSE_TOKEN_REQUESTS;
+
+    const QString WITH_TOKEN = "xhr 200:Bearer mv-t0ken|fetch 200:Bearer mv-t0ken";
+    const QString WITHOUT_TOKEN = "xhr 200:none|fetch 200:none";
+    QCOMPARE(runWithMetaverseToken(metaverse.base(), script, ScriptManager::CLIENT_SCRIPT), WITH_TOKEN);
+    QCOMPARE(runWithMetaverseToken(metaverse.base(), script, ScriptManager::AGENT_SCRIPT), WITH_TOKEN);
+    QCOMPARE(runWithMetaverseToken(metaverse.base(), script, ScriptManager::ENTITY_CLIENT_SCRIPT), WITHOUT_TOKEN);
+    QCOMPARE(runWithMetaverseToken(metaverse.base(), script, ScriptManager::ENTITY_SERVER_SCRIPT), WITHOUT_TOKEN);
 }

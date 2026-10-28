@@ -13,9 +13,7 @@
 
 #include <QNetworkRequest>
 
-#include <AccountManager.h>
 #include <DependencyManager.h>
-#include <MetaverseAPI.h>
 #include <NetworkAccessManager.h>
 #include <NetworkingConstants.h>
 #include <ResourceManager.h>
@@ -27,6 +25,7 @@
 #include "ScriptEngineLogging.h"
 #include "ScriptManager.h"
 #include "ScriptValue.h"
+#include "XMLHttpRequestClass.h"
 #include "v8/FastScriptValueUtils.h"
 
 static ScriptValue throwTypeError(ScriptContext* context, ScriptEngine* engine, const QString& message) {
@@ -43,19 +42,14 @@ static QByteArray bodyBytes(const ScriptValue& body) {
     return bytes;
 }
 
-static QNetworkRequest httpRequest(const QUrl& url, const ScriptValue& headerPairs) {
+static QNetworkRequest httpRequest(ScriptEngine* engine, const QUrl& url, const ScriptValue& headerPairs) {
     QNetworkRequest request(url);
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setHeader(QNetworkRequest::UserAgentHeader, NetworkingConstants::OVERTE_USER_AGENT);
 
     // The same metaverse token XMLHttpRequest.open() adds
-    const QString METAVERSE_API_URL = MetaverseAPI::getCurrentMetaverseServerURL().toString() + "/api/";
-    if (url.toString().toLower().startsWith(METAVERSE_API_URL)) {
-        auto accountManager = DependencyManager::get<AccountManager>();
-        if (accountManager->hasValidAccessToken()) {
-            QString bearer = "Bearer " + accountManager->getAccountInfo().getAccessToken().token;
-            request.setRawHeader("Authorization", bearer.toLocal8Bit());
-        }
+    const QByteArray metaverseToken = XMLHttpRequestClass::metaverseAuthorization(engine, url);
+    if (!metaverseToken.isEmpty()) {
+        request.setRawHeader("Authorization", metaverseToken);
     }
 
     const quint32 headerCount = headerPairs.property("length").toUInt32();
@@ -88,7 +82,7 @@ static ScriptValue startTransfer(ScriptContext* context, ScriptEngine* engine, b
     ScriptPromise promise = engine->newPromise();
     auto transfer = new FetchTransfer(engine, promise.resolver, url, isHead);
     if (isHttp) {
-        QNetworkRequest request = httpRequest(url, context->argument(2));
+        QNetworkRequest request = httpRequest(engine, url, context->argument(2));
         if (engine->manager()) {
             transfer->attachCredential(request, engine->manager()->scriptCredentialScope());
         }
@@ -194,33 +188,62 @@ void FetchTransfer::attachCredential(QNetworkRequest& request, const QList<QUrl>
     if (!_authorization.isEmpty()) {
         _credentialScope = scope;
         request.setRawHeader("Authorization", _authorization);
-        // Qt sends every request header on to a redirect target; httpRedirected() decides instead
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
     }
 }
 
 void FetchTransfer::startHttp(const QNetworkRequest& request, const QByteArray& method, const QByteArray& body) {
+    _request = request;
+    _method = method;
+    _body = body;
+    const bool hasAuthorization = _request.hasRawHeader("Authorization");
+    // Qt sends every request header on to a redirect target; httpRedirected() decides instead
+    _request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, hasAuthorization
+        ? QNetworkRequest::UserVerifiedRedirectPolicy : QNetworkRequest::NoLessSafeRedirectPolicy);
+
     DependencyManager::get<ResourceRequestObserver>()->update(_url, -1, "fetch");
     auto& networkAccessManager = NetworkAccessManager::getInstance();
     if (method == "GET") {
-        _reply = networkAccessManager.get(request);
+        _reply = networkAccessManager.get(_request);
     } else if (_isHead) {
-        _reply = networkAccessManager.head(request);
+        _reply = networkAccessManager.head(_request);
     } else {
-        _reply = networkAccessManager.sendCustomRequest(request, method, body);
+        _reply = networkAccessManager.sendCustomRequest(_request, method, body);
     }
     connect(_reply, &QNetworkReply::finished, this, &FetchTransfer::httpFinished);
-    if (!_authorization.isEmpty()) {
+    if (hasAuthorization) {
         connect(_reply, &QNetworkReply::redirected, this, &FetchTransfer::httpRedirected);
     }
 }
 
-// The same credential must apply at the target, which also refuses https to http, as no https prefix covers http
+// A script credential follows only while the same credential applies at the target, which also refuses https to http, as
+// no https prefix covers http. Any other header, the metaverse token or the script's own, follows within the origin and
+// is dropped beyond it, as browsers do.
 void FetchTransfer::httpRedirected(const QUrl& target) {
-    if (ScriptCredentials::find(target, _credentialScope) == _authorization) {
+    if (_authorization.isEmpty() ? XMLHttpRequestClass::isSameOrigin(_request.url(), target)
+                                 : ScriptCredentials::find(target, _credentialScope) == _authorization) {
         emit _reply->redirectAllowed();
-    } else {
+    } else if (!_authorization.isEmpty()) {
         reject("fetch: " + _url.toString() + ": redirected outside the URL prefix of its script credential");
+    } else if (_request.url().scheme() == "https" && target.scheme() == "http") {
+        reject("fetch: " + _url.toString() + ": insecure redirect");
+    } else {
+        const int status = _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        disconnect(_reply, nullptr, this, nullptr);
+        _reply->abort();
+        _reply->deleteLater();
+        QNetworkRequest request = _request;
+        request.setUrl(target);
+        request.setRawHeader("Authorization", QByteArray());
+        QByteArray method = _method;
+        QByteArray body = _body;
+        // As Qt follows a redirect
+        if (status != 307 && status != 308 && !_isHead) {
+            method = "GET";
+            body.clear();
+            request.setHeader(QNetworkRequest::ContentTypeHeader, QVariant());
+            request.setHeader(QNetworkRequest::ContentLengthHeader, QVariant());
+        }
+        startHttp(request, method, body);
     }
 }
 
