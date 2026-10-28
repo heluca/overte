@@ -693,6 +693,9 @@ struct PositionNormalMaterial {
 
 class SurfaceExtractor {
 public:
+    // Deleted through std::unique_ptr<SurfaceExtractor>: without a virtual destructor that is
+    // undefined behaviour, and Clang 21 compiles the delete into a trap (crash on every PolyVox mesh rebuild).
+    virtual ~SurfaceExtractor() = default;
     virtual graphics::MeshPointer createMesh() = 0;
 
 protected:

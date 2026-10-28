@@ -115,6 +115,9 @@ private slots:
     void nodeKilled(SharedNodePointer killedNode);
 
 private:
+    void retryScriptRequest();
+    void abandonScriptRequest();
+
     ScriptManagerPointer _scriptManager;
     EntityEditPacketSender _entityEditSender;
     EntityTreeHeadlessViewer _entityViewer;
@@ -127,7 +130,10 @@ private:
     void resetAudioSink();
 
     QString _scriptContents;
-    QTimer* _scriptRequestTimeout { nullptr };
+    QTimer _scriptRequestTimeout;
+    QTimer _scriptRetryTimer;
+    int _scriptRequestFailures { 0 };
+    ResourceRequest* _scriptRequest { nullptr };
     ResourceRequest* _pendingScriptRequest { nullptr };
     bool _isListeningToAudioStream = false;
     bool _isAvatar = false;

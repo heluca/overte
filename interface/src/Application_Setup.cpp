@@ -6,7 +6,7 @@
 //  Created by Andrzej Kapolka on 5/10/13.
 //  Copyright 2013 High Fidelity, Inc.
 //  Copyright 2020 Vircadia contributors.
-//  Copyright 2022-2025 Overte e.V.
+//  Copyright 2022-2026 Overte e.V.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
@@ -776,9 +776,44 @@ void Application::initialize(const QCommandLineParser &parser) {
     _vkWindowWrapper->setFocusProxy(_primaryWidget);
     _vkWindowWrapper->setFocusPolicy(Qt::StrongFocus);
     getApplicationCompositor().setRenderingWidget(_primaryWidget);
+#ifndef Q_OS_MAC
     _primaryWidget->setParent(_vkWindowWrapper);
+#else
+    // The canvas widget is not parented into the window container on macOS, so it is a hidden top level widget
+    // and its own position is what its mapFromGlobal() subtracts. CompositorHelper derives the reticle position,
+    // which the mouse ray picks (and so clicks on web entities) are based on, that way, so keep the widget placed
+    // over the Vulkan window; VKWindow::resizeFramebuffer keeps its size in sync.
+    connect(_window, &MainWindow::windowGeometryChanged, this, [this](QRect) {
+        QTimer::singleShot(0, this, [this] {
+            _primaryWidget->winId(); // mapFromGlobal() goes through the window handle once there is one
+            _primaryWidget->windowHandle()->setPosition(_vkWindow->mapToGlobal(QPoint(0, 0)));
+        });
+    });
+#endif
     _vkWindow->_primaryWidget = _primaryWidget;
     _window->setCentralWidget(_vkWindowWrapper);
+#if defined(Q_OS_MAC)
+    // Cocoa makes the main window the focus window whenever the application is (re)activated, and the Vulkan
+    // window inside it when that is clicked. The offscreen QML surfaces only accept keyboard focus while their
+    // render window is the focus window (see getUiProxyWindow), so follow it; and key events only reach the
+    // Vulkan window (where the QML surfaces filter them) while its view is the first responder, so hand the
+    // focus over to it whenever the main window has it.
+    connect(this, &QGuiApplication::focusWindowChanged, this, [this](QWindow* focusWindow) {
+        if (_aboutToQuit || !focusWindow || (focusWindow != _window->windowHandle() && focusWindow != _vkWindow)) {
+            return;
+        }
+        if (auto offscreenUi = getOffscreenUI()) {
+            offscreenUi->setProxyWindow(focusWindow);
+        }
+        if (focusWindow == _window->windowHandle() && _vkWindow->isVisible()) {
+            QMetaObject::invokeMethod(_vkWindow, [this] {
+                if (QGuiApplication::focusWindow() == _window->windowHandle()) { // unless it moved on meanwhile
+                    _vkWindow->requestActivate();
+                }
+            }, Qt::QueuedConnection);
+        }
+    });
+#endif
 #endif
 
     _window->restoreGeometry();

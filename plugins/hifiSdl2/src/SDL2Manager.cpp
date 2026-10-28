@@ -89,7 +89,11 @@ bool SDL2Manager::activate() {
             preferences->addPreference(preference);
         }
         
-        bool initSuccess = (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC) == 0);
+        // DualShock 4 and DualSense controllers connected over Bluetooth only rumble once SDL
+        // switches them to their extended report mode, which these hints allow.
+        SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, "1");
+        SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
+        bool initSuccess = (SDL_Init(SDL_INIT_GAMECONTROLLER) == 0);
         
         if (initSuccess) {
             int joystickCount = SDL_NumJoysticks();

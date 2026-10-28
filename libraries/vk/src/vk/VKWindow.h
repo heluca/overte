@@ -31,6 +31,9 @@ public:
 
     bool event(QEvent *event) override;
 
+    // One line describing the window, swapchain and (on macOS) CAMetalLayer sizes, for logging.
+    QString describeSurface() const;
+
 signals:
     void aboutToClose();
 

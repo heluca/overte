@@ -1,7 +1,7 @@
 {
     "name": "overte-piano",
     "private": true,
-    "description": "Piano for Overte: a serverScripts speaker for an Orpheus synthesizer that mirrors its playback status, and the client entity script that shows it. Node runs the tests only; it is never a runtime dependency.",
+    "description": "Piano for Overte: a serverScripts speaker for an Orpheus synthesizer that mirrors its playback status, the client entity script that shows it, and a bench to sit at that opens the desk display. Node runs the tests only; it is never a runtime dependency.",
     "license": "Apache-2.0",
     "type": "module",
     "scripts": {

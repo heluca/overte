@@ -415,7 +415,12 @@ void InteractiveWindow::close() {
         if (qmlWindow) {
             qmlWindow->deleteLater();
         }
-        _qmlWindowProxy->deleteLater();
+        // The proxy lives on the main thread and close() usually runs on a script thread. Releasing the
+        // shared_ptr is what schedules its deleteLater() (see qmlWindowProxyDeleter), and it must be the
+        // last thing that touches the proxy: calling deleteLater() explicitly first and releasing the
+        // pointer afterwards let the main thread delete the proxy in between, and the deleter then
+        // dereferenced freed memory.
+        _qmlWindowProxy = nullptr;
     }
 
     if (_dockWidget) {
@@ -427,7 +432,6 @@ void InteractiveWindow::close() {
         }
     }
     _dockWidget = nullptr;
-    _qmlWindowProxy = nullptr;
     _interactiveWindowProxy = nullptr;
 }
 

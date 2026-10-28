@@ -8,7 +8,8 @@
 //
 //  The piano's logic without the engine: reading the configuration from userData, folding
 //  Orpheus's two status replies into the compact status the piano publishes, the reconnect
-//  backoff, and the text both scripts show. No engine globals, so it runs under Node.
+//  backoff, the text both scripts show, and the desk display's URL and size.
+//  No engine globals, so it runs under Node.
 //
 
 export const STREAM_PATH = "/api/synth/stream.pcm";
@@ -19,6 +20,8 @@ export const DEFAULT_VOLUME = 0.8;
 export const ACTIVE_POLL_MS = 1000;
 export const IDLE_POLL_MS = 5000;
 export const SONG_LINES = 12;
+// Titles of waiting pieces the status carries; `queued` counts them all.
+export const QUEUE_SHOWN = 5;
 
 // Scheme, then a host[:port] with none of the characters a placeholder like <host> carries,
 // then an optional path. No query or fragment: paths are appended to it.
@@ -87,6 +90,9 @@ export function statusOf(userDataText) {
  * @property {string | null} output "piano" (the Kawai) or "synth" (what the piano entity plays)
  * @property {number | null} progress whole percent through the piece's events
  * @property {number | null} elapsed whole seconds, when the service reports them
+ * @property {number | null} duration the piece's length in whole seconds, while one is active
+ * @property {string[]} queue the titles waiting, in play order, at most QUEUE_SHOWN
+ * @property {number} queued how many pieces are waiting
  * @property {boolean} synth whether Orpheus's synth output is enabled
  * @property {string | null} error
  */
@@ -102,8 +108,8 @@ export function statusOf(userDataText) {
 export function compactStatus(playback, synth, failure) {
     const synthEnabled = synth !== null && synth.enabled === true;
     if (playback === null) {
-        return { state: "offline", title: null, output: null, progress: null, elapsed: null, synth: synthEnabled,
-            error: failure || "Orpheus unreachable" };
+        return { state: "offline", title: null, output: null, progress: null, elapsed: null, duration: null,
+            queue: [], queued: 0, synth: synthEnabled, error: failure || "Orpheus unreachable" };
     }
     const active = playback.is_playing === true;
     /** @type {PianoStatus["state"]} */
@@ -113,6 +119,7 @@ export function compactStatus(playback, synth, failure) {
             : ["starting", "connecting"].includes(playback.status) ? playback.status : "playing";
     }
     const lastError = playback.last_error;
+    const queue = Array.isArray(playback.queue) ? playback.queue : [];
     return {
         state,
         title: active && typeof playback.title === "string" ? playback.title : null,
@@ -120,6 +127,10 @@ export function compactStatus(playback, synth, failure) {
         progress: active && typeof playback.progress === "number" ? Math.round(playback.progress * 100) : null,
         // Orpheus reports progress through the events, not time; elapsed_seconds is the mock's
         elapsed: active && typeof playback.elapsed_seconds === "number" ? Math.floor(playback.elapsed_seconds) : null,
+        duration: active && typeof playback.duration === "number" && playback.duration > 0 ? Math.round(playback.duration) : null,
+        queue: queue.slice(0, QUEUE_SHOWN).map(/** @param {any} row */ row =>
+            row && typeof row.title === "string" ? row.title : "Untitled"),
+        queued: queue.length,
         synth: synthEnabled,
         error: lastError !== null && typeof lastError === "object" && typeof lastError.message === "string"
             ? lastError.message : null
@@ -216,4 +227,131 @@ export function formatSongs(songs, limit = SONG_LINES) {
         lines.push("+" + (songs.length - limit) + " more");
     }
     return "Songs (" + songs.length + ")\n" + lines.join("\n");
+}
+
+// The desk display: a Web entity over the face of the music desk, parented to the salon grand's
+// `anchor_desk_screen` joint (spec sections 3 to 5). Measured in salon-grand.glb, in the
+// anchor's frame (+Z out of the desk towards the player, +Y up the desk): the desk board is
+// 0.82 m across (x -0.41 to 0.41), its face is at z -0.0045, the ledge stands proud of it
+// below y -0.12, the board's top is at y 0.175, and the closed score in front of it reaches
+// z 0.0099. The default covers the face above the ledge, 10 mm inside its edges, 3 mm in front
+// of the score.
+export const DISPLAY_DEFAULTS = {
+    width: 0.80,
+    height: 0.275,
+    offset: { x: 0, y: 0.0275, z: 0.013 },
+    // The page lays itself out in rem scaled to the viewport, so this is sharpness, not size
+    pagePixelsWide: 1600
+};
+export const PIANO_NATURAL_WIDTH = 1.480;
+// A Web entity is its dimensions in inches times dpi pixels across (RenderableWebEntityItem.cpp
+// getWindowSize)
+const METERS_TO_INCHES = 39.3701;
+/** @type {Record<string, [number, number]>} */
+const DISPLAY_LIMITS = {
+    width: [0.05, 3],
+    height: [0.05, 2],
+    offset: [-1, 1],
+    pagePixelsWide: [200, 4096]
+};
+
+// As BASE_URL, but the page may carry a query or fragment.
+const PAGE_URL = /^https?:\/\/[A-Za-z0-9.\-[\]:]+(\/[^\s<>]*)?$/i;
+
+/**
+ * Reads `piano.displayURL`, the desk display page. It has no default: without one the sitter
+ * gets no display and the log says why.
+ * @param {unknown} userDataText
+ * @returns {{ displayURL: string } | { error: string }}
+ */
+export function parseDisplayURL(userDataText) {
+    const piano = parseObject(userDataText).piano;
+    const url = piano !== null && typeof piano === "object" ? piano.displayURL : undefined;
+    if (typeof url !== "string" || !PAGE_URL.test(url)) {
+        return { error: "piano.displayURL must be an http:// or https:// URL, got " + JSON.stringify(url) };
+    }
+    return { displayURL: url };
+}
+
+/**
+ * Reads `piano.manifestURL`, the salon grand's published manifest.json, where the server script
+ * finds the lid, stick and fallboard joints. No default: without one the piano does not move.
+ * @param {unknown} userDataText
+ * @returns {{ manifestURL: string } | { error: string }}
+ */
+export function parseManifestURL(userDataText) {
+    const piano = parseObject(userDataText).piano;
+    const url = piano !== null && typeof piano === "object" ? piano.manifestURL : undefined;
+    if (typeof url !== "string" || !PAGE_URL.test(url)) {
+        return { error: "piano.manifestURL must be an http:// or https:// URL, got " + JSON.stringify(url) };
+    }
+    return { manifestURL: url };
+}
+
+/**
+ * @typedef {object} DisplayGeometry
+ * @property {{ x: number, y: number, z: number }} dimensions
+ * @property {{ x: number, y: number, z: number }} localPosition from `anchor_desk_screen`
+ * @property {number} dpi
+ */
+
+/**
+ * The display's size, place and resolution from `piano.display`, every key optional:
+ * `{ width, height, offset: { x, y, z }, pagePixelsWide }`, metres in the piano's natural size.
+ * A value out of range is reported and replaced by its default. The result is scaled with a
+ * piano that is not at its natural size (a child's local position does not scale by itself).
+ * @param {unknown} userDataText
+ * @param {{ x: number } | undefined} pianoDimensions
+ * @returns {{ geometry: DisplayGeometry, problems: string[], source: string }} source: the raw
+ *     `piano.display` as JSON, to tell when it changed
+ */
+export function parseDisplayGeometry(userDataText, pianoDimensions) {
+    const piano = parseObject(userDataText).piano;
+    const found = piano !== null && typeof piano === "object" ? piano.display : undefined;
+    const display = found !== null && typeof found === "object" && !Array.isArray(found) ? found : {};
+    /** @type {string[]} */
+    const problems = [];
+    if (found !== undefined && display !== found) {
+        problems.push("piano.display must be an object, got " + JSON.stringify(found) + "; using the defaults");
+    }
+    /**
+     * @param {string} name
+     * @param {unknown} value
+     * @param {number} fallback
+     * @param {[number, number]} range
+     */
+    const take = (name, value, fallback, [min, max]) => {
+        if (value === undefined) {
+            return fallback;
+        }
+        if (typeof value === "number" && value >= min && value <= max) {
+            return value;
+        }
+        problems.push("piano.display." + name + " must be a number from " + min + " to " + max + ", got "
+            + JSON.stringify(value) + "; using " + fallback);
+        return fallback;
+    };
+    const width = take("width", display.width, DISPLAY_DEFAULTS.width, DISPLAY_LIMITS.width);
+    const height = take("height", display.height, DISPLAY_DEFAULTS.height, DISPLAY_LIMITS.height);
+    const pixels = take("pagePixelsWide", display.pagePixelsWide, DISPLAY_DEFAULTS.pagePixelsWide,
+        DISPLAY_LIMITS.pagePixelsWide);
+    const offsetIn = display.offset !== null && typeof display.offset === "object" ? display.offset : {};
+    if (display.offset !== undefined && offsetIn !== display.offset) {
+        problems.push("piano.display.offset must be an object { x, y, z }, got " + JSON.stringify(display.offset));
+    }
+    const offset = {
+        x: take("offset.x", offsetIn.x, DISPLAY_DEFAULTS.offset.x, DISPLAY_LIMITS.offset),
+        y: take("offset.y", offsetIn.y, DISPLAY_DEFAULTS.offset.y, DISPLAY_LIMITS.offset),
+        z: take("offset.z", offsetIn.z, DISPLAY_DEFAULTS.offset.z, DISPLAY_LIMITS.offset)
+    };
+    const scale = pianoDimensions && pianoDimensions.x > 0 ? pianoDimensions.x / PIANO_NATURAL_WIDTH : 1;
+    return {
+        geometry: {
+            dimensions: { x: width * scale, y: height * scale, z: 0.01 },
+            localPosition: { x: offset.x * scale, y: offset.y * scale, z: offset.z * scale },
+            dpi: pixels / (width * scale * METERS_TO_INCHES)
+        },
+        problems,
+        source: JSON.stringify(found === undefined ? null : found)
+    };
 }

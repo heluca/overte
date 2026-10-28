@@ -368,6 +368,7 @@ std::string Cache::Pipeline::getKey(const vks::Context& context) const {
           + "_" + state.getKey()
           + "_" + format->getKey()
           + "_" + bytesToAscii(primitiveTopology)
+          + "_" + (drawCallInfoPerInstance ? "i" : "c")
           + "_" + getStridesKey();
     return key;
 }
@@ -387,7 +388,15 @@ VkStencilOpState Cache::getStencilOp(const gpu::State::StencilTest& stencil) {
 VkShaderModule Cache::getShaderModule(const vks::Context& context, const shader::Source& source) {
     auto itr = moduleMap.find(source.id);
     if (moduleMap.end() == itr) {
-        const auto& dialectSource = source.dialectSources.find(shader::Dialect::glsl450)->second;
+        auto dialectItr = source.dialectSources.find(shader::Dialect::glsl450);
+        if (dialectItr == source.dialectSources.end()) {
+            // shader::allDialects() only loads glsl450 when the graphics API property is GL45.
+            // Fail loudly instead of dereferencing end() and crashing with a bare SIGSEGV.
+            qFatal("Vulkan backend: shader %u has no glsl450 dialect loaded. "
+                   "The Vulkan backend requires hifi::properties::GraphicsAPI::GL45 (see --graphicsAPI).",
+                   source.id);
+        }
+        const auto& dialectSource = dialectItr->second;
         const auto& variantSource = dialectSource.variantSources.find(shader::Variant::Mono)->second;
         const auto& spirv = variantSource.spirv;
         VkShaderModule result;
@@ -608,6 +617,10 @@ const Cache::PipelineLayout& Cache::getPipeline(const vks::Context& context) {
             attributeDescriptions.push_back(
                 { gpu::slot::attr::DrawCallInfo, gpu::slot::attr::DrawCallInfo, VK_FORMAT_R16G16_SINT, (uint32_t)0 });
             bindingDescriptions.push_back({ gpu::slot::attr::DrawCallInfo, (uint32_t)sizeof(uint16_t) * 2, VK_VERTEX_INPUT_RATE_INSTANCE });
+            if (!pipelineState.drawCallInfoPerInstance && context.vertexAttributeZeroDivisorEnabled) {
+                // Every instance of this draw reads the element the backend bound the buffer at.
+                builder.vertexInputState.divisorDescriptions.push_back({ gpu::slot::attr::DrawCallInfo, 0 });
+            }
         }
     }
 

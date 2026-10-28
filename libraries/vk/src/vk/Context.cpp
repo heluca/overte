@@ -2,7 +2,7 @@
 //  Created by Bradley Austin Davis on 2018/10/29
 //  Adapted for Vulkan in 2022-2025 by dr Karol Suprynowicz.
 //  Copyright 2018 High Fidelity, Inc.
-//  Copyright 2023-2025 Overte e.V.
+//  Copyright 2023-2026 Overte e.V.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
@@ -107,11 +107,16 @@ void Context::createInstance() {
                         VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
                         VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
 #else
+#ifndef Q_OS_MAC
                         VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
                         VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
 #endif
+#endif
+#ifndef Q_OS_MAC
                         VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
-                        VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME});
+                        VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME
+#endif
+                        });
 
     if (isExtensionPresent(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
         requireExtensions({ VK_EXT_DEBUG_UTILS_EXTENSION_NAME });
@@ -126,8 +131,11 @@ void Context::createInstance() {
     appInfo.apiVersion = VK_API_VERSION_1_1;
 
     std::set<std::string> instanceExtensions = { VK_KHR_SURFACE_EXTENSION_NAME,
+#ifndef Q_OS_MAC
                                                  VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME,
-                                                 VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME };
+                                                 VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME
+#endif
+                                                };
 
 // Enable surface extensions depending on OS
 #if defined(_WIN32)
@@ -250,6 +258,19 @@ void Context::buildDevice() {
     }
     enabledExtensions.push_back(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
 
+    Q_ASSERT(!device);
+    device.reset(new VulkanDevice(physicalDevice));
+
+#ifdef Q_OS_MAC
+    // Lets VkImages be created on IOSurfaces shared with OpenGL (QML UI hand-off without a readback).
+    if (device->extensionSupported(VK_EXT_METAL_OBJECTS_EXTENSION_NAME)) {
+        enabledExtensions.push_back(VK_EXT_METAL_OBJECTS_EXTENSION_NAME);
+        metalObjectsEnabled = true;
+    } else {
+        qWarning() << "VK_EXT_metal_objects is not supported by this MoltenVK; QML textures will be read back through the CPU";
+    }
+#endif
+
     // Needed for OpenGL depth buffer compatibility
     VkPhysicalDeviceDepthClipControlFeaturesEXT depthClipControl{};
     depthClipControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT;
@@ -257,11 +278,30 @@ void Context::buildDevice() {
 
     void *pNextChain = &depthClipControl;
 
+    // Vulkan has no constant vertex attribute (glVertexAttribI2i), so the draw call info reaches the vertex shader
+    // as a per-instance stream. An instanced draw outside a named call must read the same draw call info in every
+    // instance, which takes a zero instance divisor on that binding.
+    VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT vertexAttributeDivisor{};
+    vertexAttributeDivisor.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT;
+    if (device->extensionSupported(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME)) {
+        VkPhysicalDeviceFeatures2 features2{};
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features2.pNext = &vertexAttributeDivisor;
+        vkGetPhysicalDeviceFeatures2(physicalDevice, &features2);
+    }
+    if (vertexAttributeDivisor.vertexAttributeInstanceRateZeroDivisor) {
+        enabledExtensions.push_back(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
+        vertexAttributeDivisor.pNext = pNextChain;
+        pNextChain = &vertexAttributeDivisor;
+        vertexAttributeZeroDivisorEnabled = true;
+    } else {
+        qWarning() << "VK_EXT_vertex_attribute_divisor with a zero divisor is not supported by this device; "
+                      "instanced draws outside named calls will read the wrong draw call info";
+    }
+
     enabledFeatures.depthClamp = true;
     enabledFeatures.fillModeNonSolid = true;
 
-    Q_ASSERT(!device);
-    device.reset(new VulkanDevice(physicalDevice));
     device->createLogicalDevice(enabledFeatures, enabledExtensions, pNextChain, true,
                                 VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_TRANSFER_BIT | VK_QUEUE_COMPUTE_BIT);
 }

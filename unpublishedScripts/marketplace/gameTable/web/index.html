@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<!-- Framed sandboxed (opaque origin) by the host page; it needs nothing but its own files. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+<title>Game Table</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="gametable.mjs"></script>
+</head>
+<body>
+<main>
+  <h1 id="title">Game table</h1>
+  <p id="status" class="status" aria-live="polite">Connecting to the host page.</p>
+  <div id="seats" class="seats"></div>
+  <div id="board" class="board" role="grid" aria-label="Board"></div>
+  <div id="actions" class="actions"></div>
+  <p id="notice" class="notice" aria-live="polite"></p>
+</main>
+</body>
+</html>

@@ -20,6 +20,7 @@
 #include "Profiling.h"
 #include "SharedObject.h"
 #include "TextureCache.h"
+#include <gl/IOSurfaceTexture.h>
 #include "RenderControl.h"
 #include "../Logging.h"
 
@@ -159,9 +160,12 @@ void RenderEventHandler::qmlRender(bool sceneGraphSync) {
         }
         _shared->_lastRenderTime = usecTimestampNow();
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glGenerateMipmap(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        if (!gl::isIOSurfaceTexture(texture)) {
+            // IOSurface textures are GL_TEXTURE_RECTANGLE and have no mip chain.
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glGenerateMipmap(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
         auto fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         // Fence will be used in another thread / context, so a flush is required
         glFlush();
