@@ -14,14 +14,24 @@
 
 #include <QtTest/QtTest>
 
-// Destroying a script engine that still holds objects its script created (#45), and proxies collected after its script
-// finished (#50)
+// A native object whose signal a script connects to, and that the script makes emit it
+class SignalSource : public QObject {
+    Q_OBJECT
+public:
+    Q_INVOKABLE void fire(int value) { emit ping(value); }
+signals:
+    void ping(int value);
+};
+
+// Destroying a script engine that still holds objects its script created (#45), proxies collected after its script
+// finished (#50), and a signal proxy collected between a disconnect and a reconnect (#84)
 class ScriptTeardownTests : public QObject {
     Q_OBJECT
 private slots:
     void initTestCase();
     void testTeardownWithScriptOwnedObjects();
     void testMethodProxiesCollectedAfterScriptFinished();
+    void testSignalReconnectAfterCollection();
 };
 
 #endif // overte_ScriptTeardownTests_h
