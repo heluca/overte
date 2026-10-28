@@ -593,6 +593,35 @@ void DomainServerSettingsManager::setupConfigMap(const QString& userConfigFilena
             packPermissions();
         }
 
+        if (oldVersion < 2.8) {
+            // The settings page saved the AC subnet allowlist as ac_subnet_whitelist after the server had moved to reading
+            // ac_subnet_allowlist, so carry over any subnets saved under the old name.
+            const QString SECURITY_KEY = "security";
+            const QString AC_SUBNET_WHITELIST_KEY = "ac_subnet_whitelist";
+            const QString AC_SUBNET_ALLOWLIST_KEYPATH = SECURITY_KEY + ".ac_subnet_allowlist";
+
+            QVariant* oldAllowlist = _configMap.valueForKeyPath(SECURITY_KEY + "." + AC_SUBNET_WHITELIST_KEY);
+            if (oldAllowlist) {
+                // copied out before the new key is created, which can invalidate oldAllowlist
+                QVariantList oldSubnets = oldAllowlist->toList();
+                QVariant* newAllowlist = _configMap.valueForKeyPath(AC_SUBNET_ALLOWLIST_KEYPATH, true);
+                QVariantList allowlist(newAllowlist->toList());
+                for (const auto& subnet : oldSubnets) {
+                    if (!allowlist.contains(subnet)) {
+                        allowlist.append(subnet);
+                    }
+                }
+                *newAllowlist = allowlist;
+
+                QVariant* securityVariant = _configMap.valueForKeyPath(SECURITY_KEY);
+                QVariantMap securityMap = securityVariant->toMap();
+                securityMap.remove(AC_SUBNET_WHITELIST_KEY);
+                *securityVariant = securityMap;
+
+                qDebug() << "Migrated security.ac_subnet_whitelist to security.ac_subnet_allowlist:" << allowlist;
+            }
+        }
+
         // write the current description version to our settings
         *versionVariant = _descriptionVersion;
 

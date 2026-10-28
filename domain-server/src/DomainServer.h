@@ -169,6 +169,7 @@ private:
 
     void setupNodeListAndAssignments();
     bool optionallySetupOAuth();
+    void warnIfACAllowlistUnprotected();
     bool optionallyReadX509KeyAndCertificate();
 
     void getTemporaryName(bool force = false);
