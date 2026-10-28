@@ -20,6 +20,7 @@
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
 #include <QtCore/QSharedPointer>
+#include <QtCore/QString>
 #include <QtCore/QUrl>
 
 #include "AudioRingBuffer.h"
@@ -44,6 +45,9 @@ public:
     enum Consumer { Network = 0, Local, NumConsumers };
     enum class Frame { Audio, Silence, Ended };
 
+    // The audio each consumer's ring keeps before the oldest is dropped
+    static const int MAX_BUFFERED_FRAMES;
+
     // Null unless the URL is http or https. The credential was looked up for url, so it is dropped if url normalizes to
     // another URL.
     static AudioStreamSourcePointer create(const QUrl& url, int numChannels, const AudioStreamCredential& credential = {});
@@ -57,10 +61,22 @@ public:
     // Thread-safe. Ends the stream for both consumers and aborts the request.
     void stop();
 
+    // Thread-safe. After the start and after every underrun, readFrame plays silence until a consumer's ring holds this
+    // many frames, so a producer that sends in bursts does not underrun at every gap. 0, the default, plays each frame
+    // as soon as it is whole. Clamped to MAX_BUFFERED_FRAMES.
+    void setPrebufferFrames(int frames);
+
     // Thread-safe. Writes one network frame to destination: Audio when the stream had it, the last frame padded with
-    // silence; Silence on an underrun, so the reader keeps its timing; Ended, writing nothing, once the request is over
-    // and the consumer has read everything.
+    // silence; Silence on an underrun or while the ring fills to the prebuffer, so the reader keeps its timing; Ended,
+    // writing nothing, once the request is over and the consumer has read everything.
     Frame readFrame(Consumer consumer, char* destination);
+
+    // Thread-safe. The whole frames waiting in a consumer's ring.
+    int getBufferedFrames(Consumer consumer);
+
+    // Thread-safe. Empty until the request is over, then "ended" when the response finished, "http <status>" when the
+    // server answered with an error status, "stopped" after stop(), or "error: <description>".
+    QString getEndReason();
 
 private:
     AudioStreamSource(const QUrl& url, int numChannels, const AudioStreamCredential& credential);
@@ -80,7 +96,10 @@ private:
 
     std::mutex _mutex;
     std::unique_ptr<AudioRingBuffer> _rings[NumConsumers];
+    bool _priming[NumConsumers] { true, true };
+    int _prebufferFrames { 0 };
     bool _ended { false };
+    QString _endReason;
 };
 
 #endif // overte_AudioStreamSource_h

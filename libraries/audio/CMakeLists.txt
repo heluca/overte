@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 set(TARGET_NAME audio)
-setup_hifi_library(Network)
+setup_hifi_library(Network WebSockets)
 
 if (ANDROID)
   add_definitions("-D__STDC_CONSTANT_MACROS")
