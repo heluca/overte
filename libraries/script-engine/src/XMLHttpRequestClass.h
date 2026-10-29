@@ -78,6 +78,11 @@ XMlHttpRequest.getResponseHeader(QString) function
  * <code>11</code> (InsecureRedirectError) rather than send the token on. A script that sets its own
  * <code>Authorization</code> header sends that instead.</p>
  *
+ * <p>In Interface and Agent scripts, a request under the metaverse server's <code>/api/</code> that sets no
+ * <code>Authorization</code> header gets the signed-in account's access token; in entity scripts it does not. Any
+ * other <code>Authorization</code> header, the access token or the script's own, follows a redirect within the same origin
+ * (scheme, host and port) and is left off a redirect to another origin.</p>
+ *
  * @class XMLHttpRequest
  *
  * @hifi-interface
@@ -189,7 +194,12 @@ public:
     XMLHttpRequestClass(ScriptEngine* engine);
     ~XMLHttpRequestClass();
 
-    static const int MAXIMUM_REDIRECTS = 5;
+    /// <code>"Bearer &lt;token&gt;"</code> of the signed-in metaverse account for a request under the metaverse server's
+    /// /api/ made by an Interface or Agent script, or empty. Client entity scripts come from whatever domain is visited, and
+    /// server entity scripts from anyone who may rez there, so neither may act as the account.
+    static QByteArray metaverseAuthorization(ScriptEngine* engine, const QUrl& url);
+    /// Same scheme, host and port, the port defaulting for http and https
+    static bool isSameOrigin(const QUrl& a, const QUrl& b);
 
     /*@jsdoc
      * <p>The state of an XMLHttpRequest.</p>
@@ -382,9 +392,8 @@ private:
 
     int _timeout { 0 };
     QTimer _timer;
-    int _numRedirects { 0 };
 
-    // The script URLs of the code that opened the request, and the script credential doSend() attached for them
+    // The script URLs of the code that opened the request, and the script credential send() attached for them
     QList<QUrl> _credentialScope;
     QByteArray _authorization;
 
@@ -392,7 +401,6 @@ private slots:
     void requestFinished();
     void requestRedirected(const QUrl& target);
     void requestError(QNetworkReply::NetworkError code);
-    void requestMetaDataChanged();
     void requestDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
     void requestTimeout();
 };

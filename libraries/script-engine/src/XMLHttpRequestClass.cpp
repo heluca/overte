@@ -60,6 +60,27 @@ ScriptValue XMLHttpRequestClass::constructor(ScriptContext* context, ScriptEngin
     return engine->newQObject(new XMLHttpRequestClass(engine), ScriptEngine::ScriptOwnership);
 }
 
+QByteArray XMLHttpRequestClass::metaverseAuthorization(ScriptEngine* engine, const QUrl& url) {
+    ScriptManager* manager = engine->manager();
+    if (!manager || !(manager->isClientScript() || manager->isAgentScript())) {
+        return QByteArray();
+    }
+    const QString METAVERSE_API_URL = MetaverseAPI::getCurrentMetaverseServerURL().toString() + "/api/";
+    if (!url.toString().toLower().startsWith(METAVERSE_API_URL)) {
+        return QByteArray();
+    }
+    auto accountManager = DependencyManager::get<AccountManager>();
+    if (!accountManager->hasValidAccessToken()) {
+        return QByteArray();
+    }
+    return ("Bearer " + accountManager->getAccountInfo().getAccessToken().token).toLocal8Bit();
+}
+
+bool XMLHttpRequestClass::isSameOrigin(const QUrl& a, const QUrl& b) {
+    const int defaultPort = a.scheme() == "https" ? 443 : 80;
+    return a.scheme() == b.scheme() && a.host() == b.host() && a.port(defaultPort) == b.port(defaultPort);
+}
+
 ScriptValue XMLHttpRequestClass::getStatus() const {
     if (_reply) {
         return _engine->newValue(_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt());
@@ -81,20 +102,6 @@ void XMLHttpRequestClass::abort() {
 void XMLHttpRequestClass::setRequestHeader(const QString& name, const QString& value) {
     _request.setHeader(QNetworkRequest::UserAgentHeader, NetworkingConstants::OVERTE_USER_AGENT);
     _request.setRawHeader(QByteArray(name.toLatin1()), QByteArray(value.toLatin1()));
-}
-
-void XMLHttpRequestClass::requestMetaDataChanged() {
-    QVariant redirect = _reply->attribute(QNetworkRequest::RedirectionTargetAttribute);
-
-    // If this is a redirect, abort the current request and start a new one
-    if (redirect.isValid() && _numRedirects < MAXIMUM_REDIRECTS) {
-        _numRedirects++;
-        abortRequest();
-
-        QUrl newUrl = _url.resolved(redirect.toUrl().toString());
-        _request.setUrl(newUrl);
-        doSend();
-    }
 }
 
 void XMLHttpRequestClass::requestDownloadProgress(qint64 bytesReceived, qint64 bytesTotal) {
@@ -157,16 +164,9 @@ void XMLHttpRequestClass::open(const QString& method, const QString& url, bool a
         _url.setUrl(url);
         _async = async;
 
-        const QString METAVERSE_API_URL = MetaverseAPI::getCurrentMetaverseServerURL().toString() + "/api/";
-
-        if (url.toLower().left(METAVERSE_API_URL.length()) == METAVERSE_API_URL) {
-            auto accountManager = DependencyManager::get<AccountManager>();
-                
-            if (accountManager->hasValidAccessToken()) {
-                static const QString HTTP_AUTHORIZATION_HEADER = "Authorization";
-                QString bearerString = "Bearer " + accountManager->getAccountInfo().getAccessToken().token;
-                _request.setRawHeader(HTTP_AUTHORIZATION_HEADER.toLocal8Bit(), bearerString.toLocal8Bit());
-            }
+        const QByteArray metaverseToken = metaverseAuthorization(_engine, _url);
+        if (!metaverseToken.isEmpty()) {
+            _request.setRawHeader("Authorization", metaverseToken);
         }
 
         if (auto manager = _engine->manager()) {
@@ -199,6 +199,14 @@ void XMLHttpRequestClass::send(const ScriptValue& data) {
             }
         }
 
+        // After the metaverse token and the script's own header, either of which wins
+        if (!_request.hasRawHeader("Authorization")) {
+            _authorization = ScriptCredentials::find(_request.url(), _credentialScope);
+            if (!_authorization.isEmpty()) {
+                _request.setRawHeader("Authorization", _authorization);
+            }
+        }
+
         doSend();
 
         if (!_async) {
@@ -210,15 +218,9 @@ void XMLHttpRequestClass::send(const ScriptValue& data) {
 }
 
 void XMLHttpRequestClass::doSend() {
-    // After the metaverse token and the script's own header, either of which wins
-    if (!_authorization.isEmpty() || !_request.hasRawHeader("Authorization")) {
-        _authorization = ScriptCredentials::find(_request.url(), _credentialScope);
-        // A null value removes the header
-        _request.setRawHeader("Authorization", _authorization);
-        // Qt sends every request header on to a redirect target; requestRedirected() decides instead
-        _request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, _authorization.isEmpty()
-            ? QNetworkRequest::NoLessSafeRedirectPolicy : QNetworkRequest::UserVerifiedRedirectPolicy);
-    }
+    // Qt sends every request header on to a redirect target; requestRedirected() decides instead
+    _request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, _request.hasRawHeader("Authorization")
+        ? QNetworkRequest::UserVerifiedRedirectPolicy : QNetworkRequest::NoLessSafeRedirectPolicy);
 
     DependencyManager::get<ResourceRequestObserver>()->update(_url, -1, "XMLHttpRequestClass::doSend");
     _reply = NetworkAccessManager::getInstance().sendCustomRequest(_request, _method.toLatin1(), _sendData);
@@ -248,14 +250,31 @@ void XMLHttpRequestClass::requestTimeout() {
 void XMLHttpRequestClass::requestError(QNetworkReply::NetworkError code) {
 }
 
-// Only a credential's request waits for this; the same credential must apply at the target, which also refuses https to
-// http, as no https prefix covers http
+// Only a request with an Authorization header waits for this. A script credential follows only while the same credential
+// applies at the target, which also refuses https to http, as no https prefix covers http. Any other header, the
+// metaverse token or the script's own, follows within the origin and is dropped beyond it, as browsers do.
 void XMLHttpRequestClass::requestRedirected(const QUrl& target) {
-    if (_authorization.isEmpty()) {
+    if (!_request.hasRawHeader("Authorization")) {
         return;
     }
-    if (ScriptCredentials::find(target, _credentialScope) == _authorization) {
+    if (_authorization.isEmpty() ? isSameOrigin(_request.url(), target)
+                                 : ScriptCredentials::find(target, _credentialScope) == _authorization) {
         emit _reply->redirectAllowed();
+        return;
+    }
+    if (_authorization.isEmpty() && !(_request.url().scheme() == "https" && target.scheme() == "http")) {
+        const int status = _reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        abortRequest();
+        _request.setUrl(target);
+        _request.setRawHeader("Authorization", QByteArray());
+        // As Qt follows a redirect
+        if (status != 307 && status != 308 && _method.toUpper() != "HEAD") {
+            _method = "GET";
+            _sendData.clear();
+            _request.setHeader(QNetworkRequest::ContentTypeHeader, QVariant());
+            _request.setHeader(QNetworkRequest::ContentLengthHeader, QVariant());
+        }
+        doSend();
         return;
     }
     abortRequest();
@@ -310,7 +329,6 @@ void XMLHttpRequestClass::connectToReply(QNetworkReply* reply) {
     connect(reply, SIGNAL(finished()), this, SLOT(requestFinished()));
     connect(reply, SIGNAL(error(QNetworkReply::NetworkError)), this, SLOT(requestError(QNetworkReply::NetworkError)));
     connect(reply, SIGNAL(downloadProgress(qint64, qint64)), this, SLOT(requestDownloadProgress(qint64, qint64)));
-    connect(reply, SIGNAL(metaDataChanged()), this, SLOT(requestMetaDataChanged()));
     connect(reply, SIGNAL(redirected(const QUrl&)), this, SLOT(requestRedirected(const QUrl&)));
 }
 
@@ -318,6 +336,5 @@ void XMLHttpRequestClass::disconnectFromReply(QNetworkReply* reply) {
     disconnect(reply, SIGNAL(finished()), this, SLOT(requestFinished()));
     disconnect(reply, SIGNAL(error(QNetworkReply::NetworkError)), this, SLOT(requestError(QNetworkReply::NetworkError)));
     disconnect(reply, SIGNAL(downloadProgress(qint64, qint64)), this, SLOT(requestDownloadProgress(qint64, qint64)));
-    disconnect(reply, SIGNAL(metaDataChanged()), this, SLOT(requestMetaDataChanged()));
     disconnect(reply, SIGNAL(redirected(const QUrl&)), this, SLOT(requestRedirected(const QUrl&)));
 }

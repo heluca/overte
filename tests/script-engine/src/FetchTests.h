@@ -56,6 +56,7 @@ private slots:
     void testFetchScriptCredentialOtherScript();
     void testXhrScriptCredential();
     void testFetchScriptCredentialForeignFrames();
+    void testOwnAuthorizationCrossOriginRedirect();
 
 private:
     // Runs the script to its Script.stop(); false if it threw or never stopped. closureSource, if given, is what the
