@@ -18,6 +18,7 @@
 #include <QByteArray>
 #include <QList>
 #include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QObject>
 #include <QPair>
 #include <QPointer>
@@ -25,7 +26,6 @@
 
 #include "ScriptEngine.h"
 
-class QNetworkRequest;
 class ResourceRequest;
 
 /*@jsdoc
@@ -51,6 +51,10 @@ class ResourceRequest;
  * is added as the request leaves and is never visible to the script. A redirect away from the credential's URL prefix rejects with a
  * <code>TypeError</code> rather than send the token on. A script that sets its own <code>Authorization</code> header
  * sends that instead.</p>
+ * <p>In Interface and Agent scripts, a request under the metaverse server's <code>/api/</code> that sets no
+ * <code>Authorization</code> header gets the signed-in account's access token; in entity scripts it does not. Any
+ * other <code>Authorization</code> header, the access token or the script's own, follows a redirect within the same origin
+ * (scheme, host and port) and is left off a redirect to another origin.</p>
  * @function fetch
  * @param {Request|string} input - The URL, or a request to send.
  * @param {Request.Init} [init] - Request settings, overriding those of <code>input</code>.
@@ -299,6 +303,10 @@ private:
     QUrl _url;
     bool _isHead;
     QPointer<QNetworkReply> _reply;
+    // What startHttp() sent, for following a redirect to another origin without its Authorization header
+    QNetworkRequest _request;
+    QByteArray _method;
+    QByteArray _body;
     QPointer<ResourceRequest> _resourceRequest;
     QList<QUrl> _credentialScope;
     QByteArray _authorization;

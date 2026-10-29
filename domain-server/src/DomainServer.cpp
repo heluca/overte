@@ -378,6 +378,9 @@ DomainServer::DomainServer(int argc, char* argv[]) :
         }
     }
 
+    warnIfACAllowlistUnprotected();
+    connect(&_settingsManager, &DomainServerSettingsManager::settingsUpdated, this, &DomainServer::warnIfACAllowlistUnprotected);
+
     if (QDir(getEntitiesDirPath()).mkpath(".")) {
         qCDebug(domain_server) << "Created entities data directory";
     }
@@ -2827,6 +2830,29 @@ QString DomainServer::operationToString(const QNetworkAccessManager::Operation &
         default:
             return "UNKNOWN";
     }
+}
+
+// Allowed assignment clients are sent the domain's script credentials, so a settings page anyone can open lets anyone add
+// their own subnet and collect them. Saving the allowlist restarts the domain-server, so the startup check covers it; the
+// settingsUpdated connection covers the admin login being removed, which does not restart.
+void DomainServer::warnIfACAllowlistUnprotected() {
+    static const QString BASIC_AUTH_USERNAME_KEY_PATH = "security.http_username";
+    static const QString BASIC_AUTH_PASSWORD_KEY_PATH = "security.http_password";
+
+    // _acSubnetAllowlist always holds localhost
+    if (_acSubnetAllowlist.size() <= 1 || _oauthEnable) {
+        return;
+    }
+
+    if (_settingsManager.valueForKeyPath(BASIC_AUTH_USERNAME_KEY_PATH).isValid() &&
+        !_settingsManager.valueForKeyPath(BASIC_AUTH_PASSWORD_KEY_PATH).toString().isEmpty()) {
+        return;
+    }
+
+    qCWarning(domain_server) << "Assignment clients from" << (_acSubnetAllowlist.size() - 1)
+        << "non-localhost subnet(s) are allowed, but the settings pages have no admin login."
+        << "Anyone who can reach the settings pages can add a subnet and receive the domain's script credentials."
+        << "Set an HTTP username and password, or enable OAuth, under Security.";
 }
 
 std::pair<bool, QString>  DomainServer::isAuthenticatedRequest(HTTPConnection* connection) {

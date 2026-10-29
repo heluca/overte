@@ -14,6 +14,17 @@
 
 #include <QtTest/QtTest>
 
+// A script-owned object a native function returns, as AvatarList.getAvatar returns a ScriptAvatarData (#83)
+class OwnershipProbe : public QObject {
+    Q_OBJECT
+public:
+    OwnershipProbe() { ++liveCount; }
+    ~OwnershipProbe() { --liveCount; }
+    Q_INVOKABLE int value() const { return 1; }
+
+    static int liveCount;
+};
+
 // A native object whose signal a script connects to, and that the script makes emit it
 class SignalSource : public QObject {
     Q_OBJECT
@@ -24,13 +35,16 @@ signals:
 };
 
 // Destroying a script engine that still holds objects its script created (#45), proxies collected after its script
-// finished (#50), and a signal proxy collected between a disconnect and a reconnect (#84)
+// finished (#50), script-owned objects freed while it runs (#83), and a signal proxy collected between a disconnect and a
+// reconnect (#84)
 class ScriptTeardownTests : public QObject {
     Q_OBJECT
 private slots:
     void initTestCase();
     void testTeardownWithScriptOwnedObjects();
     void testMethodProxiesCollectedAfterScriptFinished();
+    void testScriptOwnedObjectsFreedWhileRunning_data();
+    void testScriptOwnedObjectsFreedWhileRunning();
     void testSignalReconnectAfterCollection();
 };
 

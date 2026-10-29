@@ -12,7 +12,9 @@
 #include "ScriptTeardownTests.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QEventLoop>
 #include <QtCore/QThread>
+#include <QtCore/QTimer>
 
 #include "DependencyManager.h"
 #include "ScriptCache.h"
@@ -25,6 +27,8 @@
 #include "v8/ScriptEngineV8.h"
 
 QTEST_MAIN(ScriptTeardownTests)
+
+int OwnershipProbe::liveCount = 0;
 
 // A teardown that deadlocks never returns, so it runs on its own thread and the test waits this long for it
 static const unsigned long TEARDOWN_TIMEOUT_MS = 10000;
@@ -121,6 +125,85 @@ void ScriptTeardownTests::testMethodProxiesCollectedAfterScriptFinished() {
 
     QCOMPARE(printed, QStringList({ "created" }));
     QVERIFY(engineDestroyed);
+}
+
+static ScriptValue makeProbe(ScriptContext*, ScriptEngine* engine) {
+    return engine->newQObject(new OwnershipProbe(), ScriptEngine::ScriptOwnership);
+}
+
+static ScriptValue liveProbes(ScriptContext*, ScriptEngine* engine) {
+    return engine->newValue(OwnershipProbe::liveCount);
+}
+
+void ScriptTeardownTests::testScriptOwnedObjectsFreedWhileRunning_data() {
+    QTest::addColumn<QString>("subscribe");
+    QTest::addColumn<bool>("runFromEvent");
+
+    // An Agent calls run() from a queued call on its thread's event loop; runInThread() calls it from QThread::started
+    QTest::newRow("update handler, run from an event") << "Script.update.connect(tick);" << true;
+    QTest::newRow("timer, run from an event") << "Script.setInterval(tick, 10);" << true;
+    QTest::newRow("update handler, run directly") << "Script.update.connect(tick);" << false;
+}
+
+void ScriptTeardownTests::testScriptOwnedObjectsFreedWhileRunning() {
+    QFETCH(QString, subscribe);
+    QFETCH(bool, runFromEvent);
+
+    // The probes are dropped in one frame and collected in a later one, so that nothing on the stack still holds them
+    static const QString SCRIPT =
+        "var frame = 0;\n"
+        "function tick() {\n"
+        "    frame++;\n"
+        "    if (frame === 1) {\n"
+        "        for (var i = 0; i < 1000; i++) { makeProbe().value(); }\n"
+        "        print('made ' + liveProbes());\n"
+        "    } else if (frame === 5) {\n"
+        "        Script.requestGarbageCollection();\n"
+        "    } else if (frame === 30) {\n"
+        "        print('live ' + liveProbes());\n"
+        "        Script.stop(true);\n"
+        "    }\n"
+        "}\n";
+
+    OwnershipProbe::liveCount = 0;
+    QStringList printed;
+    int liveAfterRun = -1;
+    QThread* thread = QThread::create([&printed, &liveAfterRun, &subscribe, runFromEvent] {
+        auto manager = newScriptManager(ScriptManager::NETWORKLESS_TEST_SCRIPT, SCRIPT + subscribe, "testScriptOwned.js");
+        QObject::connect(manager.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString&) {
+            printed.append(message);
+        });
+        auto runScript = [&manager] {
+            auto engine = manager->engine();
+            auto scopeGuard = engine->getScopeGuard();
+            engine->globalObject().setProperty("makeProbe", engine->newFunction(makeProbe));
+            engine->globalObject().setProperty("liveProbes", engine->newFunction(liveProbes));
+            manager->run();
+        };
+        if (runFromEvent) {
+            QEventLoop loop;
+            QTimer::singleShot(0, &loop, [&runScript, &loop] {
+                runScript();
+                loop.quit();
+            });
+            loop.exec();
+        } else {
+            runScript();
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        liveAfterRun = OwnershipProbe::liveCount;
+        manager.reset();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    });
+    thread->start();
+    if (!thread->wait(TEARDOWN_TIMEOUT_MS)) {
+        QFAIL("script did not finish");
+    }
+    delete thread;
+
+    QCOMPARE(printed, QStringList({ "made 1000", "live 0" }));
+    QCOMPARE(liveAfterRun, 0);
+    QCOMPARE(OwnershipProbe::liveCount, 0);
 }
 
 void ScriptTeardownTests::testSignalReconnectAfterCollection() {

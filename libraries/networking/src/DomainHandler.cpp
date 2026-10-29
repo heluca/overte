@@ -14,6 +14,7 @@
 
 #include <math.h>
 
+#include <LogHandler.h>
 #include <PathUtils.h>
 
 #include <shared/QtHelpers.h>
@@ -444,6 +445,13 @@ void DomainHandler::requestDomainSettings() {
 }
 
 void DomainHandler::processSettingsPacketList(QSharedPointer<ReceivedMessage> packetList) {
+    // DomainSettings is unsourced, so it is accepted from any socket; only the domain server may replace the settings.
+    if (packetList->getSenderSockAddr() != _sockAddr) {
+        HIFI_FCDEBUG(networking(), "Ignoring DomainSettings from" << packetList->getSenderSockAddr()
+            << "which is not the domain server at" << _sockAddr);
+        return;
+    }
+
     // stop our settings timer since we successfully requested the settings we need
     _settingsTimer.stop();
     

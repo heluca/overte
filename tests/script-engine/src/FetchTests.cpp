@@ -535,3 +535,68 @@ void FetchTests::testFetchScriptCredentialForeignFrames() {
     QVERIFY2(printed.contains("|own Bearer t0k-en"), qPrintable(printed));
     QVERIFY2(!printed.contains("closure Bearer") && !printed.contains("function Bearer"), qPrintable(printed));
 }
+
+// Redirects within the origin and to another, by fetch and XMLHttpRequest, each printing the method, Authorization
+// header and body the target saw
+static const QString OWN_AUTHORIZATION_REDIRECT_REQUESTS =
+    "var results = [];\n"
+    "var OWN = { Authorization: 'Bearer own' };\n"
+    "var REQUESTS = [\n"
+    "    ['GET', BASE + '/redirect-to/302/' + BASE + '/echo'],\n"
+    "    ['GET', BASE + '/redirect-to/302/' + OTHER + '/echo'],\n"
+    "    ['POST', BASE + '/redirect-to/307/' + OTHER + '/echo'],\n"
+    "    ['POST', BASE + '/redirect-to/302/' + OTHER + '/echo']\n"
+    "];\n"
+    "function viaFetch(method, url) {\n"
+    "    return fetch(url, { method: method, headers: OWN, body: method === 'POST' ? 'payload' : undefined })\n"
+    "        .then(function(response) {\n"
+    "            return response.text().then(function(body) {\n"
+    "                return [response.headers.get('x-echo-method'), response.headers.get('x-echo-authorization'),\n"
+    "                    body, response.redirected].join(',');\n"
+    "            });\n"
+    "        });\n"
+    "}\n"
+    "function viaXhr(method, url) {\n"
+    "    return new Promise(function(resolve) {\n"
+    "        var request = new XMLHttpRequest();\n"
+    "        request.onreadystatechange = function() {\n"
+    "            if (request.readyState === request.DONE) {\n"
+    "                resolve([request.getResponseHeader('x-echo-method'),\n"
+    "                    request.getResponseHeader('x-echo-authorization'), request.responseText].join(','));\n"
+    "            }\n"
+    "        };\n"
+    "        request.open(method, url);\n"
+    "        request.setRequestHeader('Authorization', 'Bearer own');\n"
+    "        request.send(method === 'POST' ? 'payload' : null);\n"
+    "    });\n"
+    "}\n"
+    "var chain = Promise.resolve();\n"
+    "REQUESTS.forEach(function(request) {\n"
+    "    chain = chain.then(function() { return viaFetch(request[0], request[1]); }).then(function(value) {\n"
+    "        results.push('fetch ' + value);\n"
+    "        return viaXhr(request[0], request[1]);\n"
+    "    }).then(function(value) { results.push('xhr ' + value); });\n"
+    "});\n"
+    "chain.catch(function(e) { results.push('error ' + e); }).then(function() {\n"
+    "    print(results.join('|'));\n"
+    "    Script.stop(true);\n"
+    "});\n";
+
+void FetchTests::testOwnAuthorizationCrossOriginRedirect() {
+    FetchTestServer server;
+    FetchTestServer other;
+    QString script = "var BASE = '" + server.base() + "';\nvar OTHER = '" + other.base() + "';\n" +
+        OWN_AUTHORIZATION_REDIRECT_REQUESTS;
+
+    QString printed;
+    QStringList errors;
+    QVERIFY(runFetchScript(script, "testOwnAuthorizationCrossOriginRedirect.js", printed, errors));
+    QCOMPARE(errors, QStringList());
+    // The script's own header follows a redirect within the origin and is left off one to another port, which a 307
+    // keeps the method and body of and a 302 turns into a GET, as Qt does within the origin
+    QCOMPARE(printed, QString(
+        "fetch GET,Bearer own,,true|xhr GET,Bearer own,|"
+        "fetch GET,none,,true|xhr GET,none,|"
+        "fetch POST,none,payload,true|xhr POST,none,payload|"
+        "fetch GET,none,,true|xhr GET,none,"));
+}
