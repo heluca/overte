@@ -689,8 +689,10 @@ V8ScriptValue ScriptObjectV8Proxy::property(const V8ScriptValue& object, const V
                                                         //V8TODO ScriptEngine::ExcludeDeleteLater |
                                                         ScriptEngine::PreferExistingWrapperObject;
             // It's not necessarily new, newQObject looks for it first in object wrapper map
-            // V8TODO: won't ScriptEngine::ScriptOwnership cause trouble here?
-            return ScriptObjectV8Proxy::newQObject(_engine, proxy, ScriptEngine::ScriptOwnership, options);
+            // The wrapper lives as long as the proxy, which is deleted with the object it belongs to or with the engine. A
+            // script-owned wrapper is collected once the last handler is disconnected, and the proxy's deletion is deferred,
+            // so this would hand out the dead wrapper's empty handle on the next access (#84).
+            return ScriptObjectV8Proxy::newQObject(_engine, proxy, ScriptEngine::QtOwnership, options);
         }
     }
     return V8ScriptValue(_engine, v8::Null(isolate));
@@ -1545,7 +1547,7 @@ void ScriptSignalV8Proxy::disconnect(ScriptValue arg0, ScriptValue arg1) {
     ScriptEngine::QObjectWrapOptions options = ScriptEngine::ExcludeSuperClassContents |
                                                ScriptEngine::PreferExistingWrapperObject;
     // It's not necessarily new, newQObject looks for it first in object wrapper map, and for already existing signal it should be found there
-    V8ScriptValue v8ThisObject = ScriptObjectV8Proxy::newQObject(_engine, this, ScriptEngine::ScriptOwnership, options);
+    V8ScriptValue v8ThisObject = ScriptObjectV8Proxy::newQObject(_engine, this, ScriptEngine::QtOwnership, options);
     if (!destFunction->Get(destFunctionContext, destDataName).ToLocal(&destData)) {
         Q_ASSERT(false);
     }

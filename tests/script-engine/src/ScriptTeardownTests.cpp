@@ -205,3 +205,56 @@ void ScriptTeardownTests::testScriptOwnedObjectsFreedWhileRunning() {
     QCOMPARE(liveAfterRun, 0);
     QCOMPARE(OwnershipProbe::liveCount, 0);
 }
+
+void ScriptTeardownTests::testSignalReconnectAfterCollection() {
+    // Like an Agent that drops its scene handlers on scene_stop and connects them again on scene_start (#84): once the
+    // last handler is disconnected nothing holds the signal object, and a collection before the reconnect releases it.
+    // Each tick emits while disconnected, collects, reconnects and emits again.
+    static const QString SCRIPT =
+        "var received = [];\n"
+        "function onPing(value) { received.push(value); }\n"
+        "function attach() { source.ping.connect(onPing); }\n"
+        "function detach() { source.ping.disconnect(onPing); }\n"
+        "var cycle = 0;\n"
+        "attach();\n"
+        "source.fire(cycle);\n"
+        "function step() {\n"
+        "    detach();\n"
+        "    source.fire(-1);\n"
+        "    Script.requestGarbageCollection();\n"
+        "    attach();\n"
+        "    cycle++;\n"
+        "    source.fire(cycle);\n"
+        "    if (cycle < 5) {\n"
+        "        Script.setTimeout(step, 0);\n"
+        "    } else {\n"
+        "        print(received.join(' '));\n"
+        "        Script.stop(true);\n"
+        "    }\n"
+        "}\n"
+        "Script.setTimeout(step, 0);\n";
+
+    QStringList printed;
+    QThread* thread = QThread::create([&printed] {
+        SignalSource source;
+        auto manager = newScriptManager(ScriptManager::NETWORKLESS_TEST_SCRIPT, SCRIPT, "testSignalReconnect.js");
+        QObject::connect(manager.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString&) {
+            printed.append(message);
+        });
+        {
+            auto engine = manager->engine();
+            auto scopeGuard = engine->getScopeGuard();
+            engine->registerGlobalObject(scopeGuard.get(), "source", &source);
+            manager->run();
+        }
+        manager.reset();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    });
+    thread->start();
+    if (!thread->wait(TEARDOWN_TIMEOUT_MS)) {
+        QFAIL("script did not finish");
+    }
+    delete thread;
+
+    QCOMPARE(printed, QStringList({ "0 1 2 3 4 5" }));
+}

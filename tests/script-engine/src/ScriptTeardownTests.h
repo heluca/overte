@@ -25,8 +25,18 @@ public:
     static int liveCount;
 };
 
+// A native object whose signal a script connects to, and that the script makes emit it
+class SignalSource : public QObject {
+    Q_OBJECT
+public:
+    Q_INVOKABLE void fire(int value) { emit ping(value); }
+signals:
+    void ping(int value);
+};
+
 // Destroying a script engine that still holds objects its script created (#45), proxies collected after its script
-// finished (#50), and script-owned objects freed while it runs (#83)
+// finished (#50), script-owned objects freed while it runs (#83), and a signal proxy collected between a disconnect and a
+// reconnect (#84)
 class ScriptTeardownTests : public QObject {
     Q_OBJECT
 private slots:
@@ -35,6 +45,7 @@ private slots:
     void testMethodProxiesCollectedAfterScriptFinished();
     void testScriptOwnedObjectsFreedWhileRunning_data();
     void testScriptOwnedObjectsFreedWhileRunning();
+    void testSignalReconnectAfterCollection();
 };
 
 #endif // overte_ScriptTeardownTests_h
