@@ -1218,6 +1218,11 @@ void ScriptManager::run() {
             _engine->processEvents();
         }
 
+        // Deferred deletes posted at this level, e.g. those the collector's weak callbacks post for script-owned objects
+        // during an update handler, are only delivered by an event loop at a lower level. When run() is itself called from
+        // an event, as an Agent's is, there is none until the script ends (#83).
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
         // Promise jobs queued outside a script call, e.g. by a V8 platform task run in processEvents()
         _engine->performMicrotaskCheckpoint();
 
