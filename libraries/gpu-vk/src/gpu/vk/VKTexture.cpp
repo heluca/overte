@@ -39,24 +39,73 @@ const uint32_t VKTexture::WRAP_MODES[Sampler::NUM_WRAP_MODES] = {
     VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE        // WRAP_MIRROR_ONCE,
 };
 
+// { minFilter, magFilter }; the mip part of each filter is in samplerCreateInfo().
 const VKFilterMode VKTexture::FILTER_MODES[Sampler::NUM_FILTERS] = {
     { VK_FILTER_NEAREST, VK_FILTER_NEAREST },  //FILTER_MIN_MAG_POINT,
     { VK_FILTER_NEAREST, VK_FILTER_LINEAR },  //FILTER_MIN_POINT_MAG_LINEAR,
     { VK_FILTER_LINEAR, VK_FILTER_NEAREST },  //FILTER_MIN_LINEAR_MAG_POINT,
     { VK_FILTER_LINEAR, VK_FILTER_LINEAR },  //FILTER_MIN_MAG_LINEAR,
 
-    // VKTODO: VkSamplerMipmapMode has some related setting too
-    // VKTODO: This is not really accurate, but hopefully good enough for now
     { VK_FILTER_NEAREST, VK_FILTER_NEAREST },  //FILTER_MIN_MAG_MIP_POINT,
-    { VK_FILTER_LINEAR, VK_FILTER_NEAREST },  //FILTER_MIN_MAG_POINT_MIP_LINEAR,
+    { VK_FILTER_NEAREST, VK_FILTER_NEAREST },  //FILTER_MIN_MAG_POINT_MIP_LINEAR,
     { VK_FILTER_NEAREST, VK_FILTER_LINEAR },  //FILTER_MIN_POINT_MAG_LINEAR_MIP_POINT,
-    { VK_FILTER_LINEAR, VK_FILTER_LINEAR },  //FILTER_MIN_POINT_MAG_MIP_LINEAR,
-    { VK_FILTER_NEAREST, VK_FILTER_NEAREST },  //FILTER_MIN_LINEAR_MAG_MIP_POINT,
+    { VK_FILTER_NEAREST, VK_FILTER_LINEAR },  //FILTER_MIN_POINT_MAG_MIP_LINEAR,
+    { VK_FILTER_LINEAR, VK_FILTER_NEAREST },  //FILTER_MIN_LINEAR_MAG_MIP_POINT,
     { VK_FILTER_LINEAR, VK_FILTER_NEAREST },  //FILTER_MIN_LINEAR_MAG_POINT_MIP_LINEAR,
-    { VK_FILTER_NEAREST, VK_FILTER_LINEAR },  //FILTER_MIN_MAG_LINEAR_MIP_POINT,
+    { VK_FILTER_LINEAR, VK_FILTER_LINEAR },  //FILTER_MIN_MAG_LINEAR_MIP_POINT,
     { VK_FILTER_LINEAR, VK_FILTER_LINEAR },  //FILTER_MIN_MAG_MIP_LINEAR,
     { VK_FILTER_LINEAR, VK_FILTER_LINEAR }  //FILTER_ANISOTROPIC,
 };
+
+VkSamplerCreateInfo VKTexture::samplerCreateInfo(const Sampler& sampler, float minLod, float maxLod) {
+    VkSamplerCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+
+    const auto filter = sampler.getFilter();
+    info.minFilter = FILTER_MODES[filter].minFilter;
+    info.magFilter = FILTER_MODES[filter].magFilter;
+    switch (filter) {
+        case Sampler::FILTER_MIN_MAG_POINT_MIP_LINEAR:
+        case Sampler::FILTER_MIN_POINT_MAG_MIP_LINEAR:
+        case Sampler::FILTER_MIN_LINEAR_MAG_POINT_MIP_LINEAR:
+        case Sampler::FILTER_MIN_MAG_MIP_LINEAR:
+        case Sampler::FILTER_ANISOTROPIC:
+            info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            break;
+        default:
+            info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            break;
+    }
+    // The first four filters read the top mip only, as GL_LINEAR and GL_NEAREST do.
+    if (filter < Sampler::FILTER_MIN_MAG_MIP_POINT) {
+        maxLod = minLod;
+    }
+    info.minLod = minLod;
+    info.maxLod = maxLod;
+    info.mipLodBias = 0.0f;
+
+    info.addressModeU = (VkSamplerAddressMode)WRAP_MODES[sampler.getWrapModeU()];
+    info.addressModeV = (VkSamplerAddressMode)WRAP_MODES[sampler.getWrapModeV()];
+    info.addressModeW = (VkSamplerAddressMode)WRAP_MODES[sampler.getWrapModeW()];
+    // Vulkan has three fixed border colours; the shadow map wants white (lit beyond the cascade).
+    const auto& border = sampler.getBorderColor();
+    if (border.a <= 0.0f) {
+        info.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+    } else if (border.r >= 1.0f && border.g >= 1.0f && border.b >= 1.0f) {
+        info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    } else {
+        info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+    }
+
+    // sampler2DShadow and friends need the comparison done in the sampler.
+    info.compareEnable = sampler.doComparison() ? VK_TRUE : VK_FALSE;
+    info.compareOp = COMPARISON_TO_VK[(size_t)sampler.getComparisonFunction()];
+
+    // samplerAnisotropy is not among the device features vks::Context enables.
+    info.anisotropyEnable = VK_FALSE;
+    info.maxAnisotropy = 1.0f;
+    return info;
+}
 
 static constexpr size_t MAX_PIXEL_BYTE_SIZE{ 4 };
 static constexpr size_t MAX_TRANSFER_DIMENSION{ 1024 };
@@ -248,21 +297,9 @@ VkDescriptorImageInfo VKAttachmentTexture::getDescriptorImageInfo() {
     if (_vkSampler == VK_NULL_HANDLE) {
         auto backend = _backend.lock();
         auto device = backend->getContext().device;
-        // Create sampler
-        VkSamplerCreateInfo samplerCreateInfo = {};
-        samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        samplerCreateInfo.magFilter = VK_FILTER_LINEAR;  // VKTODO
-        samplerCreateInfo.minFilter = VK_FILTER_LINEAR;  // VKTODO
-        samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerCreateInfo.mipLodBias = 0.0f;
-        samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
-        samplerCreateInfo.minLod = 0.0f;
-        samplerCreateInfo.maxLod = 0.0f;
-        samplerCreateInfo.maxAnisotropy = 1.0f;
-        VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
+        // Create sampler. Attachments have one mip; the shadow map's sampler asks for depth comparison.
+        auto info = samplerCreateInfo(_gpuObject.getSampler(), 0.0f, 0.0f);
+        VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &info, nullptr, &_vkSampler));
     }
     if (_vkImageView == VK_NULL_HANDLE) {
         auto backend = _backend.lock();
@@ -649,20 +686,8 @@ void VKStrictResourceTexture::updateSamplerAndView(VKBackend &backend) {
     const uint32_t levelCount = _populatedMaxMip + 1;
 
     // Create sampler
-    VkSamplerCreateInfo samplerCreateInfo = {};
-    samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerCreateInfo.magFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.minFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.mipLodBias = 0.0f;
-    samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
-    samplerCreateInfo.minLod = static_cast<float>(_populatedMinMip);
-    samplerCreateInfo.maxLod = static_cast<float>(levelCount);
-    samplerCreateInfo.maxAnisotropy = 1.0f;
-    VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
+    auto info = samplerCreateInfo(_gpuObject.getSampler(), static_cast<float>(_populatedMinMip), static_cast<float>(levelCount));
+    VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &info, nullptr, &_vkSampler));
 
     // Create image view
     VkImageViewCreateInfo viewCreateInfo = {};
@@ -1192,20 +1217,8 @@ void VKExternalTexture::transferGL(VKBackend &backend) {
 void VKExternalTexture::postTransfer(VKBackend &backend) {
     auto device = backend.getContext().device;
     // Create sampler
-    VkSamplerCreateInfo samplerCreateInfo = {};
-    samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerCreateInfo.magFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.minFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.mipLodBias = 0.0f;
-    samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
-    samplerCreateInfo.minLod = 0.0f;
-    samplerCreateInfo.maxLod = 0.0f;
-    samplerCreateInfo.maxAnisotropy = 1.0f;
-    VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
+    auto info = samplerCreateInfo(_gpuObject.getSampler(), 0.0f, 0.0f);
+    VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &info, nullptr, &_vkSampler));
 
     if (_vkImage == VK_NULL_HANDLE) {
         // IOSurface mode: views are created per surface in bindIOSurface.
@@ -1774,20 +1787,8 @@ void VKResourceTexture::syncSampler(const Sampler& sampler) {
         _vkSampler = VK_NULL_HANDLE;
     }
     // Create sampler
-    VkSamplerCreateInfo samplerCreateInfo = {};
-    samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerCreateInfo.magFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.minFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.mipLodBias = 0.0f;
-    samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
-    samplerCreateInfo.minLod = 0.0f;
-    samplerCreateInfo.maxLod = static_cast<float>(mips);
-    samplerCreateInfo.maxAnisotropy = 1.0f;
-    VK_CHECK_RESULT(vkCreateSampler(backend->getContext().device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
+    auto info = samplerCreateInfo(sampler, 0.0f, static_cast<float>(mips));
+    VK_CHECK_RESULT(vkCreateSampler(backend->getContext().device->logicalDevice, &info, nullptr, &_vkSampler));
     updateImageView();
 }
 
