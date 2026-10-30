@@ -14,8 +14,9 @@
 //  World frame: +y up, north -z, east +x. The sun turns about the north-south (z) axis: it rises
 //  due east, stands overhead at noon and sets due west.
 //
-//  No engine globals, so it runs under Node, the entity script server and Interface alike.
-//  sun-sky.fs repeats the sun's position and HAZE_KEYS; keep the two in step.
+//  Also the scripts' shared reading of userData.sunSky. No engine globals, so it runs under
+//  Node, the entity script server and Interface alike. sun-sky.fs repeats the sun's position
+//  and the haze column of LIGHT_KEYS; keep the two in step.
 //
 
 export const DEGREES_PER_HOUR = 15;
@@ -169,6 +170,18 @@ function bracket(elevation) {
 }
 
 /**
+ * How much daylight there is, 0 to 1: the ambient intensity curve over its daytime value, so 1
+ * from FULL_DAY_ELEVATION up and NIGHT_AMBIENT_INTENSITY / DAY_AMBIENT_INTENSITY (0.2) at night.
+ * Rounded to 3 decimals. For zones with their own look, which scale it by this.
+ * @param {number} elevation the sun's elevation in degrees
+ * @returns {number}
+ */
+export function daylight(elevation) {
+    const [below, above, t] = bracket(elevation);
+    return Math.round(mix(below.ambientIntensity, above.ambientIntensity, t) / DAY_AMBIENT_INTENSITY * 1000) / 1000;
+}
+
+/**
  * The sky zone's light for the sun at an elevation. Intensities are rounded to 3 decimals and
  * colours to whole units, so a minute's change that shows nothing writes nothing new.
  * @param {number} elevation the sun's elevation in degrees
@@ -193,4 +206,34 @@ export function lightFor(elevation, towardSun) {
         },
         haze: { hazeColor: mixColor(below.hazeColor, above.hazeColor, t) }
     };
+}
+
+/**
+ * Reads an entity's userData for the scripts: the `sunSky` object and its noon, which has no
+ * default.
+ * @param {unknown} text the entity's userData
+ * @returns {{ userData: Record<string, any>, sunSky: Record<string, any>, noonUtc: number, error: null }
+ *     | { userData: Record<string, any>, sunSky: null, noonUtc: null, error: string }}
+ *     the parsed userData (an empty object if it is not a JSON object) and the sunSky object, or
+ *     why it cannot be used
+ */
+export function readSunSky(text) {
+    /** @type {Record<string, any>} */
+    let userData = {};
+    try {
+        const value = JSON.parse(typeof text === "string" ? text : "");
+        userData = value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+    } catch (e) {
+        userData = {};
+    }
+    const sunSky = userData.sunSky;
+    if (sunSky === null || typeof sunSky !== "object" || Array.isArray(sunSky)) {
+        return { userData, sunSky: null, noonUtc: null, error: "userData.sunSky is missing" };
+    }
+    const noonUtc = sunSky.noonUtc;
+    if (typeof noonUtc !== "number" || !(noonUtc >= 0 && noonUtc < 24)) {
+        return { userData, sunSky: null, noonUtc: null,
+            error: "userData.sunSky.noonUtc must be the hour of solar noon in UTC, 0 to 24; got " + JSON.stringify(noonUtc) };
+    }
+    return { userData, sunSky, noonUtc, error: null };
 }

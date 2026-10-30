@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 
 import {
     DARK_ELEVATION, DAY_HAZE_COLOR, LIGHT_KEYS, NIGHT_AMBIENT_COLOR, NIGHT_AMBIENT_INTENSITY, SUNSET_ELEVATION,
-    lightFor, phase, phaseTimes, sunPosition
+    lightFor, phase, phaseTimes, readSunSky, sunPosition
 } from "../sun-sky.mjs";
 
 const NOON = 19;
@@ -192,4 +192,20 @@ test("the curve's rows rise in elevation and hold beyond the ends", () => {
     LIGHT_KEYS.slice(1).forEach((row, i) => assert.ok(row.elevation > LIGHT_KEYS[i].elevation));
     assert.deepEqual(lightFor(-45, { x: 0, y: -1, z: 0 }).haze, lightFor(DARK_ELEVATION, { x: 0, y: -1, z: 0 }).haze);
     assert.deepEqual(lightFor(30, { x: 0, y: 1, z: 0 }).ambientLight, lightFor(89, { x: 0, y: 1, z: 0 }).ambientLight);
+});
+
+test("readSunSky takes userData's sunSky and its noon, with no default", () => {
+    const ok = readSunSky(JSON.stringify({ sunSky: { noonUtc: 19, other: 1 }, kept: true }));
+    assert.equal(ok.noonUtc, 19);
+    assert.deepEqual(ok.sunSky, { noonUtc: 19, other: 1 });
+    assert.equal(ok.userData.kept, true);
+    assert.equal(ok.error, null);
+    for (const text of [undefined, "", "not json", "[1]", JSON.stringify({}), JSON.stringify({ sunSky: [] })]) {
+        assert.match(String(readSunSky(text).error), /userData.sunSky is missing/);
+        assert.equal(readSunSky(text).noonUtc, null);
+    }
+    for (const noonUtc of [undefined, null, "19", -0.5, 24, Infinity]) {
+        assert.match(String(readSunSky(JSON.stringify({ sunSky: { noonUtc } })).error), /noonUtc must be the hour of solar noon/);
+    }
+    assert.equal(readSunSky(JSON.stringify({ sunSky: { noonUtc: 0 } })).noonUtc, 0);
 });

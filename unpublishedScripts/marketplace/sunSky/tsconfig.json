@@ -1,5 +1,5 @@
 {
-    // Type-checks the server script against the server entity declarations built in tools/typings
+    // Type-checks the server scripts against the server entity declarations built in tools/typings
     // (npm ci && npm run build there first). The tests run under Node and are not included.
     "compilerOptions": {
         "strict": true,
@@ -17,6 +17,8 @@
     "files": [
         "../../../tools/typings/dist/overte-server-entity.d.ts",
         "sun-sky.mjs",
-        "sun-sky-server.mjs"
+        "sun-sky-server.mjs",
+        "sun-sky-lamp.mjs",
+        "sun-sky-water.mjs"
     ]
 }
