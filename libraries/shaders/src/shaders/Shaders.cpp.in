@@ -37,7 +37,7 @@ const std::vector<Dialect> & allDialects() {
     static const std::vector<Dialect> ALL_DIALECTS_32ES{ { Dialect::glsl310es } };
 
     auto backendApi = hifi::properties::getGraphicsAPI();
-    if (backendApi == hifi::properties::GraphicsAPI::GL45) {
+    if (backendApi == hifi::properties::GraphicsAPI::GL45 || backendApi == hifi::properties::GraphicsAPI::Vulkan) {
         return ALL_DIALECTS_45;
     } else if (backendApi == hifi::properties::GraphicsAPI::GL41) {
         return ALL_DIALECTS_41;
