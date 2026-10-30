@@ -180,6 +180,9 @@ protected:
     //static const uint32_t CUBE_FACE_LAYOUT[TEXTURE_CUBE_NUM_FACES];
     static const VKFilterMode FILTER_MODES[Sampler::NUM_FILTERS];
     static const uint32_t WRAP_MODES[Sampler::NUM_WRAP_MODES];
+    // The sampler state a gpu::Sampler asks for: filters, wrap modes, border colour and depth
+    // comparison. The LOD range is the caller's, since it depends on which mips the image holds.
+    static VkSamplerCreateInfo samplerCreateInfo(const Sampler& sampler, float minLod, float maxLod);
 
     //static const std::vector<VKenum>& getFaceTargets(VKenum textureType);
 
