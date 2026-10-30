@@ -1395,10 +1395,6 @@ void VKBackend::renderPassDraw(const Batch& batch) {
             // updates for draw calls
             ++_currentDraw;
 
-            // VKTODO: procedural shaders are not supported yet.
-            if (_cache.pipelineState.pipeline->getProgram()->getShaders()[0]->getSource().name == "simple_procedural.vert") {
-                break;
-            }
             _cache.pipelineState.primitiveTopology = getPrimitiveTopologyFromCommand(*command, batch, *offset);
             _cache.pipelineState.drawCallInfoPerInstance = !batch._currentNamedCall.empty();
             updateInput();

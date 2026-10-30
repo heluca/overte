@@ -168,9 +168,11 @@ namespace vks {
 
             GraphicsPipelineBuilder& operator=(const GraphicsPipelineBuilder& other) = delete;
 
-            ~GraphicsPipelineBuilder() {
-                destroyShaderModules();
-            }
+            // The builder does not own the modules in shaderStages: gpu::vk::Cache hands it cached
+            // ones and keeps them for later pipelines. Owners that want them gone call
+            // destroyShaderModules() themselves. Destroying them here used to free the cache's
+            // modules whenever vkCreateGraphicsPipelines threw, and the next frame crashed in the driver.
+            ~GraphicsPipelineBuilder() = default;
 
             const VkDevice& device;
             VkPipelineCache pipelineCache{ VK_NULL_HANDLE }; // TODO: Add pipeline cache here

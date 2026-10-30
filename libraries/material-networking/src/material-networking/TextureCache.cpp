@@ -345,6 +345,7 @@ gpu::BackendTarget getBackendTarget() {
         case hifi::properties::GraphicsAPI::GL41:
             return gpu::BackendTarget::GL41;
         case hifi::properties::GraphicsAPI::GL45:
+        case hifi::properties::GraphicsAPI::Vulkan:
         default:
             return gpu::BackendTarget::GL45;
     }
