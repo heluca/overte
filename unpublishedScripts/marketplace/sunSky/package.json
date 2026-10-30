@@ -1,0 +1,11 @@
+{
+    "name": "overte-sun-sky",
+    "private": true,
+    "description": "Sun and sky for Overte: an equinox day on the equator as a pure module, a procedural sky shader and a serverScripts script that moves a zone's light once a minute. Node runs the tests only; it is never a runtime dependency.",
+    "license": "Apache-2.0",
+    "type": "module",
+    "scripts": {
+        "test": "node --test \"test/*.test.mjs\"",
+        "typecheck": "node ../../../tools/typings/node_modules/typescript/bin/tsc -p tsconfig.json && node ../../../tools/typings/node_modules/typescript/bin/tsc -p tsconfig.client.json"
+    }
+}
