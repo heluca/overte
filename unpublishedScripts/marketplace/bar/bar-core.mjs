@@ -6,10 +6,10 @@
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
-//  The bar without the engine: the userData configuration and its menu, the order book with its
-//  time to live and one open order per session, the staff check, the per-session rate limiter,
-//  the status mirror and where a served glass stands. Every side effect goes through an
-//  injected world adapter, so the core runs under Node with a fake world and a fake clock:
+//  The bar without the engine: what each remote call does, the status mirror and where a served
+//  glass stands. The configuration is bar-config.mjs's; the order book, the staff check and the
+//  rate limiter are bar-orders.mjs's. Every side effect goes through an injected world adapter,
+//  so the core runs under Node with a fake world and a fake clock:
 //
 //      now()               -> epoch milliseconds
 //      publish(status)     -> the status mirror changed: store it in the bar's userData.status
@@ -27,53 +27,20 @@
 //  impersonate a session.
 //
 
+import { PARAM_LIMIT, cleanText, findItem } from "./bar-config.mjs";
+import { OrderBook, RateLimiter, isCaller, isSession, isStaff, sameSession, sessionKey } from "./bar-orders.mjs";
+
 export const PROTOCOL_VERSION = 1;
-export const MENU_LIMIT = 50;
-export const DRINK_NAME_LIMIT = 40;
-export const KEY_LIMIT = 32;
-// The longest drink or order id a caller may send; a longer one matches nothing.
-export const PARAM_LIMIT = 64;
 export const PLAYER_NAME_LIMIT = 32;
-export const DEFAULT_GLASS_DIMENSIONS = { x: 0.08, y: 0.16, z: 0.08 };
 export const PLACEHOLDER_DIMENSIONS = { x: 0.4, y: 0.1, z: 0.01 };
 
-/** @typedef {{ maxOpenOrders: number, orderTtlS: number, glassLifetimeS: number, callsPerWindow: number, callWindowS: number, maxGlasses: number }} Limits */
-
-/** @type {Limits} */
-export const LIMIT_DEFAULTS = {
-    maxOpenOrders: 12,
-    orderTtlS: 900,
-    glassLifetimeS: 600,
-    callsPerWindow: 10,
-    callWindowS: 30,
-    maxGlasses: 24
-};
-/** @type {Record<keyof Limits, [number, number]>} */
-const LIMIT_RANGES = {
-    maxOpenOrders: [1, 100],
-    orderTtlS: [30, 7200],
-    glassLifetimeS: [10, 3600],
-    callsPerWindow: [1, 100],
-    callWindowS: [1, 600],
-    maxGlasses: [1, 200]
-};
-
-const NULL_ID = /^\{?0{8}-0{4}-0{4}-0{4}-0{12}\}?$/;
-const UUID = /^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$/i;
-const CHANNEL = /^[A-Za-z0-9:._-]{1,64}$/;
-const ASSET_URL = /^(https?:\/\/[^/\s]|atp:)\S*$/;
-const CONTROL = /[\u0000-\u001f\u007f]/g;
-
 /**
- * @typedef {{ name: string, kind: string, glass: string }} MenuItem
- * @typedef {{ url: string, dimensions: Vec3Like }} Glass
- * @typedef {{ x: number, y: number, z: number }} Vec3Like
+ * @typedef {import("./bar-config.mjs").Config} Config
+ * @typedef {import("./bar-config.mjs").Counter} Counter
+ * @typedef {import("./bar-config.mjs").Glass} Glass
+ * @typedef {import("./bar-config.mjs").Vec3Like} Vec3Like
+ * @typedef {import("./bar-orders.mjs").Order} Order
  * @typedef {{ x: number, y: number, z: number, w: number }} QuatLike
- * @typedef {{ y: number, z: number, halfLength: number }} Counter
- * @typedef {{ menu: MenuItem[], glasses: Record<string, Glass>, channel: string, counter: Counter | null,
- *     staffByName: boolean } & Limits} Config
- * @typedef {{ id: string, by: string, name: string, drink: string, kind: string, glass: string, at: number,
- *     expiresAt: number }} Order
  * @typedef {{ v: number, state: "open" | "offline", channel: string, open: number, oldestAgeS: number | null,
  *     staffPresent: boolean, lastServed: { id: string, drink: string, by: string, at: number } | null,
  *     at: number }} Status
@@ -83,284 +50,6 @@ const CONTROL = /[\u0000-\u001f\u007f]/g;
  *     spawnGlass(order: Order): string | null, deleteEntity(id: string): void }} World
  */
 
-/**
- * @param {string} entityID
- * @returns {string} the channel a bar posts on when userData names none
- */
-export function channelFor(entityID) {
-    return "bar:" + entityID;
-}
-
-/**
- * @param {unknown} text
- * @returns {Record<string, any>} the parsed object, or an empty one for anything else
- */
-export function parseObject(text) {
-    try {
-        const value = JSON.parse(typeof text === "string" ? text : "");
-        return isObject(value) ? value : {};
-    } catch (e) {
-        return {};
-    }
-}
-
-/**
- * @param {unknown} value
- * @returns {value is Record<string, any>}
- */
-function isObject(value) {
-    return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-/**
- * @param {unknown} value
- * @param {number} limit
- * @returns {string} printable text, trimmed and cut to `limit`; "" for anything not a string
- */
-export function cleanText(value, limit) {
-    return (typeof value === "string" ? value : "").replace(CONTROL, "").trim().slice(0, limit);
-}
-
-/**
- * @param {unknown} value
- * @returns {Vec3Like | null} a size of three positive numbers up to 2 m, else null
- */
-function size(value) {
-    if (!isObject(value)) {
-        return null;
-    }
-    const { x, y, z } = value;
-    return [x, y, z].every(n => typeof n === "number" && n > 0 && n <= 2) ? { x, y, z } : null;
-}
-
-/**
- * The bar's configuration from its parsed userData. Each problem is reported and the value
- * replaced by its default (or dropped, for a menu item or a glass). `staff` and `status` are
- * not configuration: the script reads `staff` afresh on every call and writes `status`.
- * @param {Record<string, any>} userData
- * @param {string} entityID
- * @returns {{ config: Config, problems: string[] }}
- */
-export function parseConfig(userData, entityID) {
-    /** @type {string[]} */
-    const problems = [];
-    /** @type {MenuItem[]} */
-    const menu = [];
-    const seen = new Set();
-    const items = Array.isArray(userData.menu) ? userData.menu : [];
-    if (!Array.isArray(userData.menu)) {
-        problems.push("menu must be an array of { name, kind, glass }; every order is refused");
-    } else if (items.length > MENU_LIMIT) {
-        problems.push("menu has " + items.length + " items; only the first " + MENU_LIMIT + " are served");
-    }
-    items.slice(0, MENU_LIMIT).forEach((item, index) => {
-        const name = cleanText(isObject(item) ? item.name : "", DRINK_NAME_LIMIT);
-        if (!name) {
-            problems.push("menu[" + index + "] has no name; dropped");
-        } else if (seen.has(name.toLowerCase())) {
-            problems.push("menu[" + index + "] repeats " + JSON.stringify(name) + "; dropped");
-        } else {
-            seen.add(name.toLowerCase());
-            menu.push({ name, kind: cleanText(item.kind, KEY_LIMIT), glass: cleanText(item.glass, KEY_LIMIT) });
-        }
-    });
-
-    /** @type {Record<string, Glass>} */
-    const glasses = {};
-    const glassesIn = isObject(userData.glasses) ? userData.glasses : {};
-    if (userData.glasses !== undefined && !isObject(userData.glasses)) {
-        problems.push("glasses must be an object of { url, dimensions }; every glass is a Text placeholder");
-    }
-    for (const [key, glass] of Object.entries(glassesIn).slice(0, MENU_LIMIT)) {
-        const url = isObject(glass) && typeof glass.url === "string" ? glass.url : "";
-        const dimensions = isObject(glass) && glass.dimensions !== undefined ? size(glass.dimensions) : DEFAULT_GLASS_DIMENSIONS;
-        if (key.length > KEY_LIMIT || !ASSET_URL.test(url)) {
-            problems.push("glasses." + key + " needs an http(s) or atp: url; that glass is a Text placeholder");
-        } else if (!dimensions) {
-            problems.push("glasses." + key + ".dimensions must be { x, y, z } in metres, each up to 2; that glass is a Text placeholder");
-        } else {
-            glasses[key] = { url, dimensions };
-        }
-    }
-
-    let channel = channelFor(entityID);
-    if (userData.channel !== undefined) {
-        if (typeof userData.channel === "string" && CHANNEL.test(userData.channel)) {
-            channel = userData.channel;
-        } else {
-            problems.push("channel must be 1 to 64 of A-Z a-z 0-9 : . _ -; using " + channel);
-        }
-    }
-
-    /** @type {Limits} */
-    const limits = { ...LIMIT_DEFAULTS };
-    for (const name of /** @type {(keyof Limits)[]} */ (Object.keys(LIMIT_DEFAULTS))) {
-        const value = userData[name];
-        if (value === undefined) {
-            continue;
-        }
-        const [min, max] = LIMIT_RANGES[name];
-        if (Number.isInteger(value) && value >= min && value <= max) {
-            limits[name] = value;
-        } else {
-            problems.push(name + " must be an integer from " + min + " to " + max + ", got "
-                + JSON.stringify(value) + "; using " + LIMIT_DEFAULTS[name]);
-        }
-    }
-
-    /** @type {Counter | null} */
-    let counter = null;
-    if (userData.counter !== undefined) {
-        const c = isObject(userData.counter) ? userData.counter : {};
-        const finite = [c.y, c.z, c.halfLength].every(n => typeof n === "number" && Number.isFinite(n) && Math.abs(n) <= 50);
-        if (finite && c.halfLength >= 0) {
-            counter = { y: c.y, z: c.z, halfLength: c.halfLength };
-        } else {
-            problems.push("counter must be { y, z, halfLength } in metres in the bar's frame; using the top of the bar's box");
-        }
-    }
-
-    if (userData.staffByName !== undefined && typeof userData.staffByName !== "boolean") {
-        problems.push("staffByName must be true or false; using false");
-    }
-
-    return {
-        config: { menu, glasses, channel, counter, staffByName: userData.staffByName === true, ...limits },
-        problems
-    };
-}
-
-/**
- * @param {Record<string, any>} userData
- * @returns {string | null} who the bartender is: a session id, or (dev domains) a display name
- */
-export function staffOf(userData) {
-    const staff = cleanText(userData.staff, PARAM_LIMIT);
-    return staff || null;
-}
-
-/**
- * @param {unknown} caller
- * @returns {caller is string}
- */
-export function isCaller(caller) {
-    return typeof caller === "string" && UUID.test(caller) && !NULL_ID.test(caller);
-}
-
-/**
- * @param {string} id
- * @returns {string} a session id without braces, lower case, as the engine's forms differ
- */
-function sessionKey(id) {
-    return id.replace(/[{}]/g, "").toLowerCase();
-}
-
-/**
- * @param {string} a
- * @param {string} b
- * @returns {boolean}
- */
-export function sameSession(a, b) {
-    return sessionKey(a) === sessionKey(b);
-}
-
-/**
- * Whether `caller` is the bartender. A session id in `staff` is matched against the
- * authenticated caller. A display name is matched only where userData.staffByName is true:
- * display names are chosen by their avatars, so that is for dev domains.
- * @param {string} caller
- * @param {string | null} staff
- * @param {boolean} staffByName
- * @param {(session: string) => string[]} namesOf
- * @returns {boolean}
- */
-export function isStaff(caller, staff, staffByName, namesOf) {
-    if (!staff) {
-        return false;
-    }
-    if (UUID.test(staff)) {
-        return sameSession(caller, staff);
-    }
-    return staffByName && namesOf(caller).includes(staff);
-}
-
-/**
- * @param {MenuItem[]} menu
- * @param {unknown} text the drink as a caller wrote it
- * @returns {MenuItem | null} the menu item of that name, ignoring case
- */
-export function findItem(menu, text) {
-    if (typeof text !== "string" || text.length > PARAM_LIMIT) {
-        return null;
-    }
-    const wanted = cleanText(text, PARAM_LIMIT).toLowerCase();
-    return menu.find(item => item.name.toLowerCase() === wanted) || null;
-}
-
-/**
- * @param {number} ms
- * @returns {string} whole seconds, rounded up
- */
-function seconds(ms) {
-    return Math.ceil(ms / 1000) + " s";
-}
-
-/**
- * At most `calls` calls per `windowMs` per session, every method counted. A refused session
- * is told once per window, so a caller that keeps calling cannot turn refusals into a stream of
- * channel posts. Everything is in memory; a reloaded script starts empty.
- */
-export class RateLimiter {
-    /**
-     * @param {number} calls
-     * @param {number} windowMs
-     */
-    constructor(calls, windowMs) {
-        this.calls = calls;
-        this.windowMs = windowMs;
-        /** @type {Map<string, { times: number[], toldUntil: number }>} */
-        this.sessions = new Map();
-    }
-
-    /**
-     * Counts one call.
-     * @param {string} session
-     * @param {number} now
-     * @returns {{ reason: string, tell: boolean } | null} why it is refused and whether to say so, or null
-     */
-    admit(session, now) {
-        const key = sessionKey(session);
-        const entry = this.sessions.get(key) || { times: [], toldUntil: 0 };
-        entry.times = entry.times.filter(at => now - at < this.windowMs);
-        this.sessions.set(key, entry);
-        if (entry.times.length < this.calls) {
-            entry.times.push(now);
-            return null;
-        }
-        const freeAt = entry.times[0] + this.windowMs;
-        const tell = now >= entry.toldUntil;
-        if (tell) {
-            entry.toldUntil = freeAt;
-        }
-        return {
-            reason: "too many calls: at most " + this.calls + " every " + seconds(this.windowMs)
-                + "; try again in " + seconds(freeAt - now),
-            tell
-        };
-    }
-
-    /**
-     * Forgets sessions with no call in the window, so departed sessions do not pile up.
-     * @param {number} now
-     */
-    prune(now) {
-        for (const [key, entry] of this.sessions) {
-            if (entry.times.every(at => now - at >= this.windowMs) && now >= entry.toldUntil) {
-                this.sessions.delete(key);
-            }
-        }
-    }
-}
 
 /**
  * @param {QuatLike} q
@@ -455,7 +144,7 @@ export function glassProperties(order, glasses, spot, lifetimeS, barID) {
 }
 
 export class BarCore {
-    /** @type {Map<string, Order>} id -> order, oldest first */ orders = new Map();
+    orders = new OrderBook();
     /** @type {{ id: string, expiresAt: number }[]} the glasses out, oldest first */ glasses = [];
     /** @type {Status["lastServed"]} */ lastServed = null;
     staffPresent = false;
@@ -469,7 +158,7 @@ export class BarCore {
         this.world = world;
         this.config = config;
         this.limiter = new RateLimiter(config.callsPerWindow, config.callWindowS * 1000);
-        // Order ids stay unique across reloads without being guessable from one another's order
+        // Order ids stay unique across reloads
         this.idBase = world.now().toString(36);
     }
 
@@ -493,7 +182,7 @@ export class BarCore {
         if (!item) {
             return this.reject(caller, "order", "not on the menu");
         }
-        const open = this.orderOf(caller);
+        const open = this.orders.ofSession(caller);
         if (open) {
             return this.reject(caller, "order", "you already have an open order", open.id);
         }
@@ -512,7 +201,7 @@ export class BarCore {
             at: now,
             expiresAt: now + this.config.orderTtlS * 1000
         };
-        this.orders.set(order.id, order);
+        this.orders.place(order);
         this.world.announce({ type: "order", id: order.id, by: order.by, name: order.name, drink: order.drink,
             kind: order.kind, glass: order.glass });
         this.publish();
@@ -538,7 +227,7 @@ export class BarCore {
         if (!order) {
             return this.reject(caller, "serve", "no such order", cleanText(orderId, PARAM_LIMIT));
         }
-        this.orders.delete(order.id);
+        this.orders.take(order.id);
         const now = this.world.now();
         const glass = this.world.spawnGlass(order);
         if (glass) {
@@ -576,7 +265,7 @@ export class BarCore {
             && !isStaff(caller, this.world.staff(), this.config.staffByName, session => this.world.namesOf(session))) {
             return this.reject(caller, "cancel", "not your order", order.id);
         }
-        this.orders.delete(order.id);
+        this.orders.take(order.id);
         this.world.announce({ type: "cancelled", id: order.id, by: order.by, drink: order.drink, cancelledBy: caller });
         this.publish();
         return true;
@@ -598,7 +287,7 @@ export class BarCore {
             type: "status",
             to: caller,
             ...this.mirror("open"),
-            orders: [...this.orders.values()].map(order => ({
+            orders: this.orders.list().map(order => ({
                 id: order.id, by: order.by, name: order.name, drink: order.drink, ageS: Math.floor((now - order.at) / 1000)
             }))
         });
@@ -633,8 +322,7 @@ export class BarCore {
 
     /** The script is unloading: the open orders die with it, and the mirror says so. */
     stop() {
-        const ids = [...this.orders.keys()];
-        this.orders.clear();
+        const ids = this.orders.clear();
         this.world.publish(this.mirror("offline"));
         this.world.announce({ type: "closed", ids });
     }
@@ -646,7 +334,7 @@ export class BarCore {
      */
     mirror(state) {
         const now = this.world.now();
-        const oldest = this.orders.values().next().value;
+        const oldest = this.orders.oldest();
         return {
             v: PROTOCOL_VERSION,
             state,
@@ -667,19 +355,12 @@ export class BarCore {
      * @returns {boolean} whether any expired
      */
     expire(publish = true) {
-        const now = this.world.now();
-        let any = false;
-        for (const order of [...this.orders.values()]) {
-            if (now >= order.expiresAt) {
-                this.orders.delete(order.id);
-                this.world.announce({ type: "expired", id: order.id, by: order.by, drink: order.drink });
-                any = true;
-            }
-        }
-        if (any && publish) {
+        const expired = this.orders.expire(this.world.now());
+        expired.forEach(order => this.world.announce({ type: "expired", id: order.id, by: order.by, drink: order.drink }));
+        if (expired.length && publish) {
             this.publish();
         }
-        return any;
+        return expired.length > 0;
     }
 
     /**
@@ -692,19 +373,10 @@ export class BarCore {
             return false;
         }
         const avatars = this.world.avatars();
-        if (UUID.test(staff)) {
+        if (isSession(staff)) {
             return avatars.some(id => sameSession(id, staff));
         }
         return this.config.staffByName && avatars.some(id => this.world.namesOf(id).includes(staff));
-    }
-
-    /**
-     * @private
-     * @param {string} caller
-     * @returns {Order | undefined} the caller's open order
-     */
-    orderOf(caller) {
-        return [...this.orders.values()].find(order => sameSession(order.by, caller));
     }
 
     /**

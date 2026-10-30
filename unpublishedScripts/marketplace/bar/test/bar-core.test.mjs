@@ -9,10 +9,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { BarCore, rotate, counterOf, glassSpot, glassProperties } from "../bar-core.mjs";
 import {
-    BarCore, RateLimiter, LIMIT_DEFAULTS, MENU_LIMIT, DEFAULT_GLASS_DIMENSIONS, channelFor, parseConfig, parseObject,
-    staffOf, isCaller, isStaff, findItem, rotate, counterOf, glassSpot, glassProperties
-} from "../bar-core.mjs";
+    LIMIT_DEFAULTS, MENU_LIMIT, DEFAULT_GLASS_DIMENSIONS, channelFor, parseConfig, parseObject, staffOf, findItem
+} from "../bar-config.mjs";
+import { RateLimiter, OrderBook, isCaller, isStaff } from "../bar-orders.mjs";
 
 const BAR = "{ba400000-0000-4000-8000-000000000000}";
 const ALICE = "{aaaaaaaa-0000-4000-8000-000000000001}";
@@ -404,6 +405,23 @@ test("stop publishes offline and closes the open orders", () => {
     assert.equal(world.status.state, "offline");
     assert.equal(world.status.open, 0);
     assert.deepEqual(world.message, { type: "closed", ids: [id] });
+});
+
+test("OrderBook: oldest first, one per session, expiry and clear", () => {
+    const book = new OrderBook();
+    const order = (id, by, expiresAt) => ({ id, by, name: "", drink: "Ouzo", kind: "", glass: "", at: 0, expiresAt });
+    book.place(order("a", ALICE, 10));
+    book.place(order("b", BOB, 20));
+    assert.equal(book.size, 2);
+    assert.equal(book.oldest().id, "a");
+    assert.equal(book.ofSession(BOB.slice(1, -1).toUpperCase()).id, "b");
+    assert.deepEqual(book.expire(10).map(o => o.id), ["a"]);
+    assert.equal(book.get("a"), undefined);
+    book.take("b");
+    assert.equal(book.size, 0);
+    book.place(order("c", ALICE, 30));
+    assert.deepEqual(book.clear(), ["c"]);
+    assert.equal(book.oldest(), undefined);
 });
 
 test("rotate turns a vector by a quaternion", () => {

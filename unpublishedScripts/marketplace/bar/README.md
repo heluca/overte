@@ -11,12 +11,14 @@ r/phantasos#5).
 
 | File | Runs in | What it is |
 | --- | --- | --- |
-| `bar-core.mjs` | anywhere | Pure logic: the `userData` configuration and menu, the order book (time to live, one open order per session), the staff check, the per-session rate limiter, the status mirror, and where a glass stands |
+| `bar-config.mjs` | anywhere | Pure logic: the `userData` configuration checked (menu, glasses, channel, counter, limits), who `staff` names, which menu item an order means |
+| `bar-orders.mjs` | anywhere | Pure logic: the caller and staff checks, the per-session rate limiter, the order book (time to live, one open order per session) |
+| `bar-core.mjs` | anywhere | Pure logic: what each call does, through an injected world adapter; the status mirror; where a glass stands |
 | `bar-entity.mjs` | entity script server | The bar's `serverScripts`: the remotely callable methods, the channel posts, the `userData.status` mirror and the glasses |
 
 The modules need the fork's ES module support for entity scripts (`.mjs` `serverScripts` with
-`export default class`). They import each other by relative URL, so both files must be served from
-the same directory. phantasos bundles them for Ergane from a pinned commit of this fork
+`export default class`). They import each other by relative URL, so all four files must be served
+from the same directory. phantasos bundles them for Ergane from a pinned commit of this fork
 (`scripts/`, as it does `piano-scripts`). No other repository keeps a copy.
 
 ## Attaching it
@@ -262,14 +264,14 @@ Node (24 or later) runs the tests; it is a development tool, never a runtime dep
 
 ```sh
 npm test            # node:test over test/*.test.mjs: the core, and the entry against fake globals
-npm run typecheck   # tsc over both modules against the server entity declarations
+npm run typecheck   # tsc over the four modules against the server entity declarations
 ```
 
 `typecheck` needs the declarations built first: `npm ci && npm run build` in `tools/typings`.
 
 ## Verified, and not yet
 
-- The core and the entry pass their Node tests, and both modules type-check against the server
+- The core and the entry pass their Node tests, and all four modules type-check against the server
   entity declarations.
 - Not yet run on a domain. The steps still to check there:
   - the script server's `AvatarList` positions and names as the orderer sits at the bar;

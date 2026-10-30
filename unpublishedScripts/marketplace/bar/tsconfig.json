@@ -16,6 +16,8 @@
     },
     "files": [
         "../../../tools/typings/dist/overte-server-entity.d.ts",
+        "bar-config.mjs",
+        "bar-orders.mjs",
         "bar-core.mjs",
         "bar-entity.mjs"
     ]

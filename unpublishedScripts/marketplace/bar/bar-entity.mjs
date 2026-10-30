@@ -16,7 +16,9 @@
 //  lives on the class instance; module scope holds constants only.
 //
 
-import { BarCore, parseObject, parseConfig, staffOf, sameSession, counterOf, glassSpot, glassProperties } from "./bar-core.mjs";
+import { BarCore, counterOf, glassSpot, glassProperties } from "./bar-core.mjs";
+import { parseObject, parseConfig, staffOf } from "./bar-config.mjs";
+import { sameSession } from "./bar-orders.mjs";
 
 const TICK_MS = 2000;
 const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
@@ -27,7 +29,7 @@ export default class BarEntity {
 
     // Set in preload, which the engine calls before any other method.
     /** @type {Uuid} */ entityID;
-    /** @type {import("./bar-core.mjs").Config} */ config;
+    /** @type {import("./bar-config.mjs").Config} */ config;
     /** @type {BarCore} */ core;
     /** @type {number} */ timer;
     locked = false;
@@ -117,7 +119,7 @@ export default class BarEntity {
     /**
      * Sets the order's glass on the counter at the point nearest the orderer's avatar (the
      * entity script server has AvatarList), or mid-counter when the orderer has left.
-     * @param {import("./bar-core.mjs").Order} order
+     * @param {import("./bar-orders.mjs").Order} order
      * @returns {string | null} the glass's entity id
      */
     spawnGlass(order) {
