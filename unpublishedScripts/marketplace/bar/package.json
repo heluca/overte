@@ -1,0 +1,11 @@
+{
+    "name": "overte-bar",
+    "private": true,
+    "description": "Bar for Overte: a serverScripts bar that takes orders from visitors and bodies, lets only the bartender serve, sets a glass on the counter and mirrors its status in userData. Node runs the tests only; it is never a runtime dependency.",
+    "license": "Apache-2.0",
+    "type": "module",
+    "scripts": {
+        "test": "node --test \"test/*.test.mjs\"",
+        "typecheck": "node ../../../tools/typings/node_modules/typescript/bin/tsc -p tsconfig.json"
+    }
+}
