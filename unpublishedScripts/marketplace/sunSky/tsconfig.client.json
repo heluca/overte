@@ -1,0 +1,19 @@
+{
+    // Type-checks the module against the client entity declarations built in tools/typings, so it
+    // stays importable from client scripts: it may use no global either context lacks.
+    "compilerOptions": {
+        "strict": true,
+        "noEmit": true,
+        "allowJs": true,
+        "checkJs": true,
+        "target": "ES2023",
+        "lib": ["ES2023"],
+        "types": [],
+        "module": "esnext",
+        "moduleResolution": "bundler"
+    },
+    "files": [
+        "../../../tools/typings/dist/overte-client-entity.d.ts",
+        "sun-sky.mjs"
+    ]
+}
