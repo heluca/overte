@@ -1,0 +1,22 @@
+{
+    // Type-checks the server script against the server entity declarations built in tools/typings
+    // (npm ci && npm run build there first). The tests run under Node and are not included.
+    "compilerOptions": {
+        "strict": true,
+        // Entity scripts initialise in preload, not in the constructor.
+        "strictPropertyInitialization": false,
+        "noEmit": true,
+        "allowJs": true,
+        "checkJs": true,
+        "target": "ES2023",
+        "lib": ["ES2023"],
+        "types": [],
+        "module": "esnext",
+        "moduleResolution": "bundler"
+    },
+    "files": [
+        "../../../tools/typings/dist/overte-server-entity.d.ts",
+        "bar-core.mjs",
+        "bar-entity.mjs"
+    ]
+}

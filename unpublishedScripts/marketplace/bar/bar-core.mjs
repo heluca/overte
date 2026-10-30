@@ -14,7 +14,7 @@
 //      now()               -> epoch milliseconds
 //      publish(status)     -> the status mirror changed: store it in the bar's userData.status
 //      announce(message)   -> send it on the bar's Messages channel; nothing is stored
-//      log(text)           -> the script log
+//      log(text)           -> the script log; the entry names the bar
 //      staff()             -> userData.staff as it stands now (Morpheus edits it), or null
 //      avatars()           -> the session ids of the avatars in the domain
 //      namesOf(session)    -> that avatar's [displayName, sessionDisplayName], "" when unknown
@@ -548,7 +548,7 @@ export class BarCore {
                 this.world.deleteEntity(/** @type {{ id: string }} */ (this.glasses.shift()).id);
             }
         } else {
-            this.world.log("Bar: no glass for order " + order.id + " (" + order.drink + ")");
+            this.world.log("no glass for order " + order.id + " (" + order.drink + ")");
         }
         this.lastServed = { id: order.id, drink: order.drink, by: order.by, at: now };
         this.world.announce({ type: "served", id: order.id, by: order.by, name: order.name, drink: order.drink,
@@ -728,12 +728,12 @@ export class BarCore {
      */
     admit(caller, method) {
         if (!isCaller(caller)) {
-            this.world.log("Bar: " + method + " refused, no caller id");
+            this.world.log(method + " refused, no caller id");
             return false;
         }
         const refusal = this.limiter.admit(caller, this.world.now());
         if (refusal) {
-            this.world.log("Bar: " + method + " from " + caller + " refused, " + refusal.reason);
+            this.world.log(method + " from " + caller + " refused, " + refusal.reason);
             if (refusal.tell) {
                 this.world.announce({ type: "rejected", to: caller, method, reason: refusal.reason });
             }
@@ -756,7 +756,7 @@ export class BarCore {
         if (id !== undefined) {
             message.id = id;
         }
-        this.world.log("Bar: " + method + " from " + caller + " refused, " + reason);
+        this.world.log(method + " from " + caller + " refused, " + reason);
         this.world.announce(message);
         return false;
     }
