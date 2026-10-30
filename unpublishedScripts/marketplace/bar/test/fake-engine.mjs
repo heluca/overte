@@ -13,10 +13,13 @@
 
 export const BAR = "{ba400000-0000-4000-8000-000000000000}";
 
-export function fakeEngine(userData = "", { locked = false, position = { x: 57.6, y: 0.72, z: 10 },
-    rotation = { x: 0, y: 0, z: 0, w: 1 }, dimensions = { x: 6, y: 1.44, z: 1.4 } } = {}) {
+export function fakeEngine(userData = "", { privateUserData = "", locked = false, position = { x: 57.6, y: 0.72, z: 10 },
+    rotation = { x: 0, y: 0, z: 0, w: 1 }, dimensions = { x: 6, y: 1.44, z: 1.4 },
+    registrationPoint = { x: 0.5, y: 0.5, z: 0.5 } } = {}) {
     let nextId = 1;
-    const entities = new Map([[BAR, { name: "Bar", userData, locked, position, rotation, dimensions }]]);
+    const entities = new Map([[BAR, {
+        name: "Bar", userData, privateUserData, locked, position, rotation, dimensions, registrationPoint
+    }]]);
     const engine = {
         entities,
         sent: [],

@@ -28,14 +28,13 @@ const DELOS = {
     ],
     channel: "delos:bar",
     counter: { y: 0.38, z: -0.15, halfLength: 2.9 },
-    staff: BARTENDER,
     owner: "kept"
 };
 
-function loaded(userData = DELOS, options) {
-    const engine = fakeEngine(JSON.stringify(userData), options);
-    engine.avatars.set(ALICE, { position: { x: 56.1, y: 1.2, z: 10.47 }, displayName: "alice", sessionDisplayName: "Alice" });
-    engine.avatars.set(BARTENDER, { position: { x: 57.6, y: 0.9, z: 9.1 }, displayName: "Bartender", sessionDisplayName: "Bartender" });
+function loaded(userData = DELOS, options = {}) {
+    const engine = fakeEngine(JSON.stringify(userData), { privateUserData: JSON.stringify({ staff: BARTENDER }), ...options });
+    engine.avatars.set(ALICE, { position: { x: 56.1, y: 1.2, z: 10.47 }, displayName: "Bartender", sessionDisplayName: "Alice" });
+    engine.avatars.set(BARTENDER, { position: { x: 57.6, y: 0.9, z: 9.1 }, displayName: "Bartender", sessionDisplayName: "Bartender_1" });
     const bar = new BarEntity();
     bar.preload(BAR);
     return { engine, bar };
@@ -49,7 +48,7 @@ test("preload mirrors the status into userData without losing other keys", () =>
     const { engine } = loaded();
     const userData = engine.userData();
     assert.equal(userData.owner, "kept");
-    assert.equal(userData.staff, BARTENDER);
+    assert.equal(userData.staff, undefined, "staff lives in privateUserData");
     assert.deepEqual(userData.menu, DELOS.menu);
     assert.equal(userData.status.state, "open");
     assert.equal(userData.status.channel, "delos:bar");
@@ -91,6 +90,13 @@ test("the bartender serves: a Text glass on the counter in front of the orderer"
     assert.equal(engine.userData().status.lastServed.id, id);
 });
 
+test("a bar whose registration point is its base still gets its glass on the counter", () => {
+    const { engine, bar } = loaded(DELOS, { position: { x: 57.6, y: 0, z: 10 }, registrationPoint: { x: 0.5, y: 0, z: 0.5 } });
+    engine.call(bar, ALICE, "order", ["Ouzo"]);
+    engine.call(bar, BARTENDER, "serve", [engine.last.message.id]);
+    assert.ok(Math.abs(engine.glasses()[0].position.y - 1.17) < 1e-9);
+});
+
 test("a glass in the glasses map is a Model with its URL and size", () => {
     const { engine, bar } = loaded({
         ...DELOS, glassLifetimeS: 120,
@@ -113,7 +119,7 @@ test("an orderer who has left gets the glass mid-counter", () => {
     assert.ok(Math.abs(engine.glasses()[0].position.x - 57.6) < 1e-9);
 });
 
-test("serve from anyone but userData.staff is refused on the channel, and makes nothing", () => {
+test("serve from anyone but privateUserData.staff is refused on the channel, and makes nothing", () => {
     const { engine, bar } = loaded();
     engine.call(bar, ALICE, "order", ["Ouzo"]);
     engine.call(bar, BOB, "serve", [engine.last.message.id]);
@@ -125,12 +131,31 @@ test("Morpheus moving staff to another session takes effect at once", () => {
     const { engine, bar } = loaded();
     engine.call(bar, ALICE, "order", ["Ouzo"]);
     const id = engine.last.message.id;
-    engine.Entities.editEntity(BAR, { userData: JSON.stringify({ ...engine.userData(), staff: BOB }) });
+    engine.Entities.editEntity(BAR, { privateUserData: JSON.stringify({ staff: BOB }) });
     engine.call(bar, BARTENDER, "serve", [id]);
     assert.equal(engine.last.message.type, "rejected");
     engine.call(bar, BOB, "serve", [id]);
     assert.equal(engine.last.message.type, "served");
-    assert.equal(engine.userData().staff, BOB, "the status write kept the new staff");
+    assert.deepEqual(JSON.parse(engine.entities.get(BAR).privateUserData), { staff: BOB }, "the bar never writes privateUserData");
+});
+
+test("staff in userData counts for nothing", () => {
+    const { engine, bar } = loaded({ ...DELOS, staff: ALICE }, { privateUserData: "" });
+    engine.call(bar, BOB, "order", ["Ouzo"]);
+    engine.call(bar, ALICE, "serve", [engine.last.message.id]);
+    assert.equal(engine.last.message.reason, "only the bartender serves");
+});
+
+test("with staffByName, staff matches the session display name only", () => {
+    const { engine, bar } = loaded(DELOS, { privateUserData: JSON.stringify({ staff: "Bartender", staffByName: true }) });
+    engine.call(bar, BOB, "order", ["Ouzo"]);
+    const id = engine.last.message.id;
+    // Alice's chosen display name is "Bartender", but the mixer made the bartender's session name Bartender_1
+    engine.call(bar, ALICE, "serve", [id]);
+    assert.equal(engine.last.message.reason, "only the bartender serves");
+    engine.Entities.editEntity(BAR, { privateUserData: JSON.stringify({ staff: "Bartender_1", staffByName: true }) });
+    engine.call(bar, BARTENDER, "serve", [id]);
+    assert.equal(engine.last.message.type, "served");
 });
 
 test("status and menu answer on the channel", () => {

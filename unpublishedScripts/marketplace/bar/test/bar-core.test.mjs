@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BarCore, rotate, counterOf, glassSpot, glassProperties } from "../bar-core.mjs";
+import { BarCore, rotate, boxCentre, counterOf, glassSpot, glassProperties } from "../bar-core.mjs";
 import {
     LIMIT_DEFAULTS, MENU_LIMIT, DEFAULT_GLASS_DIMENSIONS, channelFor, parseConfig, parseObject, staffOf, findItem
 } from "../bar-config.mjs";
@@ -39,8 +39,9 @@ function fakeWorld() {
     return {
         t: T0,
         staffValue: BARTENDER,
+        byName: false,
         present: [ALICE, BOB, BARTENDER],
-        names: { [ALICE]: ["alice", "Alice"], [BOB]: ["", ""], [BARTENDER]: ["Bartender", "Bartender"] },
+        names: { [ALICE]: "Alice", [BARTENDER]: "Bartender" },
         published: [],
         announced: [],
         logged: [],
@@ -51,9 +52,9 @@ function fakeWorld() {
         publish(status) { this.published.push(status); },
         announce(message) { this.announced.push(message); },
         log(text) { this.logged.push(text); },
-        staff() { return this.staffValue; },
+        staff() { return { staff: this.staffValue, byName: this.byName }; },
         avatars() { return this.present; },
-        namesOf(session) { return this.names[session] || ["", ""]; },
+        sessionName(session) { return this.names[session] || ""; },
         spawnGlass(order) {
             if (this.spawnFails) {
                 return null;
@@ -114,24 +115,21 @@ test("parseConfig: defaults, the channel and the limits", () => {
     assert.equal(c.channel, channelFor(BAR));
     assert.equal(c.channel, "bar:" + BAR);
     assert.equal(c.counter, null);
-    assert.equal(c.staffByName, false);
     for (const key of Object.keys(LIMIT_DEFAULTS)) {
         assert.equal(c[key], LIMIT_DEFAULTS[key], key);
     }
-    const { config: set } = parseConfig({ menu: [], channel: "delos:bar", maxOpenOrders: 6, orderTtlS: 300, staffByName: true }, BAR);
+    const { config: set } = parseConfig({ menu: [], channel: "delos:bar", maxOpenOrders: 6, orderTtlS: 300 }, BAR);
     assert.equal(set.channel, "delos:bar");
     assert.equal(set.maxOpenOrders, 6);
     assert.equal(set.orderTtlS, 300);
-    assert.equal(set.staffByName, true);
     const { config: bad, problems } = parseConfig({
-        menu: [], channel: "has space", maxOpenOrders: 0, orderTtlS: 1.5, callsPerWindow: "10", staffByName: "yes"
+        menu: [], channel: "has space", maxOpenOrders: 0, orderTtlS: 1.5, callsPerWindow: "10"
     }, BAR);
     assert.equal(bad.channel, channelFor(BAR));
     assert.equal(bad.maxOpenOrders, LIMIT_DEFAULTS.maxOpenOrders);
     assert.equal(bad.orderTtlS, LIMIT_DEFAULTS.orderTtlS);
     assert.equal(bad.callsPerWindow, LIMIT_DEFAULTS.callsPerWindow);
-    assert.equal(bad.staffByName, false);
-    assert.equal(problems.length, 5);
+    assert.equal(problems.length, 4);
 });
 
 test("parseConfig: glasses need an asset url and a sane size", () => {
@@ -159,22 +157,24 @@ test("parseConfig: the counter is all three numbers or the box top", () => {
 });
 
 test("staffOf, isCaller and isStaff", () => {
-    assert.equal(staffOf({}), null);
-    assert.equal(staffOf({ staff: "  " }), null);
-    assert.equal(staffOf({ staff: BARTENDER }), BARTENDER);
+    assert.deepEqual(staffOf({}), { staff: null, byName: false });
+    assert.deepEqual(staffOf({ staff: "  " }), { staff: null, byName: false });
+    assert.deepEqual(staffOf({ staff: BARTENDER }), { staff: BARTENDER, byName: false });
+    assert.deepEqual(staffOf({ staff: "Bartender", staffByName: "yes" }), { staff: "Bartender", byName: false });
+    assert.deepEqual(staffOf({ staff: "Bartender", staffByName: true }), { staff: "Bartender", byName: true });
     assert.equal(isCaller(ALICE), true);
     for (const caller of [undefined, "", NULL_UUID, "Alice", 42]) {
         assert.equal(isCaller(caller), false, String(caller));
     }
-    const names = session => (session === ALICE ? ["Bartender", "Alice"] : ["", ""]);
+    const sessionName = session => (session === ALICE ? "Bartender" : session === BOB ? "Bartender_1" : "");
     // The engine's forms differ: braces and case do not matter
-    assert.equal(isStaff(BARTENDER, BARTENDER.slice(1, -1).toUpperCase(), false, names), true);
-    assert.equal(isStaff(ALICE, BARTENDER, true, names), false);
-    assert.equal(isStaff(ALICE, null, true, names), false);
-    // A display name is self-chosen: it counts only where staffByName is set
-    assert.equal(isStaff(ALICE, "Bartender", false, names), false);
-    assert.equal(isStaff(ALICE, "Bartender", true, names), true);
-    assert.equal(isStaff(BOB, "Bartender", true, names), false);
+    assert.equal(isStaff(BARTENDER, { staff: BARTENDER.slice(1, -1).toUpperCase(), byName: false }, sessionName), true);
+    assert.equal(isStaff(ALICE, { staff: BARTENDER, byName: true }, sessionName), false);
+    assert.equal(isStaff(ALICE, { staff: null, byName: true }, sessionName), false);
+    // A name counts only with byName, and only as the mixer's unique session display name
+    assert.equal(isStaff(ALICE, { staff: "Bartender", byName: false }, sessionName), false);
+    assert.equal(isStaff(ALICE, { staff: "Bartender", byName: true }, sessionName), true);
+    assert.equal(isStaff(BOB, { staff: "Bartender", byName: true }, sessionName), false);
 });
 
 test("findItem matches a menu name ignoring case and space", () => {
@@ -187,7 +187,7 @@ test("findItem matches a menu name ignoring case and space", () => {
 test("start publishes the open status mirror", () => {
     const { world } = bar();
     assert.deepEqual(world.status, {
-        v: 1, state: "open", channel: "bar:" + BAR, open: 0, oldestAgeS: null, staffPresent: true, lastServed: null, at: T0
+        v: 1, state: "open", channel: "bar:" + BAR, open: 0, orderIds: [], oldestAgeS: null, staffPresent: true, lastServed: null, at: T0
     });
 });
 
@@ -201,6 +201,7 @@ test("an order is posted with its id, the orderer's session and the drink, and c
     core.order(BOB, "Ouzo");
     assert.equal(world.message.name, "Guest bbbbbbbb");
     assert.equal(world.status.open, 2);
+    assert.deepEqual(world.status.orderIds, [message.id, world.message.id]);
     assert.equal(world.status.oldestAgeS, 42);
 });
 
@@ -261,8 +262,9 @@ test("a staff display name serves only with staffByName", () => {
     strict.world.staffValue = "Bartender";
     strict.core.order(ALICE, "Ouzo");
     assert.equal(strict.core.serve(BARTENDER, strict.world.message.id), false);
-    const dev = bar({ staffByName: true });
+    const dev = bar();
     dev.world.staffValue = "Bartender";
+    dev.world.byName = true;
     dev.core.order(ALICE, "Ouzo");
     assert.equal(dev.core.serve(BARTENDER, dev.world.message.id), true);
 });
@@ -314,11 +316,29 @@ test("orders expire after orderTtlS, on the tick or before any call", () => {
     assert.equal(world.status.open, 0);
     core.order(BOB, "Ouzo");
     const late = world.message.id;
+    const published = world.published.length;
     world.advance(60);
     // Between ticks an expired order cannot be served
     assert.equal(core.serve(BARTENDER, late), false);
     assert.equal(world.message.reason, "no such order");
     assert.equal(world.announced.filter(m => m.type === "expired").length, 2);
+    assert.equal(world.published.length, published + 1, "the refused call publishes the expiry once");
+    assert.equal(world.status.open, 0);
+});
+
+test("an admitted call that finds an expired order still makes one userData edit", () => {
+    const { world, core } = bar({ orderTtlS: 60 });
+    core.order(ALICE, "Ouzo");
+    world.advance(60);
+    const published = world.published.length;
+    assert.equal(core.order(BOB, "Ouzo"), true);
+    assert.equal(world.published.length, published + 1);
+    assert.equal(world.status.open, 1);
+    world.advance(60);
+    core.status(BOB);
+    assert.equal(world.published.length, published + 2, "status publishes only because an order expired");
+    core.status(BOB);
+    assert.equal(world.published.length, published + 2);
 });
 
 test("the tick publishes when the bartender comes or goes, and not otherwise", () => {
@@ -392,7 +412,9 @@ test("RateLimiter: a sliding window, told once, pruned", () => {
     assert.equal(limiter.admit(ALICE, 6000).tell, false);
     // The first call leaves the window at 10 s
     assert.equal(limiter.admit(ALICE, 10_000), null);
-    assert.equal(limiter.admit(ALICE, 11_000).tell, true);
+    // Told at 5 s, so not again before 15 s, though a slot came free at 10 s
+    assert.equal(limiter.admit(ALICE, 11_000).tell, false);
+    assert.equal(limiter.admit(ALICE, 13_999).tell, false);
     limiter.prune(30_000);
     assert.equal(limiter.sessions.size, 0);
 });
@@ -428,6 +450,16 @@ test("rotate turns a vector by a quaternion", () => {
     const halfTurnY = { x: 0, y: Math.SQRT1_2, z: 0, w: Math.SQRT1_2 };
     const v = rotate(halfTurnY, { x: 1, y: 0, z: 0 });
     assert.ok(Math.abs(v.x) < 1e-9 && Math.abs(v.y) < 1e-9 && Math.abs(v.z + 1) < 1e-9, JSON.stringify(v));
+});
+
+test("boxCentre: the position offset by the registration point, turned with the entity", () => {
+    const dims = { x: 6, y: 1.44, z: 1.4 };
+    const identity = { x: 0, y: 0, z: 0, w: 1 };
+    assert.deepEqual(boxCentre({ x: 1, y: 2, z: 3 }, identity, dims, { x: 0.5, y: 0.5, z: 0.5 }), { x: 1, y: 2, z: 3 });
+    assert.deepEqual(boxCentre({ x: 1, y: 0, z: 3 }, identity, dims, { x: 0.5, y: 0, z: 0.5 }), { x: 1, y: 0.72, z: 3 });
+    const quarter = { x: 0, y: Math.SQRT1_2, z: 0, w: Math.SQRT1_2 };
+    const c = boxCentre({ x: 0, y: 0, z: 0 }, quarter, dims, { x: 0, y: 0.5, z: 0.5 });
+    assert.ok(Math.abs(c.x) < 1e-9 && Math.abs(c.z + 3) < 1e-9, JSON.stringify(c));
 });
 
 test("glassSpot: on the counter, in front of the orderer, clamped to its ends", () => {

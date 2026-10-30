@@ -7,7 +7,7 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 //  Who may do what at the bar, without the engine: the authenticated caller check, the staff
-//  check against userData.staff, the per-session rate limiter, and the order book with its time
+//  check against privateUserData.staff, the per-session rate limiter, and the order book with its time
 //  to live and one open order per session. Sessions are compared ignoring braces and case, as
 //  the engine's forms of an id differ.
 //
@@ -47,22 +47,22 @@ export function sameSession(a, b) {
 
 /**
  * Whether `caller` is the bartender. A session id in `staff` is matched against the
- * authenticated caller. A display name is matched only where userData.staffByName is true:
- * display names are chosen by their avatars, so that is for dev domains.
+ * authenticated caller. A name is matched only with `byName`, and only against the session
+ * display name, which the avatar mixer keeps unique; it still starts from a name the avatar
+ * chose, so that is for dev domains.
  * @param {string} caller
- * @param {string | null} staff
- * @param {boolean} staffByName
- * @param {(session: string) => string[]} namesOf
+ * @param {import("./bar-config.mjs").Staff} staff
+ * @param {(session: string) => string} sessionNameOf
  * @returns {boolean}
  */
-export function isStaff(caller, staff, staffByName, namesOf) {
+export function isStaff(caller, { staff, byName }, sessionNameOf) {
     if (!staff) {
         return false;
     }
     if (UUID.test(staff)) {
         return sameSession(caller, staff);
     }
-    return staffByName && namesOf(caller).includes(staff);
+    return byName && sessionNameOf(caller) === staff;
 }
 
 /**
@@ -116,7 +116,7 @@ export class RateLimiter {
         const freeAt = entry.times[0] + this.windowMs;
         const tell = now >= entry.toldUntil;
         if (tell) {
-            entry.toldUntil = freeAt;
+            entry.toldUntil = now + this.windowMs;
         }
         return {
             reason: "too many calls: at most " + this.calls + " every " + seconds(this.windowMs)

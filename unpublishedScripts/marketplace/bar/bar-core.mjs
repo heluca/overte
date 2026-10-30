@@ -15,9 +15,9 @@
 //      publish(status)     -> the status mirror changed: store it in the bar's userData.status
 //      announce(message)   -> send it on the bar's Messages channel; nothing is stored
 //      log(text)           -> the script log; the entry names the bar
-//      staff()             -> userData.staff as it stands now (Morpheus edits it), or null
+//      staff()             -> privateUserData's { staff, byName } as it stands now (Morpheus edits it)
 //      avatars()           -> the session ids of the avatars in the domain
-//      namesOf(session)    -> that avatar's [displayName, sessionDisplayName], "" when unknown
+//      sessionName(session)-> that avatar's session display name, "" when unknown
 //      spawnGlass(order)   -> creates the served glass; its entity id, or null
 //      deleteEntity(id)
 //
@@ -39,14 +39,15 @@ export const PLACEHOLDER_DIMENSIONS = { x: 0.4, y: 0.1, z: 0.01 };
  * @typedef {import("./bar-config.mjs").Counter} Counter
  * @typedef {import("./bar-config.mjs").Glass} Glass
  * @typedef {import("./bar-config.mjs").Vec3Like} Vec3Like
+ * @typedef {import("./bar-config.mjs").Staff} Staff
  * @typedef {import("./bar-orders.mjs").Order} Order
  * @typedef {{ x: number, y: number, z: number, w: number }} QuatLike
- * @typedef {{ v: number, state: "open" | "offline", channel: string, open: number, oldestAgeS: number | null,
+ * @typedef {{ v: number, state: "open" | "offline", channel: string, open: number, orderIds: string[], oldestAgeS: number | null,
  *     staffPresent: boolean, lastServed: { id: string, drink: string, by: string, at: number } | null,
  *     at: number }} Status
  * @typedef {{ type: string } & Record<string, unknown>} Message
  * @typedef {{ now(): number, publish(status: Status): void, announce(message: Message): void,
- *     log(text: string): void, staff(): string | null, avatars(): string[], namesOf(session: string): string[],
+ *     log(text: string): void, staff(): Staff, avatars(): string[], sessionName(session: string): string,
  *     spawnGlass(order: Order): string | null, deleteEntity(id: string): void }} World
  */
 
@@ -69,8 +70,26 @@ export function rotate(q, v) {
 }
 
 /**
- * The counter in the bar's frame (relative to its position, which Overte puts at the centre of
- * its box): userData.counter, else the top of the box along its x axis.
+ * The centre of an entity's box. Its `position` is its registration point, which is the centre
+ * only at the default { 0.5, 0.5, 0.5 }.
+ * @param {Vec3Like} position
+ * @param {QuatLike} rotation
+ * @param {Vec3Like} dimensions
+ * @param {Vec3Like} registrationPoint
+ * @returns {Vec3Like}
+ */
+export function boxCentre(position, rotation, dimensions, registrationPoint) {
+    const offset = rotate(rotation, {
+        x: (0.5 - registrationPoint.x) * dimensions.x,
+        y: (0.5 - registrationPoint.y) * dimensions.y,
+        z: (0.5 - registrationPoint.z) * dimensions.z
+    });
+    return { x: position.x + offset.x, y: position.y + offset.y, z: position.z + offset.z };
+}
+
+/**
+ * The counter in the bar's frame (relative to the centre of its box, turning with it):
+ * userData.counter, else the top of the box along its x axis.
  * @param {Counter | null} counter
  * @param {Vec3Like} dimensions the bar's
  * @returns {Counter}
@@ -82,7 +101,7 @@ export function counterOf(counter, dimensions) {
 /**
  * Where a served glass stands: on the counter's line, at the point nearest the orderer, so it
  * lands in front of them; the middle of the counter when the orderer is not in AvatarList.
- * @param {{ position: Vec3Like, rotation: QuatLike }} bar
+ * @param {{ position: Vec3Like, rotation: QuatLike }} bar `position` is the centre of its box (boxCentre)
  * @param {Counter} counter
  * @param {Vec3Like | null} orderer the orderer's avatar position
  * @returns {Vec3Like} the world point on the counter's surface
@@ -148,6 +167,8 @@ export class BarCore {
     /** @type {{ id: string, expiresAt: number }[]} the glasses out, oldest first */ glasses = [];
     /** @type {Status["lastServed"]} */ lastServed = null;
     staffPresent = false;
+    // An order expired since the last publication; the call that found it publishes once
+    stale = false;
     seq = 0;
 
     /**
@@ -209,7 +230,7 @@ export class BarCore {
     }
 
     /**
-     * Only the bartender in userData.staff serves. The order leaves the book and its glass is
+     * Only the bartender in privateUserData.staff serves. The order leaves the book and its glass is
      * set on the counter in front of the orderer.
      * @param {string | undefined} caller
      * @param {unknown} orderId
@@ -220,7 +241,7 @@ export class BarCore {
             return false;
         }
         this.expire();
-        if (!isStaff(caller, this.world.staff(), this.config.staffByName, session => this.world.namesOf(session))) {
+        if (!isStaff(caller, this.world.staff(), session => this.world.sessionName(session))) {
             return this.reject(caller, "serve", "only the bartender serves");
         }
         const order = this.orders.get(cleanText(orderId, PARAM_LIMIT));
@@ -262,7 +283,7 @@ export class BarCore {
             return this.reject(caller, "cancel", "no such order", cleanText(orderId, PARAM_LIMIT));
         }
         if (!sameSession(order.by, caller)
-            && !isStaff(caller, this.world.staff(), this.config.staffByName, session => this.world.namesOf(session))) {
+            && !isStaff(caller, this.world.staff(), session => this.world.sessionName(session))) {
             return this.reject(caller, "cancel", "not your order", order.id);
         }
         this.orders.take(order.id);
@@ -273,7 +294,7 @@ export class BarCore {
 
     /**
      * Sends the status and the open orders on the channel, addressed to the caller. Nothing is
-     * stored.
+     * stored, unless an order expired since the last publication.
      * @param {string | undefined} caller
      * @returns {boolean}
      */
@@ -291,6 +312,9 @@ export class BarCore {
                 id: order.id, by: order.by, name: order.name, drink: order.drink, ageS: Math.floor((now - order.at) / 1000)
             }))
         });
+        if (this.stale) {
+            this.publish();
+        }
         return true;
     }
 
@@ -310,11 +334,11 @@ export class BarCore {
     /** Called every few seconds: expired orders, departed sessions, the bartender coming and going. */
     tick() {
         const now = this.world.now();
-        const expired = this.expire(false);
+        this.expire();
         this.glasses = this.glasses.filter(glass => glass.expiresAt > now);
         this.limiter.prune(now);
         const present = this.findStaff();
-        if (expired || present !== this.staffPresent) {
+        if (this.stale || present !== this.staffPresent) {
             this.staffPresent = present;
             this.publish();
         }
@@ -340,6 +364,7 @@ export class BarCore {
             state,
             channel: this.config.channel,
             open: this.orders.size,
+            orderIds: this.orders.list().map(order => order.id),
             oldestAgeS: oldest ? Math.floor((now - oldest.at) / 1000) : null,
             staffPresent: this.staffPresent,
             lastServed: this.lastServed && { ...this.lastServed },
@@ -348,27 +373,23 @@ export class BarCore {
     }
 
     /**
-     * Drops the orders whose time ran out, announcing each. Every call runs this first, so an
-     * order past its time cannot be served between ticks.
+     * Drops the orders whose time ran out, announcing each (an order expires once), and marks the
+     * mirror stale; the caller publishes once. Every call that reads the book runs this first, so
+     * an order past its time cannot be served between ticks.
      * @private
-     * @param {boolean} [publish] whether to publish when any expired
-     * @returns {boolean} whether any expired
      */
-    expire(publish = true) {
+    expire() {
         const expired = this.orders.expire(this.world.now());
         expired.forEach(order => this.world.announce({ type: "expired", id: order.id, by: order.by, drink: order.drink }));
-        if (expired.length && publish) {
-            this.publish();
-        }
-        return expired.length > 0;
+        this.stale = this.stale || expired.length > 0;
     }
 
     /**
      * @private
-     * @returns {boolean} whether the bartender in userData.staff is in the domain
+     * @returns {boolean} whether the bartender in privateUserData.staff is in the domain
      */
     findStaff() {
-        const staff = this.world.staff();
+        const { staff, byName } = this.world.staff();
         if (!staff) {
             return false;
         }
@@ -376,18 +397,17 @@ export class BarCore {
         if (isSession(staff)) {
             return avatars.some(id => sameSession(id, staff));
         }
-        return this.config.staffByName && avatars.some(id => this.world.namesOf(id).includes(staff));
+        return byName && avatars.some(id => this.world.sessionName(id) === staff);
     }
 
     /**
      * @private
      * @param {string} caller
-     * @returns {string} the caller's name as shown in orders: cosmetic, never an identity
+     * @returns {string} the caller's session display name as shown in orders: chosen by the
+     *     guest, so cosmetic and untrusted, never an identity
      */
     nameOf(caller) {
-        const [displayName, sessionName] = this.world.namesOf(caller);
-        return cleanText(sessionName, PLAYER_NAME_LIMIT) || cleanText(displayName, PLAYER_NAME_LIMIT)
-            || "Guest " + sessionKey(caller).slice(0, 8);
+        return cleanText(this.world.sessionName(caller), PLAYER_NAME_LIMIT) || "Guest " + sessionKey(caller).slice(0, 8);
     }
 
     /**
@@ -430,11 +450,15 @@ export class BarCore {
         }
         this.world.log(method + " from " + caller + " refused, " + reason);
         this.world.announce(message);
+        if (this.stale) {
+            this.publish();
+        }
         return false;
     }
 
     /** @private */
     publish() {
+        this.stale = false;
         this.world.publish(this.mirror("open"));
     }
 }

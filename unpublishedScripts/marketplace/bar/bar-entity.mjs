@@ -8,7 +8,7 @@
 //
 //  The bar's serverScripts, run by the entity script server. Visitors and Morpheus bodies order
 //  from the menu in userData through the remotely callable methods; only the bartender named in
-//  userData.staff serves, and a served glass is set on the counter in front of the orderer. The
+//  privateUserData.staff serves, and a served glass is set on the counter in front of the orderer. The
 //  bar posts every change on its Messages channel and never listens on it, mirrors its status
 //  into userData.status, and holds every caller to a rate limit (Morpheus ADRs 0003 and 0016).
 //
@@ -16,12 +16,13 @@
 //  lives on the class instance; module scope holds constants only.
 //
 
-import { BarCore, counterOf, glassSpot, glassProperties } from "./bar-core.mjs";
+import { BarCore, boxCentre, counterOf, glassSpot, glassProperties } from "./bar-core.mjs";
 import { parseObject, parseConfig, staffOf } from "./bar-config.mjs";
 import { sameSession } from "./bar-orders.mjs";
 
 const TICK_MS = 2000;
 const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
+const CENTRE = { x: 0.5, y: 0.5, z: 0.5 };
 const NULL_UUID = /^\{?0{8}-0{4}-0{4}-0{4}-0{12}\}?$/;
 
 export default class BarEntity {
@@ -52,12 +53,10 @@ export default class BarEntity {
             publish: status => this.publish(status),
             announce: message => Messages.sendMessage(config.channel, JSON.stringify(message)),
             log: text => this.log(text),
-            staff: () => staffOf(parseObject(Entities.getEntityProperties(entityID, ["userData"]).userData)),
+            // privateUserData, which guests cannot read or write, so no guest can name the bartender
+            staff: () => staffOf(parseObject(Entities.getEntityProperties(entityID, ["privateUserData"]).privateUserData)),
             avatars: () => AvatarList.getAvatarIdentifiers().map(String),
-            namesOf: session => {
-                const avatar = AvatarList.getAvatar(session);
-                return [avatar.displayName || "", avatar.sessionDisplayName || ""];
-            },
+            sessionName: session => AvatarList.getAvatar(session).sessionDisplayName || "",
             spawnGlass: order => this.spawnGlass(order),
             deleteEntity: id => Entities.deleteEntity(id)
         }, config);
@@ -103,8 +102,9 @@ export default class BarEntity {
     }
 
     /**
-     * Writes the mirror into userData.status, keeping every other key (staff above all), read
-     * afresh so an edit Morpheus made since is kept.
+     * Writes the mirror into userData.status, keeping every other key, read afresh so an edit
+     * made since is kept. Nothing else writes userData at run time: the staff handshake is in
+     * privateUserData.
      * @param {import("./bar-core.mjs").Status} status
      */
     publish(status) {
@@ -124,12 +124,13 @@ export default class BarEntity {
      */
     spawnGlass(order) {
         const bar = /** @type {Partial<Entities.EntityProperties_Model>} */ (
-            Entities.getEntityProperties(this.entityID, ["position", "rotation", "dimensions"]));
-        const position = /** @type {Vec3} */ (bar.position);
+            Entities.getEntityProperties(this.entityID, ["position", "rotation", "dimensions", "registrationPoint"]));
         const dimensions = /** @type {Vec3} */ (bar.dimensions);
+        const rotation = bar.rotation || IDENTITY;
+        const position = boxCentre(/** @type {Vec3} */ (bar.position), rotation, dimensions, bar.registrationPoint || CENTRE);
         const here = AvatarList.getAvatarIdentifiers().some(id => sameSession(String(id), order.by));
         const orderer = here ? AvatarList.getAvatar(order.by).position : null;
-        const spot = glassSpot({ position, rotation: bar.rotation || IDENTITY }, counterOf(this.config.counter, dimensions), orderer);
+        const spot = glassSpot({ position, rotation }, counterOf(this.config.counter, dimensions), orderer);
         const id = Entities.addEntity(/** @type {Entities.EntityProperties} */ (
             glassProperties(order, this.config.glasses, spot, this.config.glassLifetimeS, this.entityID)));
         return id && !NULL_UUID.test(id) ? id : null;

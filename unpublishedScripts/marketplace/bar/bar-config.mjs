@@ -8,7 +8,7 @@
 //
 //  The bar's configuration without the engine: userData parsed, the menu cleaned and capped, the
 //  glasses, the channel, the counter and the limits checked, each problem reported and replaced
-//  by its default. Also who userData.staff names, and which menu item a caller's text means.
+//  by its default. Also who privateUserData.staff names, and which menu item a caller's text means.
 //
 
 export const MENU_LIMIT = 50;
@@ -48,8 +48,8 @@ const CONTROL = /[\u0000-\u001f\u007f]/g;
  * @typedef {{ url: string, dimensions: Vec3Like }} Glass
  * @typedef {{ x: number, y: number, z: number }} Vec3Like
  * @typedef {{ y: number, z: number, halfLength: number }} Counter
- * @typedef {{ menu: MenuItem[], glasses: Record<string, Glass>, channel: string, counter: Counter | null,
- *     staffByName: boolean } & Limits} Config
+ * @typedef {{ menu: MenuItem[], glasses: Record<string, Glass>, channel: string, counter: Counter | null } & Limits} Config
+ * @typedef {{ staff: string | null, byName: boolean }} Staff
  */
 
 /**
@@ -189,23 +189,22 @@ export function parseConfig(userData, entityID) {
         }
     }
 
-    if (userData.staffByName !== undefined && typeof userData.staffByName !== "boolean") {
-        problems.push("staffByName must be true or false; using false");
-    }
-
     return {
-        config: { menu, glasses, channel, counter, staffByName: userData.staffByName === true, ...limits },
+        config: { menu, glasses, channel, counter, ...limits },
         problems
     };
 }
 
 /**
- * @param {Record<string, any>} userData
- * @returns {string | null} who the bartender is: a session id, or (dev domains) a display name
+ * Who the bartender is, from the bar's parsed privateUserData, which only server entity scripts,
+ * assignment clients (Morpheus's bodies) and users with "Can Get and Set Private User Data" can
+ * read or write: `staff` is a session id, or with `staffByName: true` (dev domains) a session
+ * display name.
+ * @param {Record<string, any>} privateUserData
+ * @returns {Staff}
  */
-export function staffOf(userData) {
-    const staff = cleanText(userData.staff, PARAM_LIMIT);
-    return staff || null;
+export function staffOf(privateUserData) {
+    return { staff: cleanText(privateUserData.staff, PARAM_LIMIT) || null, byName: privateUserData.staffByName === true };
 }
 
 /**

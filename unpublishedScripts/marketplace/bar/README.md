@@ -2,7 +2,7 @@
 
 A bar entity whose server script takes drink orders and lets only the bartender serve them. Visitors
 in Interface and Morpheus bodies (LLM agents in Agent assignment clients) order from the menu in
-the bar's `userData`. Only the bartender session named in `userData.staff` can serve, and each
+the bar's `userData`. Only the bartender session named in `privateUserData.staff` can serve, and each
 served order puts a glass on the counter in front of the person who ordered it. This is the game
 table's referee pattern (Morpheus ADR 0003): chat and channel messages are untrusted, and the
 bar authenticates only server calls, by `Script.remoteCallerID`. Every call is rate-limited per
@@ -11,7 +11,7 @@ r/phantasos#5).
 
 | File | Runs in | What it is |
 | --- | --- | --- |
-| `bar-config.mjs` | anywhere | Pure logic: the `userData` configuration checked (menu, glasses, channel, counter, limits), who `staff` names, which menu item an order means |
+| `bar-config.mjs` | anywhere | Pure logic: the `userData` configuration checked (menu, glasses, channel, counter, limits), who `privateUserData.staff` names, which menu item an order means |
 | `bar-orders.mjs` | anywhere | Pure logic: the caller and staff checks, the per-session rate limiter, the order book (time to live, one open order per session) |
 | `bar-core.mjs` | anywhere | Pure logic: what each call does, through an injected world adapter; the status mirror; where a glass stands |
 | `bar-entity.mjs` | entity script server | The bar's `serverScripts`: the remotely callable methods, the channel posts, the `userData.status` mirror and the glasses |
@@ -57,8 +57,8 @@ To try it away from Delos, a Box works too, with the same `userData` minus `coun
 then stands on top of the box.
 
 The script reads its configuration once, at load. After you change the menu or a limit, reload the
-script by setting `serverScripts` again. Two keys are exceptions. The script reads `staff` afresh
-on every call. It writes `status` itself.
+script by setting `serverScripts` again. The script writes `userData.status` itself, and reads
+`privateUserData` (the staff handshake) afresh on every call.
 
 ### userData
 
@@ -70,44 +70,48 @@ as `Bar <id>: ...` and then replaced by its default, or dropped if it is a menu 
 | `menu` | none (every order is refused) | Up to 50 items `{ name, kind, glass }`. `name` is up to 40 characters and unique ignoring case; orders match it ignoring case. `kind` is free text (`wine`, `cocktail`, ...). `glass` is a key into `glasses` |
 | `glasses` | `{}` | `{ <glass>: { url, dimensions? } }`. `url` is an `http(s)://` or `atp:` model URL. `dimensions` is in metres, each at most 2, default `{ x: 0.08, y: 0.16, z: 0.08 }`. A menu item whose glass is missing here is served as a Text placeholder with the drink's name |
 | `channel` | `bar:<entity id>` | The Messages channel: 1 to 64 of `A-Z a-z 0-9 : . _ -` |
-| `counter` | the top of the entity's box along its x axis | `{ y, z, halfLength }` in metres, in the bar's frame. The frame is relative to the entity's `position` (the centre of its box) and turns with it. A glass stands at height `y` and depth `z`, anywhere along x within `±halfLength` |
+| `counter` | the top of the entity's box along its x axis | `{ y, z, halfLength }` in metres, in the bar's frame. The frame is centred on the entity's box and turns with it; the script reads `registrationPoint`, so the centre is right whatever the registration point. A glass stands at height `y` and depth `z`, anywhere along x within `±halfLength` |
 | `maxOpenOrders` | 12 (1 to 100) | Open orders across the whole bar |
 | `orderTtlS` | 900 (30 to 7200) | An order not served in this time expires |
 | `glassLifetimeS` | 600 (10 to 3600) | The glass entity's `lifetime` |
 | `maxGlasses` | 24 (1 to 200) | Glasses out at once. Serving one more deletes the oldest |
 | `callsPerWindow` | 10 (1 to 100) | Calls one session may make in `callWindowS`, all methods counted |
 | `callWindowS` | 30 (1 to 600) | The rate limit's sliding window |
-| `staff` | none | The bartender: a session id. See the staff handshake below |
-| `staffByName` | `false` | Dev domains only: lets `staff` be a display name |
 | `status` | written by the script | The status mirror, below |
 
+`staff` in `userData` counts for nothing: the bartender is named in `privateUserData`, below.
+
 The Delos `counter` comes from the `delos-bar` spec in phantasos (`props/delos-bar/spec.md` §3). The
-box is 6.0 x 1.44 x 1.4 m with its centre 0.72 m up. The marble top is at 1.10 m (local y 0.38) and
+box is 6.0 x 1.44 x 1.4 m with its centre 0.72 m up (at the default registration point; another
+registration point is allowed, as the script measures from the box's centre). The marble top is at 1.10 m (local y 0.38) and
 spans z -0.65 to 0.0, with the customers on +z. Glasses stand 0.15 m in from the customer edge,
 anywhere along the 5.8 m of counter that the end panels leave.
 
 ### The staff handshake
 
-`userData.staff` names the bartender, and only that session can `serve` (and `cancel` any order).
+The bartender is named in the bar's `privateUserData`, never in `userData`. Only server entity
+scripts, assignment-client scripts (Morpheus's bodies are Agents) and users with the domain's "Can
+Get and Set Private User Data" permission can read or write it
+(`libraries/entities/src/EntityItemPropertiesDocs.cpp`; the entity server drops a
+`privateUserData` edit from anyone else). A guest who can edit the entity still cannot name
+themselves bartender, and the bar never writes `privateUserData`, so nothing races with Morpheus.
+
+| `privateUserData` key | Default | What it is |
+| --- | --- | --- |
+| `staff` | none | The bartender: a session id. Only that session can `serve`, and `cancel` any order |
+| `staffByName` | `false` | Dev domains only: `staff` is then a session display name |
 
 - **Morpheus (every domain):** when the bartender body takes its post, Morpheus writes the body's
-  session id (`Agent.sessionUUID`) into `userData.staff` with `edit_entity`. It must read
-  `userData` first and write it back with everything else intact. When the body leaves its post,
-  Morpheus deletes the key. The bar reads the key on every call, so the change works immediately,
-  and the mirror's `staffPresent` follows within the 2 s tick. A body that reconnects gets a new
-  session id, and Morpheus writes it again.
-- **Dev domains:** `staff` can be a display name, such as `"Bartender"`, if `staffByName` is `true`.
-  Any avatar showing that display name or session display name is then staff. Display names are
-  chosen by their avatars, so never set `staffByName` on a public domain.
-
-The whole of `userData` is one property, so a write replaces all of it. The bar writes `status`
-by reading `userData` and writing it back, which keeps `staff`. If Morpheus's edit and a status
-write cross in flight, one can undo the other. The body notices this when its `serve` gets the
-reply `rejected` with "only the bartender serves", and it writes `staff` again.
-
-The `staff` check is only as strong as the domain's edit rights on the bar. Anyone who can edit
-the entity can name themselves bartender. On a domain where guests can edit entities, the bar
-belongs in a zone that they cannot edit.
+  session id (`Agent.sessionUUID`) into `privateUserData.staff` with `edit_entity`. When the body
+  leaves its post, it deletes the key. The bar reads the key on every call, so the change works
+  immediately, and the mirror's `staffPresent` follows within the 2 s tick. A body that
+  reconnects gets a new session id, and Morpheus writes it again. The body re-asserts `staff`
+  only when `inspect_entity` shows `privateUserData.staff` missing or not its session. It never
+  does so because of a channel post: anyone can post anything on a channel under any sender id.
+- **Dev domains:** with `staffByName: true`, `staff` can be a name, such as `"Bartender"`. It is
+  matched against the session display name only, never the display name. The avatar mixer keeps
+  session display names unique (`AvatarMixer.cpp`, a `_N` suffix on a repeat). It still starts
+  from a name the avatar chose, so never set `staffByName` on a public domain.
 
 ## Server API
 
@@ -120,7 +124,7 @@ so every answer arrives on the channel. A call with no caller id is only logged.
 | `order` | `[drink]` | anyone | A menu item's name, any case. One open order per session; at most `maxOpenOrders` in the bar. Posts `order` |
 | `serve` | `[orderId]` | staff | Takes the order off the book, sets its glass on the counter, posts `served` |
 | `cancel` | `[orderId]` | the orderer or staff | Takes the order off the book, posts `cancelled` |
-| `status` | `[]` | anyone | Posts `status` to the caller: the mirror plus the open orders. Stores nothing |
+| `status` | `[]` | anyone | Posts `status` to the caller: the mirror plus the open orders. Stores nothing, unless an order had expired unpublished |
 | `menu` | `[]` | anyone | Posts `menu` to the caller. Stores nothing |
 
 Every method, read-only ones included, counts against the caller's `callsPerWindow`. The refusal
@@ -162,8 +166,14 @@ Entities.callEntityServerMethod(bar, "serve", [orderId]);   // the bartender, fr
 ```
 
 A bartender that has just taken its post calls `status` to fetch the open orders, then serves
-from the `order` posts as they come in. `rejected` messages addressed to it (`to`) say why a call
-was refused, and its driver must pass them on to the mind (ADR 0008).
+from the `order` posts as they come in. Channel posts are forgeable, so before it serves, the
+bartender checks that the id is in `userData.status.orderIds` (`inspect_entity`); a forged
+`order` post names an id the bar never issued. `rejected` messages addressed to it (`to`) say why
+a call was refused, and its driver must pass them on to the mind (ADR 0008).
+
+The `name` in `order`, `served` and `status` posts is the orderer's session display name, which
+the guest chose. Like chat, it is untrusted input to the bartender's mind (ADR 0016): something
+to say aloud at most, never an instruction to follow.
 
 ## Messages channel
 
@@ -173,7 +183,7 @@ wrote, so a channel post is never authority for anything.
 
 | `type` | When | Fields |
 | --- | --- | --- |
-| `order` | An order is placed | `id`, `by` (the orderer's session), `name` (their display name; cosmetic), `drink`, `kind`, `glass` |
+| `order` | An order is placed | `id`, `by` (the orderer's session), `name` (their session display name: guest-chosen, untrusted), `drink`, `kind`, `glass` |
 | `served` | Staff served it | `id`, `by` (the orderer), `name`, `drink`, `servedBy` (the bartender's session), `glass` (the glass entity's id, or `null`) |
 | `cancelled` | The orderer or staff took it back | `id`, `by`, `drink`, `cancelledBy` |
 | `expired` | It waited `orderTtlS` | `id`, `by`, `drink` |
@@ -199,6 +209,7 @@ as they read the piano's.
     "state": "open",
     "channel": "delos:bar",
     "open": 2,
+    "orderIds": ["mgx3k2a1-5", "mgx3k2a1-6"],
     "oldestAgeS": 75,
     "staffPresent": true,
     "lastServed": { "id": "mgx3k2a1-4", "drink": "Ouzo", "by": "{...}", "at": 1761760000000 },
@@ -208,9 +219,11 @@ as they read the piano's.
 
 - `state` is `"offline"` once the script has unloaded, with `open` 0. Orders do not survive a
   reload.
+- `orderIds` are the open orders' ids, oldest first, at most `maxOpenOrders`. A bartender checks
+  an id here before it serves, because a channel post can be forged.
 - `oldestAgeS` is the age of the oldest open order at time `at`, or `null` when none is open.
-- `staffPresent` means the `staff` session is in `AvatarList`. With `staffByName`, it means some
-  avatar shows that name.
+- `staffPresent` means the `privateUserData.staff` session is in `AvatarList`. With `staffByName`,
+  it means some avatar has that session display name.
 - `at` and `lastServed.at` are the entity script server's epoch milliseconds.
 
 A locked bar takes no `userData` edit, so it has no mirror. The script logs this at load, and
@@ -223,15 +236,17 @@ The entity script server exposes `AvatarList` in this fork.
 (`registerGlobalObject(..., "AvatarList", DependencyManager::get<AvatarHashMap>())`). The script
 server also lists the avatar mixer in its node interest set, and the mixer broadcasts avatar data
 to `EntityScriptServer` nodes (`AvatarMixerWorker::broadcastAvatarData`). So the bar can read the
-orderer's position and display name.
+orderer's position and session display name.
 
 On `serve` the bar:
 
-1. Reads the orderer's position from `AvatarList`, if their session is still in it.
-2. Takes the point on the counter line (`counter.y`, `counter.z`) nearest that position, clamped
+1. Finds the centre of the bar's box from its `position`, `rotation`, `dimensions` and
+   `registrationPoint`, so any registration point works.
+2. Reads the orderer's position from `AvatarList`, if their session is still in it.
+3. Takes the point on the counter line (`counter.y`, `counter.z`) nearest that position, clamped
    to `±halfLength`. That puts the glass on the counter right in front of the orderer, whichever
    stool they sit on. An orderer who has left gets the glass in the middle of the counter.
-3. Creates an unparented domain entity there with `lifetime` set to `glassLifetimeS`,
+4. Creates an unparented domain entity there with `lifetime` set to `glassLifetimeS`,
    `collisionless`, `grabbable`, named `Bar.Glass <drink>`, with
    `userData.barGlass = { bar, order, drink, for }`:
    - a **Model** from `glasses[item.glass]` (`url`, `dimensions`), standing on the counter;
@@ -247,14 +262,17 @@ anyone.
 Every write has a bound (ADR 0016):
 
 - **Calls:** `callsPerWindow` per `callWindowS` per session, every method counted. Each admitted
-  call causes at most one channel post and at most one `userData` edit. A refusal is posted once
-  per window.
+  call makes at most one `userData` edit and one reply post, plus one `expired` post for each
+  order whose time it finds has run out. Each order expires once, so those posts add up to at
+  most one per order placed. A refused caller is told once per `callWindowS` and only logged
+  after that.
 - **Orders:** one open per session, `maxOpenOrders` in the bar, each gone after `orderTtlS`.
-  Expiries add at most `maxOpenOrders` posts.
 - **Glasses:** only staff creates them, within staff's own call limit. Each lives
   `glassLifetimeS`, and at most `maxGlasses` exist at once.
-- **The tick** (every 2 s) writes `userData` only when an order expires or the bartender comes or
-  goes.
+- **The tick** (every 2 s) writes `userData` at most once, and only when an order expires or the
+  bartender comes or goes.
+- **The staff handshake** costs the bar nothing: Morpheus writes `privateUserData`, and the bar
+  only reads it.
 - A session is not a person: someone who reconnects starts with a fresh window and no open order.
   `maxOpenOrders` bounds what that gains them.
 
@@ -276,4 +294,6 @@ npm run typecheck   # tsc over the four modules against the server entity declar
 - Not yet run on a domain. The steps still to check there:
   - the script server's `AvatarList` positions and names as the orderer sits at the bar;
   - the counter offsets on the published `delos-bar` model;
-  - a body's `call_server_method` round trip.
+  - a body's `call_server_method` round trip;
+  - Morpheus's `edit_entity` and `inspect_entity` carrying `privateUserData` (the body is an
+    assignment client, which the domain server grants "Can Get and Set Private User Data").
