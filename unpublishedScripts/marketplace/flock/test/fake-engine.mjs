@@ -7,8 +7,8 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 //  Fake Entities, Messages, Script and AvatarList globals for the flock's serverScripts: the
-//  entities the members run on, the edits they make, the timers they set, the subscriptions and
-//  the avatars in the domain.
+//  entities the members run on, the edits they make, the timers they set, the avatars in the
+//  domain, and any use of Messages (which the flock should make none of).
 //
 
 /**
@@ -24,9 +24,8 @@ export function fakeEngine(entities) {
         edits: [],
         timers: new Map(),
         intervals: new Map(),
-        subscribed: [],
-        unsubscribed: [],
-        handlers: new Set(),
+        // every Messages call, as [method, ...arguments]
+        messages: [],
         // session id -> position
         avatars: new Map(),
         getAvatarCalls: 0,
@@ -42,11 +41,12 @@ export function fakeEngine(entities) {
             }
         },
         Messages: {
-            subscribe(channel) { engine.subscribed.push(channel); },
-            unsubscribe(channel) { engine.unsubscribed.push(channel); },
+            subscribe(channel) { engine.messages.push(["subscribe", channel]); },
+            unsubscribe(channel) { engine.messages.push(["unsubscribe", channel]); },
+            sendMessage(channel, message) { engine.messages.push(["sendMessage", channel, message]); },
             messageReceived: {
-                connect(handler) { engine.handlers.add(handler); },
-                disconnect(handler) { engine.handlers.delete(handler); }
+                connect(handler) { engine.messages.push(["connect", handler]); },
+                disconnect(handler) { engine.messages.push(["disconnect", handler]); }
             }
         },
         Script: {
@@ -65,7 +65,6 @@ export function fakeEngine(entities) {
             }
         },
         print(text) { engine.printed.push(text); },
-        send(channel, message) { [...engine.handlers].forEach(handler => handler(channel, message)); },
         editsOf(id) { return engine.edits.filter(([target]) => target === id).map(([, edit]) => edit); },
         runTimers() { [...engine.timers.values()].forEach(callback => callback()); }
     };

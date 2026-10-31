@@ -11,8 +11,9 @@
 //  by its flockmates (flock-core.mjs) and edits its own position, rotation, velocity and
 //  angularVelocity, which the entity server and every client carry forward kinematically until
 //  the next edit. It scatters from an avatar that comes close and, if it has a roost, flies there
-//  at night, hides and stops editing until the phase on "oceanus.daynight" says it is light. It
-//  edits no other entity and never writes userData or `locked`.
+//  at night, hides and stops editing until it is light. Like the sunSky lamps, it works the phase
+//  out from the clock and userData.sunSky.noonUtc each tick; no messages. It edits no other entity
+//  and never writes userData or `locked`.
 //
 //  The engine shares one module instance per URL between every entity that uses it. Each
 //  member's own state lives on its class instance; module scope holds, on purpose, a registry of
@@ -26,12 +27,10 @@ import {
     roostLegFor, rotate, scale, seedOf, steer, sub, sunElevation, add, takeOffVelocity
 } from "./flock-core.mjs";
 
-export const CHANNEL = "oceanus.daynight";
-// How often a roosted member looks at the phase, ms.
+// How often a roosted member looks at the clock, ms.
 export const ROOSTED_TICK_MS = 1000;
 const ZERO = Object.freeze({ x: 0, y: 0, z: 0 });
 const IDENTITY = Object.freeze({ x: 0, y: 0, z: 0, w: 1 });
-const PHASES = ["day", "twilight", "night"];
 
 /**
  * Every live member of every flock in this entity script server, by flock name, then entity id.
@@ -55,11 +54,9 @@ export default class Flock {
     /** @type {import("./flock-core.mjs").Rotation} */ rotation;
     /** @type {number} ms since the epoch */ lastTick = 0;
     /** @type {import("./flock-core.mjs").State} */ state = { name: "wheel" };
-    /** @type {import("./flock-core.mjs").Phase} */ phase = "day";
     /** @type {boolean} whether the entity is hidden now */ hidden = false;
     /** @type {number | null} */ timer = null;
     /** @type {number} the interval the timer runs at, ms */ tickMs = 0;
-    /** @type {((channel: string, message: string) => void) | null} */ onMessage = null;
 
     /** @param {Uuid} entityID */
     preload(entityID) {
@@ -91,12 +88,6 @@ export default class Flock {
             const flat = length({ x: front.x, y: 0, z: front.z }) > 1e-6 ? { x: front.x, y: 0, z: front.z } : { x: 1, y: 0, z: 0 };
             this.velocity = scale(flat, (config.speed.min + config.speed.max) / 2 / length(flat));
         }
-        if (config.roost !== null && config.noonUtc !== null) {
-            this.phase = phase(sunElevation(Date.now(), config.noonUtc));
-            this.onMessage = (channel, message) => this.messageReceived(channel, message);
-            Messages.messageReceived.connect(this.onMessage);
-            Messages.subscribe(CHANNEL);
-        }
         this.lastTick = Date.now();
         this.schedule(1000 / config.hz);
     }
@@ -106,34 +97,8 @@ export default class Flock {
             Script.clearInterval(this.timer);
             this.timer = null;
         }
-        if (this.onMessage) {
-            // No Messages.unsubscribe: a subscription belongs to the whole entity script server
-            // (MessagesClient::unsubscribe), so it would deafen every other member.
-            Messages.messageReceived.disconnect(this.onMessage);
-            this.onMessage = null;
-        }
         if (this.config) {
             this.leaveRegistry();
-        }
-    }
-
-    /**
-     * The phase from the sky zone's script (sunSky/sun-sky-server.mjs), sent at each change.
-     * @param {string} channel
-     * @param {string} message
-     */
-    messageReceived(channel, message) {
-        if (channel !== CHANNEL) {
-            return;
-        }
-        let value;
-        try {
-            value = JSON.parse(message);
-        } catch (e) {
-            return;
-        }
-        if (value !== null && typeof value === "object" && value.type === "phase" && PHASES.includes(value.phase)) {
-            this.phase = value.phase;
         }
     }
 
@@ -150,8 +115,10 @@ export default class Flock {
         const roost = config.roost;
         let leg = roost !== null && was === "roost" ? roostLegFor({ position, velocity: this.velocity }, roost, config, dt) : null;
         const threat = was === "wheel" || was === "scatter" ? this.nearestAvatar(position) : null;
+        // Only a member with a roost has a noon (readFlock), and only it minds the night.
+        const today = config.noonUtc !== null ? phase(sunElevation(now, config.noonUtc)) : "day";
         /** @type {Omit<import("./flock-core.mjs").StateInputs, "arrived">} */
-        const inputs = { now, phase: this.phase, roosts: roost !== null, threat, scatterForMs: config.scatter.forMs };
+        const inputs = { now, phase: today, roosts: roost !== null, threat, scatterForMs: config.scatter.forMs };
         let next = nextState(this.state, { ...inputs, arrived: leg !== null && leg.arrived });
         if (roost !== null && next.name === "roost" && leg === null) {
             // Just turned for the roost: it may be there already.

@@ -7,7 +7,8 @@ cohesion), plus a pull back into a home cylinder and an altitude band. It then e
 `position`, `rotation` (nose along its velocity, banked into the turn), `velocity` and
 `angularVelocity`, and the entity server and every client carry it forward kinematically until
 the next edit. A member scatters from an avatar that comes close and, if it has a roost, spends the
-night there, hidden, with no edits.
+night there, hidden, with no edits. It works the phase of the day out from the clock, as the
+sunSky lamps do.
 
 | File | Runs in | What it is |
 | --- | --- | --- |
@@ -93,21 +94,17 @@ to 11 m at 60 deg/s).
 | `wheel` | hz a second, steering | an avatar is within `scatter.within`: `scatter`. Night, with a roost: `roost` |
 | `scatter` | hz a second, steering with the flee, at `speed.max` | `scatter.forMs` has passed: `wheel` (and `scatter` again at once if an avatar is still close). Night, with a roost: `roost` |
 | `roost` | hz a second, straight for the roost at cruise, slowing as it nears so its turn limit cannot hold it circling | within 2 m of the roost: `roosted`. Twilight or day: `wheel` |
-| `roosted` | one edit on arrival (`velocity` and `angularVelocity` 0, `visible` false), then none; the timer drops to 1 Hz to watch the phase | twilight or day: `wheel`, taking off level toward home at `speed.min` with `visible` true |
+| `roosted` | one edit on arrival (`velocity` and `angularVelocity` 0, `visible` false), then none; the timer drops to 1 Hz to watch the clock | twilight or day: `wheel`, taking off level toward home at `speed.min` with `visible` true |
 
-The phase is worked out at load from the clock and `sunSky.noonUtc`, with the formulas of
-`sunSky/sun-sky.mjs` (`sunPosition`'s elevation, 90 - |hour angle| at 15 deg an hour from noon,
-and `phase`: `day` above -0.833 deg, `twilight` to -6 deg, `night` below), copied into
-`flock-core.mjs` because each bundle is served from its own folder. After load it follows the
-`oceanus.daynight` messages the sky zone's script sends at each change of phase
-(`sunSky/sun-sky-server.mjs`, `{type: "phase", phase, azimuth, elevation}`). So dusk is
-`twilight` then `night` (the member flies to the roost at dark), and dawn is `twilight` (it takes
-off at first light) then `day`. At `noonUtc` 16 the roost holds from 22:24 to 09:36 UTC.
-
-Only members with a roost subscribe to the channel. On unload a member disconnects its handler but
-does not unsubscribe: a subscription belongs to the whole entity script server process
-(`MessagesClient::unsubscribe`, `libraries/networking/src/MessagesClient.cpp:167`, keeps no count),
-so one member's unload would deafen every other.
+Each tick a member with a roost works the phase out from the clock (`Date.now()`) and its own
+`sunSky.noonUtc`, as `sunSky/sun-sky-lamp.mjs` does: the formulas of `sunSky/sun-sky.mjs`
+(`sunPosition`'s elevation, 90 - |hour angle| at 15 deg an hour from noon, and `phase`: `day`
+above -0.833 deg, `twilight` to -6 deg, `night` below), copied into `flock-core.mjs` because each
+bundle is served from its own folder. No messages: a member needs nothing else on the domain, and
+the island keeps one day and night pattern, every entity the day touches computing its own (Oceanus
+ADR 0020). So dusk is `twilight` then `night` (the member flies to the roost at dark), and dawn is
+`twilight` (it takes off at first light) then `day`. At `noonUtc` 16 the roost holds from 22:24 to
+09:36 UTC.
 
 ## Budget
 

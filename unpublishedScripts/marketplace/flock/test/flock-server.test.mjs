@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 
 import { clock, fakeEngine } from "./fake-engine.mjs";
 
-const { default: Flock, CHANNEL, ROOSTED_TICK_MS, flocks } = await import("../flock-server.mjs");
+const { default: Flock, ROOSTED_TICK_MS, flocks } = await import("../flock-server.mjs");
 
 const GULL_1 = "{9a110000-0000-4000-8000-000000000001}";
 const GULL_2 = "{9a110000-0000-4000-8000-000000000002}";
@@ -72,7 +72,7 @@ test("a member ticks at hz and edits only its own position, rotation, velocity a
     const [, last] = engine.edits[1];
     const speed = Math.hypot(last.velocity.x, last.velocity.y, last.velocity.z);
     assert.ok(speed >= 7 && speed <= 12, "flying at " + speed);
-    assert.deepEqual(engine.subscribed, [CHANNEL]);
+    assert.deepEqual(engine.messages, [], "no Messages: the phase is the clock's");
 });
 
 test("an edit puts the member where its last velocity carried it", () => {
@@ -100,8 +100,6 @@ test("members of one flock share a registry by name; another name is another flo
     members[0].unload();
     assert.deepEqual([...(flocks.get("delos-gulls") || new Map()).keys()], [GULL_2]);
     assert.equal(engine.timers.size, 2);
-    assert.equal(engine.handlers.size, 1, "the fish never listened; the other gull still does");
-    assert.deepEqual(engine.unsubscribed, [], "the subscription is the whole server's; it is not dropped");
     members[1].unload();
     members[2].unload();
     assert.equal(flocks.size, 0);
@@ -139,6 +137,16 @@ test("an avatar close by scatters the member to speed.max; one avatar object ser
     assert.equal(engine.getAvatarCalls, 2, "an avatar that left and came back is asked for again");
 });
 
+test("at dark a wheeling member turns for its roost", () => {
+    const { engine, members, step } = loaded("2026-10-31T22:20:00Z", { [GULL_1]: gull() });
+    step();
+    assert.equal(members[0].state.name, "wheel", "twilight at dusk is not yet night");
+    clock.set("2026-10-31T22:25:00Z");
+    step();
+    assert.equal(members[0].state.name, "roost");
+    assert.deepEqual(engine.messages, []);
+});
+
 test("at night it flies to its roost, hides there and stops editing; at first light it takes off", () => {
     const near = { x: ROOST.x + 6, y: ROOST.y + 3, z: ROOST.z };
     const { engine, members, step } = loaded(NIGHT, { [GULL_1]: gull({}, { position: near }) });
@@ -162,13 +170,11 @@ test("at night it flies to its roost, hides there and stops editing; at first li
     }
     assert.equal(engine.edits.length, edits, "no edits while roosted");
 
-    engine.send("other.channel", JSON.stringify({ type: "phase", phase: "day" }));
-    engine.send(CHANNEL, "not json");
-    engine.send(CHANNEL, JSON.stringify({ type: "phase", phase: "noon" }));
+    // First light at noonUtc 16 is 09:36 UTC.
+    clock.set("2026-10-31T09:35:00Z");
     step(ROOSTED_TICK_MS);
-    assert.equal(engine.edits.length, edits, "only a phase on the channel counts");
-
-    engine.send(CHANNEL, JSON.stringify({ type: "phase", phase: "twilight", azimuth: 90, elevation: -3 }));
+    assert.equal(engine.edits.length, edits, "still night");
+    clock.set("2026-10-31T09:36:30Z");
     step(ROOSTED_TICK_MS);
     const [takeOff] = engine.editsOf(GULL_1).slice(-1);
     assert.equal(takeOff.visible, true);
@@ -177,12 +183,12 @@ test("at night it flies to its roost, hides there and stops editing; at first li
     assert.deepEqual([...engine.intervals.values()], [200]);
     step();
     assert.equal("visible" in engine.editsOf(GULL_1).slice(-1)[0], false, "shown once");
+    assert.deepEqual(engine.messages, []);
 });
 
-test("a member without a roost ignores the night and listens to no phase", () => {
+test("a member without a roost ignores the night", () => {
     const { engine, members, step } = loaded(NIGHT, { [GULL_1]: gull({ roost: undefined }, { visible: true }) });
     step();
-    assert.deepEqual(engine.subscribed, []);
     assert.equal(members[0].state.name, "wheel");
     assert.equal(engine.editsOf(GULL_1).length, 1);
 });
