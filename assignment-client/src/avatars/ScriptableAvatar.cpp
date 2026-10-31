@@ -239,10 +239,20 @@ void ScriptableAvatar::update(float deltatime) {
             if (!_avatarAnimSkeleton) {
                 _avatarAnimSkeleton = std::make_shared<AnimSkeleton>(_geometryResource->getHFMModel());
             }
-            float currentFrame = _animationDetails.currentFrame + deltatime * _animationDetails.fps;
-            if (_animationDetails.loop || currentFrame < _animationDetails.lastFrame) {
-                while (currentFrame >= _animationDetails.lastFrame) {
-                    currentFrame -= (_animationDetails.lastFrame - _animationDetails.firstFrame);
+            const int frameCount = frames.size();
+            // Clamp the requested range to the loaded clip. The default lastFrame (FLT_MAX) means "the whole clip"; left
+            // unclamped, the loop never wraps and currentFrame grows until float precision stalls it. Stock clips keep the
+            // bind pose on frame 0 (Interface plays them from frame 1), so a script that loops from frame 1 must actually
+            // wrap back to frame 1. An empty or inverted range holds still rather than looping forever.
+            const float lastFrame = glm::min(_animationDetails.lastFrame, (float)(frameCount - 1));
+            const float firstFrame = glm::clamp(_animationDetails.firstFrame, 0.0f, lastFrame);
+            const float frameSpan = lastFrame - firstFrame;
+            float currentFrame = glm::max(_animationDetails.currentFrame + deltatime * _animationDetails.fps, firstFrame);
+            if (_animationDetails.loop || currentFrame < lastFrame) {
+                if (frameSpan <= 0.0f) {
+                    currentFrame = firstFrame;
+                } else if (currentFrame >= lastFrame) {
+                    currentFrame = firstFrame + glm::mod(currentFrame - firstFrame, frameSpan);
                 }
                 _animationDetails.currentFrame = currentFrame;
 
@@ -254,7 +264,6 @@ void ScriptableAvatar::update(float deltatime) {
                 const HFMModel& animModel = _animation->getHFMModel();
                 const float boneLengthScale = computeBoneLengthScale(*_avatarAnimSkeleton, *_animationAnimSkeleton, animModel);
 
-                const int frameCount = frames.size();
                 const HFMAnimationFrame& floorFrame = frames.at((int)glm::floor(currentFrame) % frameCount);
                 const HFMAnimationFrame& ceilFrame = frames.at((int)glm::ceil(currentFrame) % frameCount);
                 const float frameFraction = glm::fract(currentFrame);
