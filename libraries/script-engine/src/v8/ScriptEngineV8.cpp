@@ -532,11 +532,13 @@ void ScriptEngineV8::storeGlobalObjectContents() {
     v8::TryCatch tryCatch(_v8Isolate);
     for (uint32_t i = 0; i < globalMemberNames->Length(); i++) {
         auto name = globalMemberNames->Get(context, i).ToLocalChecked();
+        // An index name is a number, which converts to a string without running script
+        v8::Local<v8::String> key = name->ToString(context).ToLocalChecked();
         v8::Local<v8::Value> value;
         // A global whose getter throws is left out
         if (!context->Global()->Get(context, name).ToLocal(&value)) {
             tryCatch.Reset();
-        } else if (!globalMemberObjects->CreateDataProperty(context, name, value).FromMaybe(false)) {
+        } else if (!globalMemberObjects->CreateDataProperty(context, key, value).FromMaybe(false)) {
             Q_ASSERT(false);
         }
     }
