@@ -11,6 +11,8 @@
 
 #include "AvatarIdentityTests.h"
 
+#include <memory>
+
 #include <AccountManager.h>
 #include <AddressManager.h>
 #include <AvatarData.h>
@@ -27,6 +29,13 @@ namespace {
 
 const QUuid OWN_SESSION { "{6f1c2a9e-3b4d-4e5f-8a7b-1c2d3e4f5a6b}" };
 const QUuid OTHER_SESSION { "{0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d}" };
+
+class TestAvatarHashMap : public AvatarHashMap {
+public:
+    using AvatarHashMap::processAvatarIdentityPacket;
+};
+
+std::unique_ptr<TestAvatarHashMap> avatarHashMap;
 
 // What sendIdentityPacket() puts on the wire after a change, without needing a mixer to send it to.
 QByteArray sendIdentity(AvatarData& avatar) {
@@ -53,13 +62,13 @@ QList<QByteArray> mixerReceives(AvatarData& mixerAvatar, const QByteArray& ident
 void deliver(const QByteArray& identity) {
     auto message = QSharedPointer<ReceivedMessage>::create(identity, PacketType::AvatarIdentity,
                                                            versionForPacketType(PacketType::AvatarIdentity), SockAddr());
-    DependencyManager::get<AvatarHashMap>()->processAvatarIdentityPacket(message, SharedNodePointer());
+    avatarHashMap->processAvatarIdentityPacket(message, SharedNodePointer());
 }
 
 QSharedPointer<AvatarData> makeOwnAvatar() {
     auto ownAvatar = QSharedPointer<AvatarData>::create();
     ownAvatar->setSessionUUID(OWN_SESSION);
-    DependencyManager::get<AvatarHashMap>()->setOwnAvatar(ownAvatar);
+    avatarHashMap->setOwnAvatar(ownAvatar);
     return ownAvatar;
 }
 
@@ -72,11 +81,11 @@ void AvatarIdentityTests::initTestCase() {
     DependencyManager::set<DomainAccountManager>();
     DependencyManager::set<AddressManager>();
     DependencyManager::set<NodeList>(NodeType::Agent, 0)->setSessionUUID(OWN_SESSION);
-    DependencyManager::set<AvatarHashMap>();
+    avatarHashMap = std::make_unique<TestAvatarHashMap>();
 }
 
 void AvatarIdentityTests::cleanupTestCase() {
-    DependencyManager::destroy<AvatarHashMap>();
+    avatarHashMap.reset();
 }
 
 void AvatarIdentityTests::testRenamesReachMixerAfterSessionName() {
@@ -103,7 +112,7 @@ void AvatarIdentityTests::testOwnIdentityNotListed() {
     auto ownAvatar = makeOwnAvatar();
     ownAvatar->setDisplayName("Ada");
     deliver(sendIdentity(*ownAvatar));
-    QVERIFY(!DependencyManager::get<AvatarHashMap>()->getAvatarIdentifiers().contains(OWN_SESSION));
+    QVERIFY(!avatarHashMap->getAvatarIdentifiers().contains(OWN_SESSION));
 }
 
 void AvatarIdentityTests::testOtherIdentityListed() {
@@ -113,7 +122,7 @@ void AvatarIdentityTests::testOtherIdentityListed() {
     otherAvatar.setDisplayName("Bea");
     deliver(sendIdentity(otherAvatar));
 
-    auto listed = DependencyManager::get<AvatarHashMap>()->getAvatarBySessionID(OTHER_SESSION);
+    auto listed = avatarHashMap->getAvatarBySessionID(OTHER_SESSION);
     QVERIFY(listed);
     QCOMPARE(listed->getDisplayName(), QString("Bea"));
 }
