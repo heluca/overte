@@ -214,6 +214,12 @@ public slots:
      */
     void setJointMappingsFromNetworkReply();
 
+protected:
+    // AvatarData ignores it so the mixer keeps its own; our avatar holds the name the mixer gave it, as MyAvatar does.
+    void maybeUpdateSessionDisplayNameFromTransport(const QString& sessionDisplayName) override {
+        _sessionDisplayName = sessionDisplayName;
+    }
+
 private:
     AnimationPointer _animation;
     AnimationDetails _animationDetails;

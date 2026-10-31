@@ -326,6 +326,16 @@ void AvatarHashMap::processAvatarIdentityPacket(QSharedPointer<ReceivedMessage> 
             }
         }
 
+        auto ownAvatar = _ownAvatar.lock();
+        if (ownAvatar && identityUUID == nodeList->getSessionUUID()) {
+            // The mixer bumps its sequence number when it assigns a session display name; adopting the echo keeps
+            // our next identity ahead of it, or the mixer would drop it as stale.
+            bool identityChanged = false;
+            bool displayNameChanged = false;
+            ownAvatar->processAvatarIdentity(avatarIdentityStream, identityChanged, displayNameChanged);
+            continue;
+        }
+
         if (!nodeList->isIgnoringNode(identityUUID) || nodeList->getRequestsDomainListData()) {
             // mesh URL for a UUID, find avatar in our list
             bool isNewAvatar;
