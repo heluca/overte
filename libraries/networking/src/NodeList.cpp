@@ -587,8 +587,12 @@ void NodeList::sendDSPathQuery(const QString& newPath) {
 }
 
 void NodeList::processDomainServerPathResponse(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        return;
+    }
+
     // This is a response to a path query we theoretically made.
-    // In the future we may want to check that this was actually from our DS and for a query we actually made.
+    // In the future we may want to check that this was for a query we actually made.
 
     // figure out how many bytes the path query is
     quint16 numPathBytes;
@@ -676,8 +680,7 @@ void NodeList::pingPunchForDomainServer() {
 }
 
 void NodeList::processDomainServerConnectionTokenPacket(QSharedPointer<ReceivedMessage> message) {
-    if (_domainHandler.getSockAddr().isNull()) {
-        // refuse to process this packet if we aren't currently connected to the DS
+    if (!_domainHandler.isFromDomainServer(*message)) {
         return;
     }
     // read in the connection token from the packet, then send domain-server checkin
@@ -688,6 +691,9 @@ void NodeList::processDomainServerConnectionTokenPacket(QSharedPointer<ReceivedM
 }
 
 void NodeList::processDomainList(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        return;
+    }
 
     // WEBRTC TODO: Move code into packet library.  And update reference in DomainServerList.js.
 
@@ -743,15 +749,6 @@ void NodeList::processDomainList(QSharedPointer<ReceivedMessage> message) {
 
     qint64 domainServerRequestLag = (qint64(domainServerPingSendTime - domainServerCheckinProcessingTime) - qint64(connectRequestTimestamp)) / qint64(USECS_PER_MSEC);;
     qint64 domainServerResponseLag = (now - qint64(domainServerPingSendTime)) / qint64(USECS_PER_MSEC);
-
-    if (_domainHandler.getSockAddr().isNull()) {
-        qWarning(networking) << "IGNORING DomainList packet while not connected to a Domain Server: sent " << pingLagTime << " msec ago.";
-        qWarning(networking) << "DomainList request lag (interface->ds): " << domainServerRequestLag << "msec";
-        qWarning(networking) << "DomainList server processing time: " << domainServerCheckinProcessingTime << "usec";
-        qWarning(networking) << "DomainList response lag (ds->interface): " << domainServerResponseLag << "msec";
-        // refuse to process this packet if we aren't currently connected to the DS
-        return;
-    }
 
     // warn if ping lag is getting long
     if (pingLagTime > qint64(MSECS_PER_SECOND)) {
@@ -837,6 +834,10 @@ void NodeList::processDomainList(QSharedPointer<ReceivedMessage> message) {
 }
 
 void NodeList::processDomainServerAddedNode(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        return;
+    }
+
     // setup a QDataStream
     QDataStream packetStream(message->getMessage());
 
@@ -845,6 +846,10 @@ void NodeList::processDomainServerAddedNode(QSharedPointer<ReceivedMessage> mess
 }
 
 void NodeList::processDomainServerRemovedNode(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        return;
+    }
+
     // read the UUID from the packet, remove it if it exists
     QUuid nodeUUID = QUuid::fromRfc4122(message->readWithoutCopy(NUM_BYTES_RFC4122_UUID));
     qCDebug(networking) << "Received packet from domain-server to remove node with UUID" << uuidStringWithoutCurlyBraces(nodeUUID);
@@ -1348,6 +1353,10 @@ void NodeList::requestUsernameFromSessionID(const QUuid& nodeID) {
 }
 
 void NodeList::processUsernameFromIDReply(QSharedPointer<ReceivedMessage> message) {
+    if (!_domainHandler.isFromDomainServer(*message)) {
+        return;
+    }
+
     // read the UUID from the packet
     QString nodeUUIDString = (QUuid::fromRfc4122(message->readWithoutCopy(NUM_BYTES_RFC4122_UUID))).toString();
     // read the username from the packet

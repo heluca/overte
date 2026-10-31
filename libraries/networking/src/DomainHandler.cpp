@@ -191,6 +191,16 @@ void DomainHandler::setSockAddr(const SockAddr& sockAddr, const QString& hostnam
     _domainURL.setPort(_sockAddr.getPort());
 }
 
+// The packets only the domain server sends are unsourced, so LimitedNodeList accepts them from any socket.
+bool DomainHandler::isFromDomainServer(ReceivedMessage& message) const {
+    if (message.getSenderSockAddr() == _sockAddr) {
+        return true;
+    }
+    HIFI_FCDEBUG(networking(), "Ignoring" << message.getType() << "from" << message.getSenderSockAddr()
+        << "which is not the domain server at" << _sockAddr);
+    return false;
+}
+
 void DomainHandler::setUUID(const QUuid& uuid) {
     if (uuid != _uuid) {
         _uuid = uuid;
@@ -445,10 +455,7 @@ void DomainHandler::requestDomainSettings() {
 }
 
 void DomainHandler::processSettingsPacketList(QSharedPointer<ReceivedMessage> packetList) {
-    // DomainSettings is unsourced, so it is accepted from any socket; only the domain server may replace the settings.
-    if (packetList->getSenderSockAddr() != _sockAddr) {
-        HIFI_FCDEBUG(networking(), "Ignoring DomainSettings from" << packetList->getSenderSockAddr()
-            << "which is not the domain server at" << _sockAddr);
+    if (!isFromDomainServer(*packetList)) {
         return;
     }
 
@@ -567,8 +574,8 @@ bool DomainHandler::reasonSuggestsDomainLogin(ConnectionRefusedReason reasonCode
 
 void DomainHandler::processDomainServerConnectionDeniedPacket(QSharedPointer<ReceivedMessage> message) {
 
-    // Ignore any residual packets from previous domain.
-    if (!message->getSenderSockAddr().getAddress().isEqual(_sockAddr.getAddress())) {
+    // Also drops residual packets from a previous domain.
+    if (!isFromDomainServer(*message)) {
         return;
     }
 
