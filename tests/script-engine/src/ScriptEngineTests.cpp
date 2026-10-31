@@ -13,6 +13,7 @@
 
 
 #include "ScriptEngineTests.h"
+#include "CanvasCommand.h"
 #include "DependencyManager.h"
 
 #include "ScriptEngines.h"
@@ -697,4 +698,25 @@ void ScriptEngineTests::testPromiseForget() {
     // Dropped on the script thread the resolver is released at once; dropped on a worker the release is queued, and
     // applied before the settlement queued after it.
     QCOMPARE(promises.log, QStringList({ "made:4", "forgot:3", "joined", "joined", "queued:3", "drained:1" }));
+}
+
+void ScriptEngineTests::testCanvasImageCopyConversion() {
+    // An imageCopy whose image data is not an ArrayBuffer fails, rather than becoming a copy of an empty image
+    auto engine = newScriptEngine();
+    auto scopeGuard = engine->getScopeGuard();
+    ScriptValue commands = engine->evaluate(
+        "[{ type: 'imageCopy', image: { width: 1, height: 1, data: new Uint8Array([1, 2, 3, 4]).buffer },\n"
+        "   srcX: 0, srcY: 0, srcW: 1, srcH: 1, destX: 0, destY: 0, destW: 1, destH: 1 },\n"
+        " { type: 'imageCopy', image: { width: 1, height: 1, data: Object.create(ArrayBuffer.prototype) },\n"
+        "   srcX: 0, srcY: 0, srcW: 1, srcH: 1, destX: 0, destY: 0, destW: 1, destH: 1 }]\n");
+    QVERIFY(!engine->hasUncaughtException());
+
+    CanvasCommand copy;
+    QVERIFY(canvasCommandFromScriptValue(commands.property(0u), copy));
+    QVERIFY(copy.kind == CanvasCommand::ImageCopy);
+    QCOMPARE(copy._image.buffer, QByteArray("\x01\x02\x03\x04", 4));
+
+    CanvasCommand failed;
+    QVERIFY(!canvasCommandFromScriptValue(commands.property(1u), failed));
+    QVERIFY(failed.kind == CanvasCommand::Invalid);
 }

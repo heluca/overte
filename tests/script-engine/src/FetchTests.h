@@ -52,6 +52,7 @@ private slots:
     void testFetchFile();
     void testFetchFileRefused();
     void testFetchClosureArrayBuffer();
+    void testFetchFakeArrayBufferBody();
     void testFetchScriptCredential();
     void testFetchScriptCredentialOtherScript();
     void testXhrScriptCredential();

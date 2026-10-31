@@ -12,6 +12,7 @@
 #ifndef overte_FetchTestServer_h
 #define overte_FetchTestServer_h
 
+#include <atomic>
 #include <memory>
 
 #include <QHash>
@@ -32,6 +33,7 @@ public:
             _port = _server->serverPort();
             QObject::connect(_server, &QTcpServer::newConnection, _server, [this] {
                 while (QTcpSocket* socket = _server->nextPendingConnection()) {
+                    _connections++;
                     serve(socket);
                 }
             });
@@ -43,6 +45,7 @@ public:
         _thread.wait();
     }
     QString base() const { return QString("http://127.0.0.1:%1").arg(_port); }
+    int connections() const { return _connections; }
 
 private:
     static void serve(QTcpSocket* socket) {
@@ -133,6 +136,7 @@ private:
     QObject _context;
     QTcpServer* _server { nullptr };
     quint16 _port { 0 };
+    std::atomic<int> _connections { 0 };
 };
 
 #endif // overte_FetchTestServer_h

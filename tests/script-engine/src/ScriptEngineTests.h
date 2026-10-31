@@ -147,6 +147,7 @@ private slots:
     void testPromiseSettleAfterStop();
     void testPromiseDoubleSettle();
     void testPromiseForget();
+    void testCanvasImageCopyConversion();
 
 
 private:

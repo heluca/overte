@@ -61,3 +61,7 @@ ScriptValue ScriptErrorConstructorsV8::find(ScriptEngineV8* engine, const QStrin
     }
     return ScriptValue(new ScriptValueV8Wrapper(engine, V8ScriptValue(engine, constructor)));
 }
+
+v8::Local<v8::Object> ScriptErrorConstructorsV8::error(v8::Isolate* isolate, v8::Local<v8::Context> context) {
+    return captured(isolate, context, "Error").As<v8::Object>();
+}

@@ -524,17 +524,21 @@ void ScriptEngineV8::storeGlobalObjectContents() {
     v8::HandleScope handleScope(_v8Isolate);
     auto context = getContext();
     v8::Context::Scope contextScope(context);
-    v8::Local<v8::Object> globalMemberObjects = v8::Object::New(_v8Isolate);
+    // Without a prototype and filled by CreateDataProperty, so that neither storing nor reading a global back runs an
+    // accessor a script has put on Object.prototype
+    v8::Local<v8::Object> globalMemberObjects = v8::Object::New(_v8Isolate, v8::Null(_v8Isolate), nullptr, nullptr, 0);
 
     auto globalMemberNames = context->Global()->GetPropertyNames(context).ToLocalChecked();
     v8::TryCatch tryCatch(_v8Isolate);
     for (uint32_t i = 0; i < globalMemberNames->Length(); i++) {
         auto name = globalMemberNames->Get(context, i).ToLocalChecked();
+        // An index name is a number, which converts to a string without running script
+        v8::Local<v8::String> key = name->ToString(context).ToLocalChecked();
         v8::Local<v8::Value> value;
         // A global whose getter throws is left out
         if (!context->Global()->Get(context, name).ToLocal(&value)) {
             tryCatch.Reset();
-        } else if (!globalMemberObjects->Set(context, name, value).FromMaybe(false)) {
+        } else if (!globalMemberObjects->CreateDataProperty(context, key, value).FromMaybe(false)) {
             Q_ASSERT(false);
         }
     }
@@ -656,6 +660,7 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
             auto globalMemberNames = globalObjectContents->GetPropertyNames(globalObjectContents->GetCreationContextChecked()).ToLocalChecked();
             for (uint32_t i = 0; i < globalMemberNames->Length(); i++) {
                 auto name = globalMemberNames->Get(closureContext, i).ToLocalChecked();
+                // Data properties of an object without a prototype: the Get runs no script and cannot fail
                 if(!closureContext->Global()->Set(closureContext, name, globalObjectContents->Get(globalObjectContents->GetCreationContextChecked(), name).ToLocalChecked()).FromMaybe(false)) {
                     Q_ASSERT(false);
                 }
@@ -667,7 +672,11 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
             auto closureMemberNames = closureObject->GetPropertyNames(closureContext).ToLocalChecked();
             for (uint32_t i = 0; i < closureMemberNames->Length(); i++) {
                 auto name = closureMemberNames->Get(closureContext, i).ToLocalChecked();
-                if(!closureContext->Global()->Set(closureContext, name, closureObject->Get(closureContext, name).ToLocalChecked()).FromMaybe(false)) {
+                v8::Local<v8::Value> value;
+                // The names include enumerable ones inherited from Object.prototype; one whose getter throws is left out
+                if (!closureObject->Get(closureContext, name).ToLocal(&value)) {
+                    tryCatch.Reset();
+                } else if (!closureContext->Global()->Set(closureContext, name, value).FromMaybe(false)) {
                     Q_ASSERT(false);
                 }
             }
@@ -733,10 +742,10 @@ ScriptValue ScriptEngineV8::evaluateInClosure(const ScriptValue& _closure,
                 for (uint32_t i = 0; i < requireMemberNames->Length(); i++) {
                     auto name = requireMemberNames->Get(closureContext, i).ToLocalChecked();
                     v8::Local<v8::Value> oldObject;
+                    // As above: an inherited enumerable property whose getter throws is left out
                     if (!oldRequireObject->Get(oldRequireObject->GetCreationContextChecked(), name).ToLocal(&oldObject)) {
-                        Q_ASSERT(false);  // This should never happen, the property has been reported as existing
-                    }
-                    if (!newRequireObject->Set(closureContext, name,oldObject).FromMaybe(false)) {
+                        tryCatch.Reset();
+                    } else if (!newRequireObject->Set(closureContext, name, oldObject).FromMaybe(false)) {
                         Q_ASSERT(false);
                     }
                 }

@@ -523,7 +523,6 @@ QVector<CanvasCommand> qVectorCanvasCommandFromScriptValue(const ScriptValue& ob
 Q_DECLARE_METATYPE(CanvasImage)
 ScriptValue canvasImageToScriptValue(ScriptEngine* engine, const CanvasImage& img);
 bool canvasImageFromScriptValue(const ScriptValue& object, CanvasImage& img);
-CanvasImage canvasImageFromScriptValue(const ScriptValue& object);
 
 Q_DECLARE_METATYPE(CanvasPathElement)
 ScriptValue canvasPathElementToScriptValue(ScriptEngine* engine, const CanvasPathElement& elem);

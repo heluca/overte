@@ -32,14 +32,15 @@ static ScriptValue throwTypeError(ScriptContext* context, ScriptEngine* engine, 
     return context->throwValue(engine->makeError(engine->newValue(message), "TypeError"));
 }
 
-static QByteArray bodyBytes(const ScriptValue& body) {
-    QByteArray bytes;
+// False for an object that is not an ArrayBuffer, which passes fetch()'s check by Symbol.toStringTag, or one too large for
+// a QByteArray
+static bool bodyBytes(const ScriptValue& body, QByteArray& bytes) {
     if (body.isString()) {
         bytes = body.toString().toUtf8();
     } else if (body.isObject()) {
-        qBytearrayFromScriptValue(body, bytes);
+        return qBytearrayFromScriptValue(body, bytes);
     }
-    return bytes;
+    return true;
 }
 
 static QNetworkRequest httpRequest(ScriptEngine* engine, const QUrl& url, const ScriptValue& headerPairs) {
@@ -79,6 +80,12 @@ static ScriptValue startTransfer(ScriptContext* context, ScriptEngine* engine, b
         }
     }
 
+    QByteArray body;
+    if (isHttp && !bodyBytes(context->argument(3), body)) {
+        // Replaces the RangeError the conversion throws for a body too large
+        return throwTypeError(context, engine, "fetch: the body is not an ArrayBuffer, or is 2 GiB or larger");
+    }
+
     ScriptPromise promise = engine->newPromise();
     auto transfer = new FetchTransfer(engine, promise.resolver, url, isHead);
     if (isHttp) {
@@ -86,7 +93,7 @@ static ScriptValue startTransfer(ScriptContext* context, ScriptEngine* engine, b
         if (engine->manager()) {
             transfer->attachCredential(request, engine->manager()->scriptCredentialScope());
         }
-        transfer->startHttp(request, method, bodyBytes(context->argument(3)));
+        transfer->startHttp(request, method, body);
     } else {
         ResourceRequest* request = DependencyManager::get<ResourceManager>()->createResourceRequest(
             transfer, url, ResourceRequest::IS_OBSERVABLE, -1, "fetch");
