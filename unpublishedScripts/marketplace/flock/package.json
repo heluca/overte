@@ -1,0 +1,11 @@
+{
+    "name": "overte-flock",
+    "private": true,
+    "description": "A flock for Overte: N kinematic Model entities, each carrying the same serverScripts, steer by the boid rules within a home cylinder and an altitude band, scatter from avatars and roost at night. Node runs the tests only; it is never a runtime dependency.",
+    "license": "Apache-2.0",
+    "type": "module",
+    "scripts": {
+        "test": "node --test \"test/*.test.mjs\"",
+        "typecheck": "node ../../../tools/typings/node_modules/typescript/bin/tsc -p tsconfig.json"
+    }
+}
