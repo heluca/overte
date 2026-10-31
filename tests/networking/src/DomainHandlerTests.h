@@ -20,6 +20,13 @@ private slots:
     void initTestCase();
     void testSettingsFromDomainServer();
     void testSettingsFromOtherSocket();
+    void testDomainListFromOtherSocket();
+    void testDomainListFromDomainServer();
+    void testAddedNodeFromOtherSocket();
+    void testRemovedNode();
+    void testConnectionToken();
+    void testUsernameFromIDReply();
+    void testConnectionDenied();
 };
 
 #endif // overte_DomainHandlerTests_h
