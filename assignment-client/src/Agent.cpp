@@ -394,6 +394,12 @@ void Agent::nodeActivated(SharedNodePointer activatedNode) {
     if (activatedNode->getType() == NodeType::AudioMixer && _avatarAudio) {
         _avatarAudio->negotiateAudioFormat();
     }
+    if (activatedNode->getType() == NodeType::AvatarMixer) {
+        // An identity sent before the mixer was active went nowhere, yet still cleared the changed flag.
+        if (auto scriptableAvatar = DependencyManager::get<ScriptableAvatar>()) {
+            scriptableAvatar->markIdentityDataChanged();
+        }
+    }
 }
 
 void Agent::nodeKilled(SharedNodePointer killedNode) {
@@ -543,6 +549,7 @@ void Agent::executeScript() {
         });
 
         auto avatarHashMap = DependencyManager::set<AvatarHashMap>();
+        avatarHashMap->setOwnAvatar(scriptedAvatar);
         scriptEngine->registerGlobalObject(sgp, "AvatarList", avatarHashMap.data());
 
         // register ourselves to the script engine
@@ -660,6 +667,9 @@ void Agent::setIsAvatar(bool isAvatar) {
             if (_avatarAudio) {
                 _avatarAudio->startSending();
             }
+
+            // The KillAvatar sent when we stopped being an avatar made the mixer drop our identity.
+            scriptableAvatar->markIdentityDataChanged();
         }
 
         _entityEditSender.setMyAvatar(scriptableAvatar.data());
