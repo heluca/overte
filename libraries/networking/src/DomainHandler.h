@@ -122,7 +122,7 @@ public:
     void setSockAddr(const SockAddr& sockAddr, const QString& hostname);
 
     /// True if the message was sent from the domain server's socket; otherwise logs that it is being dropped.
-    bool isFromDomainServer(const ReceivedMessage& message) const;
+    bool isFromDomainServer(ReceivedMessage& message) const;
 
     unsigned short getPort() const { return _sockAddr.getPort(); }
     void setPort(quint16 port) { _sockAddr.setPort(port); }

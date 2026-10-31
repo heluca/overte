@@ -192,7 +192,7 @@ void DomainHandler::setSockAddr(const SockAddr& sockAddr, const QString& hostnam
 }
 
 // The packets only the domain server sends are unsourced, so LimitedNodeList accepts them from any socket.
-bool DomainHandler::isFromDomainServer(const ReceivedMessage& message) const {
+bool DomainHandler::isFromDomainServer(ReceivedMessage& message) const {
     if (message.getSenderSockAddr() == _sockAddr) {
         return true;
     }
