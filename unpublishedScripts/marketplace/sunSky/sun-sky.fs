@@ -46,6 +46,8 @@ const vec3 SUN_DISC_COLOUR = vec3(1.0, 0.98, 0.94);
 // cos(0.6 deg) and cos(0.45 deg): the disc's soft edge, a little larger than the real sun's.
 const float SUN_DISC_OUTER = 0.9999452;
 const float SUN_DISC_INNER = 0.9999692;
+// Limb darkening: the disc's edge is this much dimmer than its centre.
+const float SUN_LIMB_DARKENING = 0.12;
 
 // Stars: one candidate per cell of a grid this many cells to the unit radius, standing in the
 // middle of its cell so its disc (STAR_RADIUS cells) never crosses into the next.
@@ -111,12 +113,17 @@ vec3 getSkyboxColor() {
     float band = exp(-fromPeak * fromPeak) * exp(-n.y * 6.0) * (0.25 + 0.75 * side * side);
     sky = mix(sky, TWILIGHT_COLOUR, clamp(0.85 * band, 0.0, 1.0));
 
-    // The sun: glow, fading out after sunset, and the disc over it.
+    // The sun: glow, fading out after sunset, and the disc over it. Output is clamped to 1, so
+    // the glow must stay below white beside the disc or the disc vanishes into it: the tight term
+    // falls to half 1.5 degrees out, and with the day zenith it stays under the disc's limb.
     float cosAngle = max(dot(n, sun), 0.0);
     vec3 sunColour = mix(LOW_SUN_COLOUR, HIGH_SUN_COLOUR, smoothstep(SUNSET_ELEVATION, 15.0, elevation));
-    float glow = 0.6 * pow(cosAngle, 400.0) + 0.18 * pow(cosAngle, 16.0);
+    float glow = 0.3 * pow(cosAngle, 2000.0) + 0.18 * pow(cosAngle, 16.0);
     sky += sunColour * glow * smoothstep(DARK_ELEVATION - 2.0, SUNSET_ELEVATION, elevation);
-    sky = mix(sky, SUN_DISC_COLOUR, smoothstep(SUN_DISC_OUTER, SUN_DISC_INNER, cosAngle));
+    // (1 - cos) over (1 - cos R) is the squared fraction of the disc's radius, for small angles.
+    float limbRadius2 = clamp((1.0 - cosAngle) / (1.0 - SUN_DISC_OUTER), 0.0, 1.0);
+    float limb = 1.0 - SUN_LIMB_DARKENING * (1.0 - sqrt(1.0 - limbRadius2));
+    sky = mix(min(sky, vec3(1.0)), SUN_DISC_COLOUR * limb, smoothstep(SUN_DISC_OUTER, SUN_DISC_INNER, cosAngle));
 
     // Stars, fixed in the sky's frame: at the equator the celestial poles lie on the horizon
     // due north and south, so the sky turns with the sun about the z axis. Turning the view back
