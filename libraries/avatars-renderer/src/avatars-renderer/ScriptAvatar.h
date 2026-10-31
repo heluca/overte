@@ -57,7 +57,9 @@
  * @property {boolean} lookAtSnappingEnabled - <code>true</code> if the avatar's eyes snap to look at another avatar's eyes
  *     when the other avatar is in the line of sight and also has <code>lookAtSnappingEnabled == true</code>.
  *
- * @property {string} skeletonModelURL - The avatar's FST file.
+ * @property {string} skeletonModelURL - The avatar's FST file. Reads as <code>""</code> unless the script's node has the
+ *     "View Asset URLs" (<code>canViewAssetURLs</code>) domain permission; for your own avatar it also reads as
+ *     <code>""</code> while its URL is protected. Assignment-client scripts always have the permission.
  * @property {string[]} jointNames - The list of joints in the avatar model.
  *
  * @property {number} audioLoudness - The instantaneous loudness of the audio input that the avatar is injecting into the
