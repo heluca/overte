@@ -57,6 +57,18 @@ test("the shader's haze curve is the module's, so the painted sea meets the zone
     assert.deepEqual(colours, LIGHT_KEYS.map(({ hazeColor: { red, green, blue } }) => [red, green, blue]));
 });
 
+test("the sun's disc stands out from its glow", () => {
+    // The shader clamps its output to 1: if the glow beside the disc reaches white, the disc is
+    // lost in it. Under the day zenith, the glow at the disc's edge stays below the limb.
+    const glow = SOURCE.match(/float glow = ([0-9.]+) \* pow\(cosAngle, ([0-9.]+)\) \+ ([0-9.]+) \* pow\(cosAngle, ([0-9.]+)\);/);
+    assert.ok(glow, "glow not found");
+    const [a, k, b, m] = glow.slice(1).map(Number);
+    const edge = constant("SUN_DISC_OUTER");
+    const zenithRed = Number(SOURCE.match(/const vec3 DAY_ZENITH = vec3\(([0-9.]+),/)[1]);
+    const beside = zenithRed + a * edge ** k + b * edge ** m;
+    assert.ok(beside < 1 - constant("SUN_LIMB_DARKENING"), `glow beside the disc ${beside.toFixed(3)}`);
+});
+
 let glslang = false;
 try {
     execFileSync("glslangValidator", ["--version"], { stdio: "ignore" });
