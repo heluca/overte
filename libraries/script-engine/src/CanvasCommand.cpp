@@ -292,8 +292,11 @@ bool canvasCommandFromScriptValue(const ScriptValue& object, CanvasCommand& cmd)
             object.property("y2").toNumber()
         );
     } else if (type == "imageCopy") {
+        CanvasImage image;
+        if (!canvasImageFromScriptValue(object.property("image"), image)) { return false; }
+
         cmd = CanvasCommand::imageCopy(
-            canvasImageFromScriptValue(object.property("image")),
+            image,
             QRectF(
                 object.property("srcX").toNumber(),
                 object.property("srcY").toNumber(),
@@ -358,12 +361,6 @@ bool canvasImageFromScriptValue(const ScriptValue& object, CanvasImage& img) {
     img.width = object.property(IMG_WIDTH_PROP_NAME).toInt32();
     img.height = object.property(IMG_HEIGHT_PROP_NAME).toInt32();
     return qBytearrayFromScriptValue(object.property(IMG_DATA_PROP_NAME), img.buffer);
-}
-
-CanvasImage canvasImageFromScriptValue(const ScriptValue& object) {
-    CanvasImage img = {};
-    canvasImageFromScriptValue(object, img);
-    return img;
 }
 
 ScriptValue qPainterPathToScriptValue(ScriptEngine* engine, const QPainterPath& path) {

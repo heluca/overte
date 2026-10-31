@@ -21,6 +21,9 @@ private slots:
     void initTestCase();
     void testThrowingGlobalGetterBeforeRequire();
     void testReplacedTypeErrorConstructor();
+    void testObjectPrototypeSetterBeforeRequire();
+    void testObjectPrototypeThrowingGetterBeforeRequire();
+    void testReplacedErrorConstructorIsError();
 };
 
 #endif // overte_ScriptGlobalTamperingTests_h

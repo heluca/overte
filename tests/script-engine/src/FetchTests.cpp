@@ -408,6 +408,24 @@ void FetchTests::testFetchClosureArrayBuffer() {
     QCOMPARE(printed, QString("7 8 9|"));
 }
 
+void FetchTests::testFetchFakeArrayBufferBody() {
+    // Its Symbol.toStringTag passes as an ArrayBuffer, but it converts to no bytes: the request must not be sent
+    FetchTestServer server;
+    QString script = "var BASE = '" + server.base() + "';\n"
+        "fetch(BASE + '/echo', { method: 'POST', body: Object.create(ArrayBuffer.prototype) }).then(function(response) {\n"
+        "    print('sent ' + response.status);\n"
+        "}, function(e) {\n"
+        "    print((e instanceof TypeError) + ',' + e.message);\n"
+        "}).then(function() { Script.stop(true); });\n";
+
+    QString printed;
+    QStringList errors;
+    QVERIFY(runFetchScript(script, "testFetchFakeArrayBufferBody.js", printed, errors));
+    QCOMPARE(errors, QStringList());
+    QCOMPARE(printed, QString("true,fetch: the body is not an ArrayBuffer, or is 2 GiB or larger"));
+    QCOMPARE(server.connections(), 0);
+}
+
 // The credential's URL prefix is the server's /api/, for scripts under its /scripts/trusted/
 static void setTestCredential(const QString& base) {
     DependencyManager::get<ScriptCredentials>()->setFromSettings(QJsonArray { QJsonObject {

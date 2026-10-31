@@ -31,6 +31,9 @@ void capture(v8::Isolate* isolate, v8::Local<v8::Context> context);
 // built-in error, the one named by other's constructor if that is a built-in error, else Error.
 ScriptValue find(ScriptEngineV8* engine, const QString& type, const ScriptValue& other);
 
+// The captured Error constructor of the context
+v8::Local<v8::Object> error(v8::Isolate* isolate, v8::Local<v8::Context> context);
+
 }
 
 #endif // overte_ScriptErrorConstructorsV8_h
