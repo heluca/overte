@@ -262,7 +262,8 @@ public slots:
 
     /*@jsdoc
      * Sets the value of an HTTP request header. Must be called after {@link XMLHttpRequest.open} but before 
-     * {@link XMLHttpRequest.send};
+     * {@link XMLHttpRequest.send}. Leading and trailing whitespace is removed from the value. Throws a
+     * <code>SyntaxError</code> if the name is not a valid header name or the value contains CR, LF or NUL.
      * @function XMLHttpRequest.setRequestHeader
      * @param {string} name - The name of the header to set.
      * @param {string} value - The value of the header.

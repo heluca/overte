@@ -108,6 +108,13 @@ private:
             } else if (path == "/api/redirect-out") {
                 status = "302 Found";
                 extra = "Location: /auth\r\n";
+            } else if (path == "/raw-test") {
+                // The X-Test value as it arrived, not trimmed as the headers above are
+                for (const QByteArray& line : lines) {
+                    if (line.toLower().startsWith("x-test:")) {
+                        content = "[" + line.mid(7, line.endsWith('\r') ? line.size() - 8 : -1) + "]";
+                    }
+                }
             } else if (path == "/badheader") {
                 extra = "X(bad): 1\r\n";
             } else if (path == "/hang") {
