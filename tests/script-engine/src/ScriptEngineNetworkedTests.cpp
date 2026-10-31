@@ -9,6 +9,8 @@
 #include <QSignalSpy>
 #include <QDebug>
 #include <QFile>
+#include <QNetworkReply>
+#include <QTemporaryDir>
 #include <QTextStream>
 
 
@@ -300,4 +302,91 @@ void ScriptEngineNetworkedTests::testMetaverseTokenContexts() {
     QCOMPARE(runWithMetaverseToken(metaverse.base(), script, ScriptManager::AGENT_SCRIPT), WITH_TOKEN);
     QCOMPARE(runWithMetaverseToken(metaverse.base(), script, ScriptManager::ENTITY_CLIENT_SCRIPT), WITHOUT_TOKEN);
     QCOMPARE(runWithMetaverseToken(metaverse.base(), script, ScriptManager::ENTITY_SERVER_SCRIPT), WITHOUT_TOKEN);
+}
+
+QString ScriptEngineNetworkedTests::runPrinting(const QString& source, const QString& filename) {
+    auto sm = makeManager(source, filename);
+    QString printed;
+    connect(sm.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString& engineName) {
+        printed.append(message);
+    });
+    QTimer::singleShot(10000, sm.get(), [manager = sm.get()] { manager->stop(); });
+    sm->run();
+    return printed;
+}
+
+void ScriptEngineNetworkedTests::testRequestHeaderValidation() {
+    FetchTestServer server;
+    QString script = "var BASE = '" + server.base() + "';\n" + R"JS(
+function get(path, name, value) {
+    return new Promise(function(resolve) {
+        var request = new XMLHttpRequest();
+        request.open('GET', BASE + path);
+        var outcome = 'set';
+        try { request.setRequestHeader(name, value); } catch (e) { outcome = e.name; }
+        request.onreadystatechange = function() {
+            if (request.readyState === request.DONE) {
+                resolve(outcome + ' ' + request.responseText);
+            }
+        };
+        request.send();
+    });
+}
+Promise.all([
+    get('/auth', 'X-Test', 'x\r\nAuthorization: injected'),
+    get('/auth', 'X-Test', 'x\nAuthorization: injected'),
+    get('/auth', 'Authorization: injected\r\nX-Test', 'x'),
+    get('/auth', 'X-Test', 'x\0'),
+    get('/auth', 'Bad Name', 'x'),
+    get('/auth', '', 'x'),
+    get('/raw-test', 'X-Test', '\t padded \r\n'),
+    get('/raw-test', 'X-Test', 'inner \t space')
+]).then(function(results) {
+    print(results.join('|'));
+    Script.stop(true);
+});
+)JS";
+
+    // A name or value that could add a header line never reaches the wire; the value is trimmed of HTTP whitespace
+    QCOMPARE(runPrinting(script, "testRequestHeaderValidation.js"), QString(
+        "SyntaxError none|SyntaxError none|SyntaxError none|SyntaxError none|SyntaxError none|SyntaxError none|"
+        "set [ padded]|set [ inner \t space]"));
+}
+
+void ScriptEngineNetworkedTests::testAtpRequest() {
+    QTemporaryDir dir;
+    QFile secret(dir.filePath("secret.txt"));
+    QVERIFY(secret.open(QIODevice::WriteOnly));
+    secret.write("secret");
+    secret.close();
+    const QString local = QUrl::fromLocalFile(dir.path() + "/").toString();
+
+    QString script = "var LOCAL = '" + local + "';\n" + R"JS(
+function get(url) {
+    return new Promise(function(resolve) {
+        var request = new XMLHttpRequest();
+        request.open('GET', url);
+        request.onreadystatechange = function() {
+            if (request.readyState === request.DONE) {
+                resolve(request.errorCode + ':' + request.status + ':' + request.responseText);
+            }
+        };
+        request.send();
+    });
+}
+get('atp:/missing.txt').then(function(missing) {
+    Resources.overrideUrlPrefix('atp:/', LOCAL);
+    return Promise.all([get('atp:/secret.txt'), get(LOCAL + 'secret.txt')]).then(function(local) {
+        Resources.overrideUrlPrefix('atp:/', '');
+        print([missing].concat(local).join('|'));
+        Script.stop(true);
+    });
+});
+)JS";
+
+    const QString printed = runPrinting(script, "testAtpRequest.js");
+    DependencyManager::get<ResourceManager>()->setUrlPrefixOverride("atp:/", "");
+    // ATP reaches the asset client, which has no asset server here; an override to local files does not, nor does file:
+    QCOMPARE(printed, QString("%1:0:|%2:0:|%2:0:").arg(QNetworkReply::ServiceUnavailableError)
+        .arg(QNetworkReply::ProtocolUnknownError));
 }

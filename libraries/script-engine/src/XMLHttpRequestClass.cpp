@@ -20,9 +20,11 @@
 #include <qurlquery.h>
 
 #include <AccountManager.h>
+#include <AtpReply.h>
 #include <NetworkAccessManager.h>
 #include <NetworkingConstants.h>
 #include <MetaverseAPI.h>
+#include <ResourceManager.h>
 #include <ScriptCredentials.h>
 
 #include "ResourceRequestObserver.h"
@@ -32,8 +34,39 @@
 #include "ScriptEnvironment.h"
 #include "ScriptManager.h"
 #include "ScriptValue.h"
+#include "Scriptable.h"
 
 Q_DECLARE_METATYPE(QByteArray*)
+
+// The header name and value rules of fetch's Headers (FetchPrelude.cpp), so that untrusted text cannot add a header line
+static bool isHeaderName(const QString& name) {
+    static const QString TOKEN_SYMBOLS = "!#$%&'*+-.^_`|~";
+    if (name.isEmpty()) {
+        return false;
+    }
+    for (const QChar c : name) {
+        if (c.unicode() > 0x7F || !(c.isLetterOrNumber() || TOKEN_SYMBOLS.contains(c))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool isHttpWhitespace(QChar c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static QString normalizedHeaderValue(const QString& value) {
+    int start = 0;
+    int end = value.size();
+    while (start < end && isHttpWhitespace(value[start])) {
+        start++;
+    }
+    while (end > start && isHttpWhitespace(value[end - 1])) {
+        end--;
+    }
+    return value.mid(start, end - start);
+}
 
 XMLHttpRequestClass::XMLHttpRequestClass(ScriptEngine* engine) :
     _engine(engine),
@@ -100,8 +133,21 @@ void XMLHttpRequestClass::abort() {
 }
 
 void XMLHttpRequestClass::setRequestHeader(const QString& name, const QString& value) {
+    const QString normalizedValue = normalizedHeaderValue(value);
+    QString error;
+    if (!isHeaderName(name)) {
+        error = "XMLHttpRequest.setRequestHeader: invalid header name: " + name;
+    } else if (normalizedValue.contains('\r') || normalizedValue.contains('\n') || normalizedValue.contains(QChar(0))) {
+        error = "XMLHttpRequest.setRequestHeader: invalid value for " + name + ": it contains CR, LF or NUL";
+    }
+    if (!error.isEmpty()) {
+        if (auto context = Scriptable::context()) {
+            context->throwValue(_engine->makeError(_engine->newValue(error), "SyntaxError"));
+        }
+        return;
+    }
     _request.setHeader(QNetworkRequest::UserAgentHeader, NetworkingConstants::OVERTE_USER_AGENT);
-    _request.setRawHeader(QByteArray(name.toLatin1()), QByteArray(value.toLatin1()));
+    _request.setRawHeader(name.toLatin1(), normalizedValue.toLatin1());
 }
 
 void XMLHttpRequestClass::requestDownloadProgress(qint64 bytesReceived, qint64 bytesTotal) {
@@ -222,8 +268,18 @@ void XMLHttpRequestClass::doSend() {
     _request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, _request.hasRawHeader("Authorization")
         ? QNetworkRequest::UserVerifiedRedirectPolicy : QNetworkRequest::NoLessSafeRedirectPolicy);
 
-    DependencyManager::get<ResourceRequestObserver>()->update(_url, -1, "XMLHttpRequestClass::doSend");
-    _reply = NetworkAccessManager::getInstance().sendCustomRequest(_request, _method.toLatin1(), _sendData);
+    // The network access manager has no ATP, so it goes through the ResourceManager as it does for fetch. Only while the
+    // URL is still ATP after any URL prefix override: a script can point one at the local files that a custom request
+    // never reads, as Qt serves file: and qrc: only to get() and head().
+    const QUrl url = _request.url();
+    if (url.scheme() == URL_SCHEME_ATP && _method.toUpper() == "GET" &&
+        DependencyManager::get<ResourceManager>()->normalizeURL(url).scheme() == URL_SCHEME_ATP) {
+        // Reported to the ResourceRequestObserver by its ResourceRequest
+        _reply = new AtpReply(url);
+    } else {
+        DependencyManager::get<ResourceRequestObserver>()->update(_url, -1, "XMLHttpRequestClass::doSend");
+        _reply = NetworkAccessManager::getInstance().sendCustomRequest(_request, _method.toLatin1(), _sendData);
+    }
     connectToReply(_reply);
 
     if (_timeout > 0) {
