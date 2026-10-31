@@ -1,0 +1,23 @@
+{
+    // Type-checks the client entity script against the client entity declarations built in
+    // tools/typings. A separate project from tsconfig.json: the two contexts declare different
+    // globals. The core it imports uses none.
+    "compilerOptions": {
+        "strict": true,
+        // Entity scripts initialise in preload, not in the constructor.
+        "strictPropertyInitialization": false,
+        "noEmit": true,
+        "allowJs": true,
+        "checkJs": true,
+        "target": "ES2023",
+        "lib": ["ES2023"],
+        "types": [],
+        "module": "esnext",
+        "moduleResolution": "bundler"
+    },
+    "files": [
+        "../../../tools/typings/dist/overte-client-entity.d.ts",
+        "seat-core.mjs",
+        "seat-client.mjs"
+    ]
+}

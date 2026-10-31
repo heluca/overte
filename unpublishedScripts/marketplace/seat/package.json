@@ -1,0 +1,11 @@
+{
+    "name": "overte-seat",
+    "private": true,
+    "description": "A seat for Overte: any Model with seat_N and stand_N joints seats one visitor per seat with the engine's own sit, on a lease its serverScripts holds in memory. Node runs the tests only; it is never a runtime dependency.",
+    "license": "Apache-2.0",
+    "type": "module",
+    "scripts": {
+        "test": "node --test \"test/*.test.mjs\"",
+        "typecheck": "node ../../../tools/typings/node_modules/typescript/bin/tsc -p tsconfig.json && node ../../../tools/typings/node_modules/typescript/bin/tsc -p tsconfig.client.json"
+    }
+}
