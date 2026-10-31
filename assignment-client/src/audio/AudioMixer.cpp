@@ -33,6 +33,7 @@
 #include <CPUDetect.h>
 #include <ZoneEntityItem.h>
 
+#include "AudioCodecNegotiation.h"
 #include "AudioLogging.h"
 #include "AudioHelpers.h"
 #include "AudioRingBuffer.h"
@@ -197,24 +198,9 @@ void AudioMixer::handleMuteEnvironmentPacket(QSharedPointer<ReceivedMessage> mes
 }
 
 const pair<QString, CodecPluginPointer> AudioMixer::negotiateCodec(vector<QString> codecs) {
-    QString selectedCodecName;
-    CodecPluginPointer selectedCodec;
-
-    // read the codecs requested (by the client)
-    int minPreference = numeric_limits<int>::max();
-    for (auto& codec : codecs) {
-        if (_availableCodecs.count(codec) > 0) {
-            int preference = _codecPreferenceOrder.indexOf(codec);
-
-            // choose the preferred, available codec
-            if (preference >= 0 && preference < minPreference) {
-                minPreference = preference;
-                selectedCodecName  = codec;
-            }
-        }
-    }
-
-    return make_pair(selectedCodecName, _availableCodecs[selectedCodecName]);
+    // Runs concurrently on the packet worker threads; negotiate() only reads the shared static codec map, so an
+    // offer that matches nothing cannot insert into it.
+    return AudioCodecNegotiation::negotiate(codecs, _availableCodecs, _codecPreferenceOrder);
 }
 
 
@@ -677,7 +663,7 @@ void AudioMixer::parseSettingsObject(const QJsonObject& settingsObject) {
         const QString CODEC_PREFERENCE_ORDER = "codec_preference_order";
         if (audioEnvGroupObject[CODEC_PREFERENCE_ORDER].isString()) {
             QString codecPreferenceOrder = audioEnvGroupObject[CODEC_PREFERENCE_ORDER].toString();
-            _codecPreferenceOrder = codecPreferenceOrder.split(",");
+            _codecPreferenceOrder = AudioCodecNegotiation::parsePreferenceOrder(codecPreferenceOrder);
             qCDebug(audio) << "Codec preference order changed to" << _codecPreferenceOrder;
         }
 
