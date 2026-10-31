@@ -80,7 +80,8 @@ struct Cache {
         PipelineLayout() {};
         friend struct Cache::Pipeline;
     };
-    std::unordered_map<uint32_t, VkShaderModule> moduleMap;
+    // Keyed by moduleKey(): the shader id, or the name for a Source copied without one.
+    std::unordered_map<std::string, VkShaderModule> moduleMap;
     std::unordered_map<std::string, PipelineLayout> pipelineMap;
 
     struct Pipeline {

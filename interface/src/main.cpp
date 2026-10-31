@@ -72,6 +72,14 @@ int main(int argc, const char* argv[]) {
             break;
         }
     }
+#ifndef USE_GL
+    // This build renders with the Vulkan backend, which takes the glsl450 shader dialect;
+    // --graphicsAPI only chooses between flavours of OpenGL.
+    if (!apiString.empty()) {
+        qWarning() << "Ignoring --graphicsAPI" << QString::fromStdString(apiString) << "in a Vulkan build";
+    }
+    hifi::properties::setGraphicsAPI(hifi::properties::GraphicsAPI::Vulkan);
+#else
     if (!apiString.empty()) {
         if (apiString == "gl45") {
             hifi::properties::setGraphicsAPI(hifi::properties::GraphicsAPI::GL45);
@@ -84,9 +92,8 @@ int main(int argc, const char* argv[]) {
             hifi::properties::setGraphicsAPI(hifi::properties::GraphicsAPI::GL45);
         }
     } else {
-#if defined(Q_OS_MAC) && defined(USE_GL)
-        // Apple's OpenGL implementation stops at 4.1. The Vulkan (MoltenVK) backend needs the
-        // glsl450 shader dialect, so only default to GL41 on the OpenGL backend.
+#if defined(Q_OS_MAC)
+        // Apple's OpenGL implementation stops at 4.1.
         hifi::properties::setGraphicsAPI(hifi::properties::GraphicsAPI::GL41);
 #elif defined(Q_OS_ANDROID) || (defined(Q_OS_LINUX) && defined(__aarch64__))
         // Use GLES on Android and aarch64 Linux
@@ -95,6 +102,7 @@ int main(int argc, const char* argv[]) {
         hifi::properties::setGraphicsAPI(hifi::properties::GraphicsAPI::GL45);
 #endif
     }
+#endif
 
 #ifdef Q_OS_WIN
     // Check the minimum GL version as early as possible
