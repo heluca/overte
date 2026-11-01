@@ -33,11 +33,17 @@ public:
     HelperScriptEngine();
     ~HelperScriptEngine();
 
+    // A released ScriptValue only queues its V8 wrapper; the ScriptManager loop is
+    // what drains the queue, and a helper engine has no manager, so drain after
+    // every run or the wrappers and the objects they pin accumulate for the life of
+    // the engine (the entity server persists the whole tree through one of these
+    // twice a cycle: overte-org/overte#2364).
     template <typename F>
     inline void run(F&& f) {
         std::lock_guard<std::mutex> guard(_scriptEngineLock);
         auto scopeGuard = _scriptEngine->getScopeGuard();
         f();
+        _scriptEngine->perManagerLoopIterationCleanup();
     }
 
     template <typename T, typename F>
@@ -45,7 +51,9 @@ public:
         T result;
         {
             std::lock_guard<std::mutex> guard(_scriptEngineLock);
+            auto scopeGuard = _scriptEngine->getScopeGuard();
             result = f();
+            _scriptEngine->perManagerLoopIterationCleanup();
         }
         return result;
     }
