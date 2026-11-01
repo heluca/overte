@@ -66,7 +66,7 @@
  *     rather than Interface clients. The result is unique among all avatars present in the domain at the time.
  * @property {boolean} lookAtSnappingEnabled=true - <code>true</code> if the avatar's eyes snap to look at another avatar's
  *     eyes when the other avatar is in the line of sight and also has <code>lookAtSnappingEnabled == true</code>.
- * @property {string} skeletonModelURL - The avatar's FST file.
+ * @property {string} skeletonModelURL - The avatar's FST file. Reads back the URL the script set.
  * @property {string[]} jointNames - The list of joints in the current avatar model. <em>Read-only.</em>
  * @property {Uuid} sessionUUID - Unique ID of the avatar in the domain. <em>Read-only.</em>
  * @property {Mat4} sensorToWorldMatrix - The scale, rotation, and translation transform from the user's real world to the
@@ -164,6 +164,9 @@ public:
      * @comment Uses the base class's JSDoc.
      */
     Q_INVOKABLE virtual void setSkeletonModelURL(const QUrl& skeletonModelURL) override;
+
+    /// The script set this avatar's model, so reading it back discloses nothing.
+    virtual QString getSkeletonModelURLFromScript() const override { return _skeletonModelURL.toString(); }
 
     /*@jsdoc
      * @comment Uses the base class's JSDoc.

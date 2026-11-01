@@ -206,11 +206,13 @@ bool ScriptAvatarData::getLookAtSnappingEnabled() const {
 QString ScriptAvatarData::getSkeletonModelURLFromScript() const {
     if (AvatarSharedPointer sharedAvatarData = _avatarData.lock()) {
         auto nodeList = DependencyManager::get<NodeList>();
-        if (sharedAvatarData->isMyAvatar() && !sharedAvatarData->isMyAvatarURLProtected() && nodeList->getThisNodeCanViewAssetURLs()) {
-            return sharedAvatarData->getSkeletonModelURLFromScript();
+        if (!nodeList->getThisNodeCanViewAssetURLs()) {
+            return QString();
         }
-
-        return QString();
+        if (sharedAvatarData->isMyAvatar()) {
+            return sharedAvatarData->isMyAvatarURLProtected() ? QString() : sharedAvatarData->getSkeletonModelURLFromScript();
+        }
+        return sharedAvatarData->getSkeletonModelURL().toString();
     } else {
         return QString();
     }
