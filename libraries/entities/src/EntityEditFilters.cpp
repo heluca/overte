@@ -78,6 +78,16 @@ bool EntityEditFilters::filter(glm::vec3& position, EntityItemProperties& proper
                 return true; // accept the message
             }
 
+            // The filter's ScriptManager never runs its loop, so nothing else drains the
+            // wrappers the ScriptValues below release. Declared first so it runs last.
+            struct WrapperDrain {
+                ScriptEnginePointer engine;
+                ~WrapperDrain() {
+                    auto scopeGuard = engine->getScopeGuard();
+                    engine->perManagerLoopIterationCleanup();
+                }
+            } wrapperDrain { filterData.engine };
+
             auto oldProperties = propertiesIn.getDesiredProperties();
             auto specifiedProperties = propertiesIn.getChangedProperties();
             propertiesIn.setDesiredProperties(specifiedProperties);
