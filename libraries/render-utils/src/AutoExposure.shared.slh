@@ -1,0 +1,26 @@
+// glsl / C++ compatible source as interface for AutoExposure
+#ifdef __cplusplus
+#   define AE_VEC2 glm::vec2
+#else
+#   define AE_VEC2 vec2
+#endif
+
+struct Parameters
+{
+    // Size of one texel of the luminance texture, in texcoords of the source viewport
+    AE_VEC2 _footprint;
+    // Seconds since the previous frame's measurement
+    float _deltaTime;
+    // Adaptation rates (per second) when the scene gets brighter and when it gets darker
+    float _speedUp;
+    float _speedDown;
+    // Non-zero when there is no history to adapt from: the measurement is taken as is
+    int _reset;
+
+    float _padding[2];
+};
+
+    // <@if 1@>
+    // Trigger Scribe include
+    // <@endif@> <!def that !>
+//

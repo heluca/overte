@@ -29,6 +29,7 @@
 #include "StencilMaskPass.h"
 #include "ZoneRenderer.h"
 #include "ToneMapAndResampleTask.h"
+#include "AutoExposure.h"
 #include "BackgroundStage.h"
 #include "FramebufferCache.h"
 #include "TextureCache.h"
@@ -193,7 +194,10 @@ void RenderForwardTask::build(JobModel& task, const render::Varying& input, rend
 
     const auto destFramebuffer = static_cast<gpu::FramebufferPointer>(nullptr);
 
-    const auto toneMappingInputs = ToneMapAndResample::Input(resolvedFramebuffer, destFramebuffer, tonemappingFrame).asVarying();
+    const auto autoExposureInputs = AutoExposure::Inputs(resolvedFramebuffer, lightingModel).asVarying();
+    const auto autoExposure = task.addJob<AutoExposure>("AutoExposure", autoExposureInputs);
+
+    const auto toneMappingInputs = ToneMapAndResample::Input(resolvedFramebuffer, destFramebuffer, tonemappingFrame, autoExposure).asVarying();
     const auto toneMappedBuffer = task.addJob<ToneMapAndResample>("ToneMapping", toneMappingInputs);
     // HUD Layer
     const auto renderHUDLayerInputs = RenderHUDLayerTask::Input(toneMappedBuffer, lightingModel, hudOpaque, hudTransparent, hazeFrame, deferredFrameTransform).asVarying();

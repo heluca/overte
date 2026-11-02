@@ -249,6 +249,13 @@ bool LightingModel::isBloomEnabled() const {
     return (bool)_parametersBuffer.get<Parameters>().enableBloom;
 }
 
+void LightingModel::setAutoExposure(bool enable) {
+    _autoExposureEnabled = enable;
+}
+bool LightingModel::isAutoExposureEnabled() const {
+    return _autoExposureEnabled;
+}
+
 void LightingModel::setSkinning(bool enable) {
     if (enable != isSkinningEnabled()) {
         _parametersBuffer.edit<Parameters>().enableSkinning = (float)enable;
@@ -309,6 +316,7 @@ void MakeLightingModel::configure(const Config& config) {
     _lightingModel->setBackground(config.enableBackground);
     _lightingModel->setHaze(config.enableHaze);
     _lightingModel->setBloom(config.enableBloom);
+    _lightingModel->setAutoExposure(config.enableAutoExposure);
 
     _lightingModel->setObscurance(config.enableObscurance);
 

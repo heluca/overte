@@ -52,6 +52,7 @@
 #include "AmbientOcclusionEffect.h"
 #include "AntialiasingEffect.h"
 #include "ToneMapAndResampleTask.h"
+#include "AutoExposure.h"
 #include "SubsurfaceScattering.h"
 #include "DrawHaze.h"
 #include "BloomEffect.h"
@@ -246,8 +247,12 @@ void RenderDeferredTask::build(JobModel& task, const render::Varying& input, ren
 
     const auto destFramebuffer = static_cast<gpu::FramebufferPointer>(nullptr);
 
+    // Measure the lighting buffer (after bloom, as the eye would see it) for auto exposure
+    const auto autoExposureInputs = AutoExposure::Inputs(lightingFramebuffer, lightingModel).asVarying();
+    const auto autoExposure = task.addJob<AutoExposure>("AutoExposure", autoExposureInputs);
+
     // Lighting Buffer ready for tone mapping
-    const auto toneMappingInputs = ToneMapAndResample::Input(lightingFramebuffer, destFramebuffer, tonemappingFrame).asVarying();
+    const auto toneMappingInputs = ToneMapAndResample::Input(lightingFramebuffer, destFramebuffer, tonemappingFrame, autoExposure).asVarying();
     const auto toneMappedBuffer = task.addJob<ToneMapAndResample>("ToneMapping", toneMappingInputs);
 
     // Debugging task is happening in the "over" layer after tone mapping and just before HUD
