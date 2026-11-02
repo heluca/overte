@@ -57,6 +57,7 @@ void RenderScriptingInterface::loadSettings() {
         _shadowsEnabled = _shadowsEnabledSetting.get();
         _hazeEnabled = _hazeEnabledSetting.get();
         _bloomEnabled = _bloomEnabledSetting.get();
+        _autoExposureEnabled = _autoExposureEnabledSetting.get();
         _ambientOcclusionEnabled = _ambientOcclusionEnabledSetting.get();
         _localLightingEnabled = _localLightingSetting.get();
         _proceduralMaterialsEnabled = _proceduralMaterialsEnabledSetting.get();
@@ -77,6 +78,7 @@ void RenderScriptingInterface::loadSettings() {
     forceShadowsEnabled(_shadowsEnabled);
     forceHazeEnabled(_hazeEnabled);
     forceBloomEnabled(_bloomEnabled);
+    forceAutoExposureEnabled(_autoExposureEnabled);
     forceAmbientOcclusionEnabled(_ambientOcclusionEnabled);
     forceLocalLightingEnabled(_localLightingEnabled);
     forceProceduralMaterialsEnabled(_proceduralMaterialsEnabled);
@@ -225,6 +227,27 @@ void RenderScriptingInterface::forceBloomEnabled(bool enabled) {
         _bloomEnabledSetting.set(enabled);
 
         recursivelyUpdateLightingModel("", [enabled] (MakeLightingModelConfig *config) { config->setBloom(enabled); });
+    });
+}
+
+bool RenderScriptingInterface::getAutoExposureEnabled() const {
+    return _autoExposureEnabled;
+}
+
+void RenderScriptingInterface::setAutoExposureEnabled(bool enabled) {
+    if (_autoExposureEnabled != enabled) {
+        forceAutoExposureEnabled(enabled);
+        emit settingsChanged();
+    }
+}
+
+void RenderScriptingInterface::forceAutoExposureEnabled(bool enabled) {
+    _renderSettingLock.withWriteLock([&] {
+        _autoExposureEnabled = (enabled);
+        _autoExposureEnabledSetting.set(enabled);
+        Menu::getInstance()->setIsOptionChecked(MenuOption::AutoExposure, enabled);
+
+        recursivelyUpdateLightingModel("", [enabled] (MakeLightingModelConfig *config) { config->setAutoExposure(enabled); });
     });
 }
 

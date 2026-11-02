@@ -1,0 +1,47 @@
+<@include gpu/Config.slh@>
+<$VERSION_HEADER$>
+//  autoExposure_adapt.slf
+//  libraries/render-utils/src
+//
+//  Second step of auto exposure: fold the luminance texture into one value and move the adapted value towards it
+//  at the eye's pace. The output is a 1x1 texture holding the adapted average log2 luminance.
+//
+//  Copyright 2026 Overte e.V.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//
+
+<@include render-utils/ShaderConstants.h@>
+<@include AutoExposure.shared.slh@>
+
+UNIFORM_BUFFER(RENDER_UTILS_BUFFER_AUTO_EXPOSURE_PARAMS, autoExposureParamsBuffer) {
+    Parameters params;
+};
+
+TEXTURE(RENDER_UTILS_TEXTURE_AUTO_EXPOSURE_SOURCE, sampler2D, luminanceMap);
+TEXTURE(RENDER_UTILS_TEXTURE_AUTO_EXPOSURE_PREVIOUS, sampler2D, previousMap);
+
+INPUT(0, vec2, varTexCoord0);
+OUTPUT(0, vec4, outFragColor);
+
+void main(void) {
+    ivec2 size = textureSize(luminanceMap, 0);
+    float sum = 0.0;
+    for (int y = 0; y < size.y; y++) {
+        for (int x = 0; x < size.x; x++) {
+            sum += texelFetch(luminanceMap, ivec2(x, y), 0).x;
+        }
+    }
+    float target = sum / float(size.x * size.y);
+
+    float previous = texelFetch(previousMap, ivec2(0, 0), 0).x;
+    float speed = (target > previous) ? params._speedUp : params._speedDown;
+    float weight = 1.0 - exp(-params._deltaTime * speed);
+    float adapted = mix(previous, target, weight);
+    // Without history (first frame, or just switched on) and whenever the history is not a number, start from the measurement
+    if (params._reset != 0 || isnan(adapted) || isinf(adapted)) {
+        adapted = target;
+    }
+    outFragColor = vec4(adapted, 0.0, 0.0, 1.0);
+}

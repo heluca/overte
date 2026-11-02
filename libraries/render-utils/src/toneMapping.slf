@@ -43,8 +43,15 @@
 <@include render-utils/ShaderConstants.h@>
 
 struct ToneMappingParams {
-    float _2powExp;
+    // The zone's exposure, in EV
+    float _exposure;
+    // Auto exposure: log2 of the key luminance, and how far above/below the zone's exposure it may go, in EV
+    float _autoKeyLog2;
+    float _autoRangeUp;
+    float _autoRangeDown;
     int _toneCurve;
+    int _autoEnabled;
+    int _autoDebug;
 };
 
 const float GAMMA_22 = 2.2;
@@ -57,20 +64,19 @@ const int ToneCurveFilmic = 3;
 UNIFORM_BUFFER(RENDER_UTILS_BUFFER_TM_PARAMS, toneMappingParamsBuffer) {
     ToneMappingParams params;
 };
-float getTwoPowExposure() {
-    return params._2powExp;
-}
 int getToneCurve() {
     return params._toneCurve;
 }
 
 TEXTURE(RENDER_UTILS_TEXTURE_TM_COLOR, sampler2D, colorMap);
+// 1x1, the adapted average log2 luminance of the lighting buffer measured by the auto exposure pass
+TEXTURE(RENDER_UTILS_TEXTURE_TM_ADAPTATION, sampler2D, adaptationMap);
 
 INPUT(0, vec2, varTexCoord0);
 OUTPUT(0, vec4, outFragColor);
 
 float luminance(vec3 v) {
-    return dot(v, vec3(0.2126, 0.7152, 0.722));
+    return dot(v, vec3(0.2126, 0.7152, 0.0722));
 }
 
 vec3 changeLuminance(vec3 colorIn, float luminanceOut) {
@@ -86,7 +92,14 @@ void main(void) {
 <@endif@>
     vec3 fragColor = fragColorRaw.xyz;
 
-    vec3 srcColor = fragColor * getTwoPowExposure();
+    float exposure = params._exposure;
+    float adapted = 0.0;
+    if (params._autoEnabled != 0) {
+        // Add whatever brings the exposed average luminance to the key, within the range allowed around the zone's exposure
+        adapted = texelFetch(adaptationMap, ivec2(0, 0), 0).x;
+        exposure += clamp(params._autoKeyLog2 - (adapted + exposure), -params._autoRangeDown, params._autoRangeUp);
+    }
+    vec3 srcColor = fragColor * exp2(exposure);
 
     int toneCurve = getToneCurve();
     vec3 tonedColor = srcColor;
@@ -126,6 +139,12 @@ void main(void) {
         // For debugging purposes, we may want to see what the colors look like before the automatic OpenGL
         // conversion mentioned above, so we undo it here
         tonedColor = pow(srcColor, vec3(GAMMA_22));
+    }
+
+    if (params._autoDebug != 0 && gl_FragCoord.x < 64.0 && gl_FragCoord.y < 16.0) {
+        // Numeric probe for tuning: a grey patch whose value, read back linearly, is (adapted + 12) / 16
+        float probe = clamp((adapted + 12.0) / 16.0, 0.0, 1.0);
+        tonedColor = vec3(pow(probe, GAMMA_22));
     }
 
     outFragColor = vec4(tonedColor, 1.0);

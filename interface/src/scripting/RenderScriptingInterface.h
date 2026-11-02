@@ -31,6 +31,7 @@
  * @property {boolean} shadowsEnabled - <code>true</code> if shadows are enabled, <code>false</code> if they're disabled.
  * @property {boolean} hazeEnabled - <code>true</code> if haze (fog) is enabled, <code>false</code> if it's disabled.
  * @property {boolean} bloomEnabled - <code>true</code> if bloom is enabled, <code>false</code> if it's disabled.
+ * @property {boolean} autoExposureEnabled - <code>true</code> if auto exposure is enabled, <code>false</code> if it's disabled.
  * @property {boolean} ambientOcclusionEnabled - <code>true</code> if ambient occlusion is enabled, <code>false</code> if it's disabled.
  * @property {boolean} localLightingEnabled - <code>true</code> if local lights are enabled,
  * <code>false</code> if they're disabled.
@@ -46,6 +47,7 @@ class RenderScriptingInterface : public QObject {
     Q_PROPERTY(bool shadowsEnabled READ getShadowsEnabled WRITE setShadowsEnabled NOTIFY settingsChanged)
     Q_PROPERTY(bool hazeEnabled READ getHazeEnabled WRITE setHazeEnabled NOTIFY settingsChanged)
     Q_PROPERTY(bool bloomEnabled READ getBloomEnabled WRITE setBloomEnabled NOTIFY settingsChanged)
+    Q_PROPERTY(bool autoExposureEnabled READ getAutoExposureEnabled WRITE setAutoExposureEnabled NOTIFY settingsChanged)
     Q_PROPERTY(bool ambientOcclusionEnabled READ getAmbientOcclusionEnabled WRITE setAmbientOcclusionEnabled NOTIFY settingsChanged)
     Q_PROPERTY(bool localLightingEnabled READ getLocalLightingEnabled WRITE setLocalLightingEnabled NOTIFY settingsChanged)
     Q_PROPERTY(AntialiasingSetupConfig::Mode antialiasingMode READ getAntialiasingMode WRITE setAntialiasingMode NOTIFY settingsChanged)
@@ -172,6 +174,21 @@ public slots:
      * @param {boolean} enabled - <code>true</code> to enable bloom, <code>false</code> to disable.
      */
     void setBloomEnabled(bool enabled);
+
+    /*@jsdoc
+     * Gets whether or not auto exposure is enabled.
+     * @function Render.getAutoExposureEnabled
+     * @returns {boolean} <code>true</code> if auto exposure is enabled, <code>false</code> if it's disabled.
+     */
+    bool getAutoExposureEnabled() const;
+
+    /*@jsdoc
+     * Sets whether or not auto exposure is enabled: the exposure adapts to the brightness of what is on screen,
+     * within a range around the exposure set by the current zone.
+     * @function Render.setAutoExposureEnabled
+     * @param {boolean} enabled - <code>true</code> to enable auto exposure, <code>false</code> to disable.
+     */
+    void setAutoExposureEnabled(bool enabled);
 
     /*@jsdoc
      * Gets whether or not ambient occlusion is enabled.
@@ -320,6 +337,7 @@ private:
     bool _shadowsEnabled { true };
     bool _hazeEnabled { true };
     bool _bloomEnabled { true };
+    bool _autoExposureEnabled { true };
     bool _ambientOcclusionEnabled { true };
     bool _localLightingEnabled { true };
     bool _proceduralMaterialsEnabled { true };
@@ -332,6 +350,7 @@ private:
     Setting::Handle<bool> _shadowsEnabledSetting { "shadowsEnabled", true };
     Setting::Handle<bool> _hazeEnabledSetting { "hazeEnabled", true };
     Setting::Handle<bool> _bloomEnabledSetting { "bloomEnabled", true };
+    Setting::Handle<bool> _autoExposureEnabledSetting { "autoExposureEnabled", true };
     Setting::Handle<bool> _ambientOcclusionEnabledSetting { "ambientOcclusionEnabled", true };
     Setting::Handle<bool> _localLightingSetting { "localLightingEnabled", true };
     Setting::Handle<bool> _proceduralMaterialsEnabledSetting { "proceduralMaterialsEnabled", true };
@@ -344,6 +363,7 @@ private:
     void forceShadowsEnabled(bool enabled);
     void forceHazeEnabled(bool enabled);
     void forceBloomEnabled(bool enabled);
+    void forceAutoExposureEnabled(bool enabled);
     void forceAmbientOcclusionEnabled(bool enabled);
     void forceLocalLightingEnabled(bool enabled);
     void forceProceduralMaterialsEnabled(bool enabled);

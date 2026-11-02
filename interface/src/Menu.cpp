@@ -431,6 +431,9 @@ Menu::Menu() {
     addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::AmbientOcclusion, 0, RenderScriptingInterface::getInstance()->getAmbientOcclusionEnabled(),
         RenderScriptingInterface::getInstance(), SLOT(setAmbientOcclusionEnabled(bool)));
 
+    addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::AutoExposure, 0, RenderScriptingInterface::getInstance()->getAutoExposureEnabled(),
+        RenderScriptingInterface::getInstance(), SLOT(setAutoExposureEnabled(bool)));
+
     addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::LocalLights, 0, RenderScriptingInterface::getInstance()->getLocalLightingEnabled(),
         RenderScriptingInterface::getInstance(), SLOT(setLocalLightingEnabled(bool)));
 

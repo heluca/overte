@@ -1,0 +1,43 @@
+<@include gpu/Config.slh@>
+<$VERSION_HEADER$>
+//  autoExposure_luminance.slf
+//  libraries/render-utils/src
+//
+//  First step of auto exposure: the average log2 luminance of the lighting buffer, one texel per block of the viewport.
+//
+//  Copyright 2026 Overte e.V.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//
+
+<@include render-utils/ShaderConstants.h@>
+<@include AutoExposure.shared.slh@>
+
+UNIFORM_BUFFER(RENDER_UTILS_BUFFER_AUTO_EXPOSURE_PARAMS, autoExposureParamsBuffer) {
+    Parameters params;
+};
+
+TEXTURE(RENDER_UTILS_TEXTURE_AUTO_EXPOSURE_SOURCE, sampler2D, sourceMap);
+
+INPUT(0, vec2, varTexCoord0);
+OUTPUT(0, vec4, outFragColor);
+
+const vec3 LUMINANCE_WEIGHTS = vec3(0.2126, 0.7152, 0.0722);
+// Floor of the measurement, so black pixels do not drag the log average to minus infinity
+const float MIN_LUMINANCE = 0.0001;
+
+void main(void) {
+    // varTexCoord0 is the centre of this texel's footprint on the source viewport; spread TAPS x TAPS bilinear taps over it
+    const int TAPS = 8;
+    vec2 step = params._footprint / float(TAPS);
+    vec2 origin = varTexCoord0 - 0.5 * params._footprint + 0.5 * step;
+    float sum = 0.0;
+    for (int y = 0; y < TAPS; y++) {
+        for (int x = 0; x < TAPS; x++) {
+            vec3 color = texture(sourceMap, origin + vec2(float(x), float(y)) * step).rgb;
+            sum += log2(max(dot(color, LUMINANCE_WEIGHTS), MIN_LUMINANCE));
+        }
+    }
+    outFragColor = vec4(sum / float(TAPS * TAPS), 0.0, 0.0, 1.0);
+}

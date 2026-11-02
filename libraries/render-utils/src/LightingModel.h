@@ -40,6 +40,9 @@ public:
     bool isHazeEnabled() const;
     void setBloom(bool enable);
     bool isBloomEnabled() const;
+    // Auto exposure is a pass of its own, not a shader switch, so this one stays out of the uniform block
+    void setAutoExposure(bool enable);
+    bool isAutoExposureEnabled() const;
 
     void setObscurance(bool enable);
     bool isObscuranceEnabled() const;
@@ -131,6 +134,7 @@ protected:
     };
     UniformBufferView _parametersBuffer;
     static gpu::TexturePointer _ambientFresnelLUT;
+    bool _autoExposureEnabled { true };
 };
 using LightingModelPointer = std::shared_ptr<LightingModel>;
 
@@ -161,6 +165,7 @@ class MakeLightingModelConfig : public render::Job::Config {
     Q_PROPERTY(bool showLightContour MEMBER showLightContour NOTIFY dirty)
 
     Q_PROPERTY(bool enableBloom MEMBER enableBloom NOTIFY dirty)
+    Q_PROPERTY(bool enableAutoExposure READ isAutoExposureEnabled WRITE setAutoExposure NOTIFY dirty)
     Q_PROPERTY(bool enableSkinning MEMBER enableSkinning NOTIFY dirty)
     Q_PROPERTY(bool enableBlendshape MEMBER enableBlendshape NOTIFY dirty)
 
@@ -194,6 +199,7 @@ public:
     bool enableWireframe { false }; // false by default
     bool enableHaze { true };
     bool enableBloom { true };
+    bool enableAutoExposure { true };
     bool enableSkinning { true };
     bool enableBlendshape { true };
 
@@ -209,6 +215,8 @@ public:
     bool isShadowEnabled() const { return enableShadow; }
     void setHaze(bool enable) { enableHaze = enable; emit dirty(); }
     void setBloom(bool enable) { enableBloom = enable; emit dirty(); }
+    void setAutoExposure(bool enable) { enableAutoExposure = enable; emit dirty(); }
+    bool isAutoExposureEnabled() const { return enableAutoExposure; }
 
 signals:
     void dirty();
