@@ -11,6 +11,8 @@
 #pragma once
 
 // For hash_combine
+#include <unordered_set>
+
 #include <RegisteredMetaTypes.h>
 
 #include <gpu/Forward.h>
@@ -82,6 +84,9 @@ struct Cache {
     };
     // Keyed by moduleKey(): the shader id, or the name for a Source copied without one.
     std::unordered_map<std::string, VkShaderModule> moduleMap;
+    // Keys of runtime-compiled shaders (Procedural) whose GLSL did not compile; they hold the shader's build-time
+    // module instead, and every pipeline built from them flags its program so Procedural shows its error shader.
+    std::unordered_set<std::string> failedModuleKeys;
     std::unordered_map<std::string, PipelineLayout> pipelineMap;
 
     struct Pipeline {
@@ -135,7 +140,13 @@ struct Cache {
 
     static VkStencilOpState getStencilOp(const gpu::State::StencilTest& stencil);
 
-    VkShaderModule getShaderModule(const vks::Context& context, const shader::Source& source);
+    // The key a Source's module and pipelines are cached under: its build id, or for a Source with runtime
+    // replacements, its name and a hash of those replacements
+    static std::string sourceKey(const shader::Source& source);
+
+    // The module for a Source: the SPIR-V from the build for a shipped shader, or one compiled now with glslang
+    // for a Source carrying runtime replacements. `compileFailed` reports a runtime compile that did not succeed.
+    VkShaderModule getShaderModule(const vks::Context& context, const shader::Source& source, VkShaderStageFlagBits stage, bool& compileFailed);
 
     const PipelineLayout& getPipeline(const vks::Context& context);
 };

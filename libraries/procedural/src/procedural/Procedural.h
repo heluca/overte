@@ -25,6 +25,19 @@
 #include "ProceduralMaterialCache.h"
 
 using UniformLambdas = std::list<std::function<void(gpu::Batch& batch)>>;
+
+// A `uniform` a procedural shader declares. The Vulkan backend has no loose uniforms, so Procedural moves them
+// into one std140 block (procedural::slot::buffer::Custom) and fills it from the entity's userData.
+struct ProceduralCustomUniform {
+    std::string name;
+    std::string type;
+    int arraySize { 0 };     // 0 when not an array
+    size_t offset { 0 };     // of the member in the block
+    size_t stride { 0 };     // between array elements
+    int baseType { 0 };      // 0 float, 1 int (bool too), 2 uint
+    int components { 1 };    // per column
+    int columns { 0 };       // 0 for scalars and vectors
+};
 const size_t MAX_PROCEDURAL_TEXTURE_CHANNELS{ 4 };
 
 /*@jsdoc
@@ -186,6 +199,11 @@ protected:
     std::unordered_map<std::string, std::string> _vertexReplacements;
     std::unordered_map<std::string, std::string> _fragmentReplacements;
     std::unordered_map<std::string, int> _slotMap;
+
+    // Vulkan only: the shader's uniforms as one block, laid out when the shader is built (see prepare)
+    std::vector<ProceduralCustomUniform> _customUniforms;
+    size_t _customUniformSize { 0 };
+    gpu::BufferPointer _customUniformBuffer;
 
     std::unordered_map<ProceduralProgramKey, gpu::PipelinePointer> _proceduralPipelines;
     std::unordered_map<ProceduralProgramKey, gpu::PipelinePointer> _errorPipelines;
