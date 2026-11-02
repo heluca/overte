@@ -36,7 +36,8 @@ using AutoExposureResultPointer = std::shared_ptr<AutoExposureResult>;
  * @property {number} key=0.125 - The average scene luminance, after the zone's exposure, at which no adjustment is made.
  *     Calibrated so that a sunlit outdoor view keeps the look its zone's exposure gives it.
  * @property {number} rangeUp=1.0 - How many EV the exposure may be raised above the zone's value, for dark views.
- * @property {number} rangeDown=1.0 - How many EV the exposure may be lowered below the zone's value, for bright views.
+ * @property {number} rangeDown=0.0 - How many EV the exposure may be lowered below the zone's value, for bright views.
+ *     0 by default: the zone's exposure is the day's ceiling, and only the eye opening in the dark is automatic.
  * @property {number} speedUp=3.0 - Adaptation rate per second when the view gets brighter.
  * @property {number} speedDown=1.0 - Adaptation rate per second when the view gets darker.
  * @property {boolean} debug=false - Paint the adapted log2 luminance as a grey patch in a corner of the view.
@@ -64,7 +65,7 @@ public:
 
     float key { 0.125f };
     float rangeUp { 1.0f };
-    float rangeDown { 1.0f };
+    float rangeDown { 0.0f };
     float speedUp { 3.0f };
     float speedDown { 1.0f };
     bool debug { false };
