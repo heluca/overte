@@ -28,6 +28,14 @@ void FramebufferCache::setFrameBufferSize(QSize frameBufferSize) {
     }
 }
 
+void FramebufferCache::setHDR(bool hdr) {
+    if (_hdr != hdr) {
+        _hdr = hdr;
+        std::unique_lock<std::mutex> lock(_mutex);
+        _cachedFramebuffers.clear();
+    }
+}
+
 void FramebufferCache::createPrimaryFramebuffer() {
     auto defaultSampler = Sampler(Sampler::FILTER_MIN_MAG_POINT);
 
@@ -38,7 +46,8 @@ void FramebufferCache::createPrimaryFramebuffer() {
 gpu::FramebufferPointer FramebufferCache::getFramebuffer() {
     std::unique_lock<std::mutex> lock(_mutex);
     if (_cachedFramebuffers.empty()) {
-        _cachedFramebuffers.push_back(gpu::FramebufferPointer(gpu::Framebuffer::create("cached", gpu::Element::COLOR_SRGBA_32, gpu::Element::DEPTH24_STENCIL8, _frameBufferSize.width(), _frameBufferSize.height())));
+        const auto colorFormat = _hdr ? gpu::Element(gpu::VEC4, gpu::HALF, gpu::RGBA) : gpu::Element::COLOR_SRGBA_32;
+        _cachedFramebuffers.push_back(gpu::FramebufferPointer(gpu::Framebuffer::create("cached", colorFormat, gpu::Element::DEPTH24_STENCIL8, _frameBufferSize.width(), _frameBufferSize.height())));
     }
     gpu::FramebufferPointer result = _cachedFramebuffers.front();
     _cachedFramebuffers.pop_front();
@@ -47,7 +56,8 @@ gpu::FramebufferPointer FramebufferCache::getFramebuffer() {
 
 void FramebufferCache::releaseFramebuffer(const gpu::FramebufferPointer& framebuffer) {
     std::unique_lock<std::mutex> lock(_mutex);
-    if (QSize(framebuffer->getSize().x, framebuffer->getSize().y) == _frameBufferSize) {
+    const bool isHDR = framebuffer->getRenderBuffer(0) && framebuffer->getRenderBuffer(0)->getTexelFormat().getType() == gpu::HALF;
+    if (QSize(framebuffer->getSize().x, framebuffer->getSize().y) == _frameBufferSize && isHDR == _hdr) {
         _cachedFramebuffers.push_back(framebuffer);
     }
 }

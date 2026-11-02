@@ -32,6 +32,19 @@ CAMetalLayer* layerForWindow(QWindow *window)
     return static_cast<CAMetalLayer *>(view.layer);
 }
 
+void requestDisplayHeadroom(QWindow *window, std::function<void(float)> deliver)
+{
+    NSView *view = reinterpret_cast<NSView *>(window->winId());
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSScreen *screen = view ? view.window.screen : nil;
+        if (!screen) {
+            screen = [NSScreen mainScreen];
+        }
+        float headroom = screen ? (float)screen.maximumExtendedDynamicRangeColorComponentValue : 1.0f;
+        deliver(headroom);
+    });
+}
+
 MetalLayerMetrics metalLayerMetrics(QWindow *window)
 {
     MetalLayerMetrics metrics;

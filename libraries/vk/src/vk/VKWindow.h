@@ -14,6 +14,7 @@
 #include <QtGui/qevent.h>
 #include <QtCore/QTimer>
 #include <QtCore/QDebug>
+#include <functional>
 
 #include "Allocation.h"
 #include "Config.h"
@@ -33,6 +34,15 @@ public:
 
     // One line describing the window, swapchain and (on macOS) CAMetalLayer sizes, for logging.
     QString describeSurface() const;
+
+    // Asks for a swapchain that presents linear values with headroom above SDR white (half floats in the extended
+    // linear sRGB colour space) when the surface offers one; the change happens at the next present. Any thread.
+    void setHDRRequested(bool hdr);
+    bool isHDRRequested() const { return _hdrRequested; }
+
+    // Asks for the EDR headroom of the screen showing the window, the brightest value it shows as a multiple of
+    // SDR white; `deliver` gets it on the main thread (1.0 where the platform cannot say). Any thread.
+    void requestDisplayHeadroom(std::function<void(float)> deliver);
 
 signals:
     void aboutToClose();
@@ -70,6 +80,7 @@ public:
     std::vector<VkFramebuffer> _frameBuffers;
     std::atomic<bool> _isVulkanCleanupComplete{ false };
     std::atomic<bool> _needsResizing{ true };
+    std::atomic<bool> _hdrRequested{ false };
     VkFence _previousFrameFence{ VK_NULL_HANDLE };
     VkCommandBuffer _previousCommandBuffer{ VK_NULL_HANDLE };
     VkSemaphore _previousAcquireCompleteSemaphore{ VK_NULL_HANDLE };

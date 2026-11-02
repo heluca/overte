@@ -69,6 +69,12 @@ void ToneMapAndResample::setAutoExposure(const AutoExposureResultPointer& autoEx
     }
 }
 
+void ToneMapAndResample::setHDRPeak(float peak) {
+    if (_parametersBuffer.get<Parameters>()._hdrPeak != peak) {
+        _parametersBuffer.edit<Parameters>()._hdrPeak = peak;
+    }
+}
+
 void ToneMapAndResample::setCurve(TonemappingCurve curve) {
     auto& params = _parametersBuffer.get<Parameters>();
     if (params._toneCurve != (int)curve) {
@@ -121,6 +127,12 @@ void ToneMapAndResample::run(const RenderContextPointer& renderContext, const In
     if (!lightingBuffer || !destinationFramebuffer) {
         return;
     }
+
+    // HDR output only into a float destination (the final framebuffer when the display presents with headroom);
+    // mirrors and the secondary camera render into 8-bit buffers and keep the curve ending at white
+    const auto& destinationColor = destinationFramebuffer->getRenderBuffer(0);
+    const bool floatDestination = destinationColor && destinationColor->getTexelFormat().getType() == gpu::HALF;
+    setHDRPeak((floatDestination && args->_mirrorDepth == 0) ? args->_hdrPeak : 0.0f);
 
     if (!_pipeline) {
         init();

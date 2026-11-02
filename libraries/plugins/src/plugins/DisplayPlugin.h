@@ -195,6 +195,12 @@ public:
     // Hardware specific stats
     virtual QJsonObject getHardwareStats() const { return QJsonObject(); }
 
+    // HDR output: when the plugin presents linear values with headroom above SDR white, the brightest value the
+    // display shows as a multiple of SDR white (the tone mapper's peak); 0 when the output is SDR.
+    virtual float getHDRPeak() const { return 0.0f; }
+    // Ask the plugin to present in HDR when the display allows it; takes effect at the next frame.
+    virtual void setHDROutputEnabled(bool enabled) {}
+
     virtual void copyTextureToQuickFramebuffer(NetworkTexturePointer source, QOpenGLFramebufferObject* target, GLsync* fenceSync) = 0;
 
     uint32_t presentCount() const { return _presentedFrameIndex; }

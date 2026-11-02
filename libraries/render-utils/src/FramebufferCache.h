@@ -27,6 +27,10 @@ public:
     void setFrameBufferSize(QSize frameBufferSize);
     const QSize& getFrameBufferSize() const { return _frameBufferSize; } 
 
+    /// HDR output: half-float colour instead of 8-bit sRGB, so the tone mapper can write values above white
+    void setHDR(bool hdr);
+    bool isHDR() const { return _hdr; }
+
     /// Returns a free framebuffer with a single color attachment for temp or intra-frame operations
     gpu::FramebufferPointer getFramebuffer();
 
@@ -40,6 +44,7 @@ private:
     gpu::FramebufferPointer _shadowFramebuffer;
 
     QSize _frameBufferSize{ 100, 100 };
+    bool _hdr { false };
 
     std::mutex _mutex;
     std::list<gpu::FramebufferPointer> _cachedFramebuffers;
