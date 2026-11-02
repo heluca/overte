@@ -65,8 +65,12 @@ void ProceduralSkybox::render(gpu::Batch& batch, const ViewFrustum& viewFrustum,
     batch.setModelTransform(Transform()); // only for Mac
 
     auto& procedural = skybox._procedural;
-    procedural.prepare(batch, glm::vec3(0), glm::vec3(1), glm::quat(), skybox.getCreated());
+    // The skybox's colour block and the procedural standard inputs (time, date, resolution) share uniform
+    // slot 7 (GRAPHICS_BUFFER_SKYBOX_PARAMS and PROCEDURAL_BUFFER_INPUTS), and the shader reads only the
+    // inputs, so they must be bound last: bound the other way round the shader saw the 16-byte colour buffer
+    // and every input read as zero (no time of day, no animation).
     skybox.prepare(batch);
+    procedural.prepare(batch, glm::vec3(0), glm::vec3(1), glm::quat(), skybox.getCreated());
     batch.draw(gpu::TRIANGLE_STRIP, 4);
 }
 
