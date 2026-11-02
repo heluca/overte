@@ -17,6 +17,8 @@
 
 #include "LightingModel.h"
 #include "Menu.h"
+#include "Application.h"
+#include <plugins/DisplayPlugin.h>
 #include "ScreenName.h"
 
 #include <procedural/Procedural.h>
@@ -58,6 +60,7 @@ void RenderScriptingInterface::loadSettings() {
         _hazeEnabled = _hazeEnabledSetting.get();
         _bloomEnabled = _bloomEnabledSetting.get();
         _autoExposureEnabled = _autoExposureEnabledSetting.get();
+        _hdrOutputEnabled = _hdrOutputEnabledSetting.get();
         _ambientOcclusionEnabled = _ambientOcclusionEnabledSetting.get();
         _localLightingEnabled = _localLightingSetting.get();
         _proceduralMaterialsEnabled = _proceduralMaterialsEnabledSetting.get();
@@ -79,6 +82,7 @@ void RenderScriptingInterface::loadSettings() {
     forceHazeEnabled(_hazeEnabled);
     forceBloomEnabled(_bloomEnabled);
     forceAutoExposureEnabled(_autoExposureEnabled);
+    forceHDROutputEnabled(_hdrOutputEnabled);
     forceAmbientOcclusionEnabled(_ambientOcclusionEnabled);
     forceLocalLightingEnabled(_localLightingEnabled);
     forceProceduralMaterialsEnabled(_proceduralMaterialsEnabled);
@@ -248,6 +252,31 @@ void RenderScriptingInterface::forceAutoExposureEnabled(bool enabled) {
         Menu::getInstance()->setIsOptionChecked(MenuOption::AutoExposure, enabled);
 
         recursivelyUpdateLightingModel("", [enabled] (MakeLightingModelConfig *config) { config->setAutoExposure(enabled); });
+    });
+}
+
+bool RenderScriptingInterface::getHDROutputEnabled() const {
+    return _hdrOutputEnabled;
+}
+
+void RenderScriptingInterface::setHDROutputEnabled(bool enabled) {
+    if (_hdrOutputEnabled != enabled) {
+        forceHDROutputEnabled(enabled);
+        // The display plugin owns the swapchain. Only a change made while running is pushed to it: at startup
+        // the plugin reads the saved setting itself when it activates, and asking for it here would activate it early.
+        auto displayPlugin = qApp->getActiveDisplayPlugin();
+        if (displayPlugin) {
+            displayPlugin->setHDROutputEnabled(enabled);
+        }
+        emit settingsChanged();
+    }
+}
+
+void RenderScriptingInterface::forceHDROutputEnabled(bool enabled) {
+    _renderSettingLock.withWriteLock([&] {
+        _hdrOutputEnabled = (enabled);
+        _hdrOutputEnabledSetting.set(enabled);
+        Menu::getInstance()->setIsOptionChecked(MenuOption::HDROutput, enabled);
     });
 }
 

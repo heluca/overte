@@ -59,6 +59,7 @@
 #include "Logging.h"
 #include "RefreshRateController.h"
 #include <ThreadHelpers.h>
+#include <SettingHandle.h>
 
 using namespace shader::gpu::program;
 
@@ -329,6 +330,8 @@ bool VulkanDisplayPlugin::activate() {
         _vkWindow = vkWidget->_mainWindow;
         _vkWindow->setVisible(true);
         _vkWindow->createSurface();
+        // The same key RenderScriptingInterface saves; read here because the plugin may activate before or after it
+        _vkWindow->setHDRRequested(Setting::Handle<bool>("hdrOutputEnabled", false).get());
         _vkWindow->createSwapchain();
         vkWidget->moveToThread(presentThread.get());
         _vkWindow->moveToThread(presentThread.get());
@@ -758,6 +761,7 @@ void VulkanDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& 
         _vkWindow->resizeFramebuffer();
         _vkWindow->_needsResizing = false;
     }
+    updateHDRPeak();
     auto frameId = (uint64_t)presentCount();
     PROFILE_RANGE_EX(render, __FUNCTION__, 0xffffff00, frameId)
     uint64_t startPresent = usecTimestampNow();
@@ -1091,6 +1095,32 @@ bool VulkanDisplayPlugin::setDisplayTexture(const QString& name) {
     }
     _displayTexture = displayNetworkTexture->getGPUTexture();
     return !!_displayTexture;
+}
+
+void VulkanDisplayPlugin::setHDROutputEnabled(bool enabled) {
+    if (_vkWindow) {
+        _vkWindow->setHDRRequested(enabled);
+    }
+}
+
+void VulkanDisplayPlugin::updateHDRPeak() {
+    const bool hdrSwapchain = _vkWindow && _vkWindow->_swapchain.isHDR();
+    if (hdrSwapchain && --_headroomPollCountdown <= 0) {
+        // About once a second: the headroom follows the screen the window is on and its brightness setting
+        _headroomPollCountdown = 60;
+        auto headroom = _displayHeadroom;
+        _vkWindow->requestDisplayHeadroom([headroom](float value) { *headroom = value; });
+    }
+    // OVERTE_HDR_HEADROOM states the display's headroom where the platform cannot report it (Linux) or for testing
+    static const float forcedHeadroom = qEnvironmentVariable("OVERTE_HDR_HEADROOM").toFloat();
+    const float headroom = forcedHeadroom > 0.0f ? forcedHeadroom : _displayHeadroom->load();
+    // A screen without headroom (1.0) shows nothing above SDR white, so the tone mapper keeps its SDR curve there
+    const float peak = (hdrSwapchain && headroom > 1.01f) ? headroom : 0.0f;
+    if (peak != _hdrPeak) {
+        qCDebug(displayPlugins) << "HDR output peak" << peak << "( swapchain" << _vkWindow->_swapchain.describeFormat().c_str()
+                               << ", display headroom" << headroom << ")";
+        _hdrPeak = peak;
+    }
 }
 
 QImage VulkanDisplayPlugin::getScreenshot(float aspectRatio) {

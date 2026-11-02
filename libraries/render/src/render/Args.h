@@ -213,6 +213,10 @@ namespace render {
         /// mirrors and for secondary camera.
         std::shared_ptr<gpu::Framebuffer> _blitFramebuffer;
 
+        /// HDR output: the brightest value the display shows as a multiple of SDR white, when the final framebuffer
+        /// is float and the display plugin presents it with that headroom; 0 for SDR output (the tone curve ends at 1.0).
+        float _hdrPeak { 0.0f };
+
         /// Temporarily set to a proper pipeline when generating batch commands to render shapes.
         std::shared_ptr<render::ShapePipeline> _shapePipeline;
 

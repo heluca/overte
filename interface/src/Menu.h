@@ -234,6 +234,7 @@ namespace MenuOption {
     const QString Shadows = "Shadows";
     const QString AmbientOcclusion = "Ambient Occlusion";
     const QString AutoExposure = "Auto Exposure";
+    const QString HDROutput = "HDR Output";
     const QString LocalLights = "Local Lights";
     const QString NotificationSounds = "play_notification_sounds";
     const QString NotificationSoundsSnapshot = "play_notification_sounds_snapshot";

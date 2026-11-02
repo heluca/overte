@@ -6,6 +6,8 @@
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 //
 
+#include <functional>
+
 CAMetalLayer *layerForWindow(QWindow *window);
 
 // Sizes MoltenVK compares when deciding whether a swapchain still fits its CAMetalLayer:
@@ -18,3 +20,8 @@ struct MetalLayerMetrics {
     float drawableHeight { 0.0f };
 };
 MetalLayerMetrics metalLayerMetrics(QWindow *window);
+
+// Asks the main thread for the EDR headroom of the screen showing the window: the brightest value the screen can
+// show as a multiple of SDR white (NSScreen maximumExtendedDynamicRangeColorComponentValue), 1.0 for an SDR screen.
+// `deliver` runs on the main thread with the answer; callable from any thread.
+void requestDisplayHeadroom(QWindow *window, std::function<void(float)> deliver);

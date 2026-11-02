@@ -52,6 +52,8 @@ struct ToneMappingParams {
     int _toneCurve;
     int _autoEnabled;
     int _autoDebug;
+    // HDR output: the brightest value the display shows, as a multiple of SDR white; 0 when the output is SDR
+    float _hdrPeak;
 };
 
 const float GAMMA_22 = 2.2;
@@ -84,6 +86,23 @@ vec3 changeLuminance(vec3 colorIn, float luminanceOut) {
     return colorIn * (luminanceOut / luminanceIn);
 }
 
+// The ACES fit (Stephen Hill), per channel, applied in the ACES input space
+vec3 acesCurve(vec3 v) {
+    vec3 a = v * (v + 0.0245786) - 0.000090537;
+    vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
+    return a / b;
+}
+float acesCurve(float v) {
+    return acesCurve(vec3(v)).x;
+}
+float acesSlope(float v) {
+    float a = v * (v + 0.0245786) - 0.000090537;
+    float b = v * (0.983729 * v + 0.4329510) + 0.238081;
+    float da = 2.0 * v + 0.0245786;
+    float db = 2.0 * 0.983729 * v + 0.4329510;
+    return (da * b - a * db) / (b * b);
+}
+
 void main(void) {
 <@if HIFI_USE_MIRRORED@>
     vec4 fragColorRaw = texture(colorMap, vec2(1.0 - varTexCoord0.x, varTexCoord0.y));
@@ -101,6 +120,9 @@ void main(void) {
     }
     vec3 srcColor = fragColor * exp2(exposure);
 
+    // HDR output: the display shows linear values up to peak times SDR white
+    float peak = params._hdrPeak;
+
     int toneCurve = getToneCurve();
     vec3 tonedColor = srcColor;
     if (toneCurve == ToneCurveFilmic) {
@@ -117,28 +139,46 @@ void main(void) {
 
         tonedColor = acesInput * tonedColor;
 
-        vec3 a = tonedColor * (tonedColor + 0.0245786) - 0.000090537;
-        vec3 b = tonedColor * (0.983729 * tonedColor + 0.4329510) + 0.238081;
-        tonedColor = a / b;
-
-        tonedColor = acesOutput * tonedColor;
-        tonedColor = clamp(tonedColor, vec3(0.0), vec3(1.0));
+        if (peak > 0.0) {
+            // The SDR curve up to the knee, so the midtones look as they do in SDR, then a soft shoulder that starts
+            // with the curve's slope at the knee and rises to the display's peak instead of rolling off to white
+            const float KNEE = 0.5;
+            float kneeOut = acesCurve(KNEE);
+            float kneeSlope = acesSlope(KNEE);
+            vec3 below = acesCurve(min(tonedColor, vec3(KNEE)));
+            vec3 above = max(tonedColor - vec3(KNEE), vec3(0.0));
+            tonedColor = below + (peak - kneeOut) * (vec3(1.0) - exp(-kneeSlope * above / (peak - kneeOut)));
+            tonedColor = acesOutput * tonedColor;
+            tonedColor = clamp(tonedColor, vec3(0.0), vec3(peak));
+        } else {
+            tonedColor = acesCurve(tonedColor);
+            tonedColor = acesOutput * tonedColor;
+            tonedColor = clamp(tonedColor, vec3(0.0), vec3(1.0));
+        }
     } else if (toneCurve == ToneCurveReinhard) {
+        // In HDR the curve is stretched to end at the peak: Reinhard is linear through the midtones, so they hold
+        float range = (peak > 0.0) ? peak : 1.0;
         const float whitePoint = 2.0;
-        float luminanceOld = luminance(srcColor);
+        float luminanceOld = luminance(srcColor) / range;
         float numerator = luminanceOld * (1.0 + (luminanceOld / (whitePoint * whitePoint)));
         float luminanceNew = numerator / (1.0 + luminanceOld);
-        tonedColor = changeLuminance(srcColor, luminanceNew);
+        tonedColor = changeLuminance(srcColor, luminanceNew * range);
     } else if (toneCurve == ToneCurveGamma22) {
         // We use glEnable(GL_FRAMEBUFFER_SRGB), which automatically converts textures from RGB to SRGB
         // when writing from an RGB framebuffer to an SRGB framebuffer (note that it doesn't do anything
         // when writing from an SRGB framebuffer to an RGB framebuffer).
-        // Since the conversion happens automatically, we don't need to do anything in this shader
+        // Since the conversion happens automatically, we don't need to do anything in this shader.
+        // An HDR (float, linear) output has no such conversion and no clip, so the values are only held to the peak.
+        if (peak > 0.0) {
+            tonedColor = min(srcColor, vec3(peak));
+        }
     } else {
         // toneCurve == ToneCurveNone
         // For debugging purposes, we may want to see what the colors look like before the automatic OpenGL
-        // conversion mentioned above, so we undo it here
-        tonedColor = pow(srcColor, vec3(GAMMA_22));
+        // conversion mentioned above, so we undo it here (an HDR output is linear already)
+        if (peak <= 0.0) {
+            tonedColor = pow(srcColor, vec3(GAMMA_22));
+        }
     }
 
     if (params._autoDebug != 0 && gl_FragCoord.x < 64.0 && gl_FragCoord.y < 16.0) {

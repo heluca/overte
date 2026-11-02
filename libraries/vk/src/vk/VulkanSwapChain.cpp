@@ -88,28 +88,46 @@ void VulkanSwapChain::initSurface(VkSurfaceKHR windowSurface)
     VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_context->physicalDevice, surface, &formatCount, NULL));
     assert(formatCount > 0);
 
-    std::vector<VkSurfaceFormatKHR> surfaceFormats(formatCount);
-    VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_context->physicalDevice, surface, &formatCount, surfaceFormats.data()));
+    std::vector<VkSurfaceFormatKHR> surfaceFormats_(formatCount);
+    VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_context->physicalDevice, surface, &formatCount, surfaceFormats_.data()));
 
-    // We want to get a format that best suits our needs, so we try to get one from a set of preferred formats
-    // Initialize the format to the first one returned by the implementation in case we can't find one of the preffered formats
+    surfaceFormats.swap(surfaceFormats_);
+    selectFormat(false);
+}
+
+bool VulkanSwapChain::selectFormat(bool hdr) {
+    assert(!surfaceFormats.empty());
+    // Initialize the format to the first one returned by the implementation in case we can't find a preferred one
     VkSurfaceFormatKHR selectedFormat = surfaceFormats[0];
-    std::vector<VkFormat> preferredImageFormats = { 
-        VK_FORMAT_B8G8R8A8_SRGB
-        /*VK_FORMAT_B8G8R8A8_UNORM,
-        VK_FORMAT_R8G8B8A8_UNORM, 
-        VK_FORMAT_A8B8G8R8_UNORM_PACK32 */
-    };
-
-    for (auto& availableFormat : surfaceFormats) {
-        if (std::find(preferredImageFormats.begin(), preferredImageFormats.end(), availableFormat.format) != preferredImageFormats.end()) {
-            selectedFormat = availableFormat;
-            break;
+    bool selectedHDR = false;
+    if (hdr) {
+        for (auto& availableFormat : surfaceFormats) {
+            if (availableFormat.format == VK_FORMAT_R16G16B16A16_SFLOAT && availableFormat.colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT) {
+                selectedFormat = availableFormat;
+                selectedHDR = true;
+                break;
+            }
         }
     }
-
+    if (!selectedHDR) {
+        for (auto& availableFormat : surfaceFormats) {
+            if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                selectedFormat = availableFormat;
+                break;
+            }
+        }
+    }
     colorFormat = selectedFormat.format;
     colorSpace = selectedFormat.colorSpace;
+    return selectedHDR;
+}
+
+std::string VulkanSwapChain::describeFormat() const {
+    std::string format = colorFormat == VK_FORMAT_B8G8R8A8_SRGB ? "B8G8R8A8_SRGB" :
+                         colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? "R16G16B16A16_SFLOAT" : std::to_string((int)colorFormat);
+    std::string space = colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ? "sRGB" :
+                        colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT ? "extended linear sRGB" : std::to_string((int)colorSpace);
+    return format + "/" + space;
 }
 
 void VulkanSwapChain::setContext(vks::Context *context)
@@ -117,8 +135,9 @@ void VulkanSwapChain::setContext(vks::Context *context)
     _context = context;
 }
 
-void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool fullscreen)
+void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool fullscreen, bool hdr)
 {
+    selectFormat(hdr);
     assert(_context);
     assert(_context->physicalDevice);
     assert(_context->device);

@@ -92,6 +92,9 @@ public:
     virtual const QString getName() const override { return "Vulkan window"; }
     virtual void pluginUpdate() override {};
 
+    float getHDRPeak() const override { return _hdrPeak; }
+    void setHDROutputEnabled(bool enabled) override;
+
 protected:
     friend class VulkanPresentThread;
 
@@ -211,6 +214,14 @@ protected:
     //VKWidget *_vkWidget{ 0 };
     VKWindow *_vkWindow{ 0 };
     int _renderedFrameCount{ 0 };
+
+    // HDR output: the swapchain is float/extended sRGB when the setting asks for it; the tone mapper gets a peak
+    // only while the screen showing the window has EDR headroom, so an SDR screen keeps the SDR look.
+    void updateHDRPeak();
+    // Shared with the main-thread query that answers it, which may land after this plugin is gone
+    std::shared_ptr<std::atomic<float>> _displayHeadroom{ std::make_shared<std::atomic<float>>(1.0f) };
+    std::atomic<float> _hdrPeak{ 0.0f };
+    int _headroomPollCountdown{ 0 };
 };
 
 #endif

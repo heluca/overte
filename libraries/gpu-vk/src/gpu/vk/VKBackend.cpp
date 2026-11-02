@@ -10,6 +10,8 @@
 //
 #include "VKBackend.h"
 
+#include <glm/gtc/packing.hpp>
+
 #include <mutex>
 #include <queue>
 #include <list>
@@ -2734,6 +2736,7 @@ bool VKBackend::readbackFramebuffer(VKFramebuffer* vkFramebuffer, const Vec4i& r
     }
 
     bool sourceIsBGRA = false;
+    bool sourceIsHalf = false;
     switch (colorAttachment->format) {
         case VK_FORMAT_R8G8B8A8_UNORM:
         case VK_FORMAT_R8G8B8A8_SRGB:
@@ -2743,6 +2746,10 @@ bool VKBackend::readbackFramebuffer(VKFramebuffer* vkFramebuffer, const Vec4i& r
         case VK_FORMAT_B8G8R8A8_SRGB:
             sourceIsBGRA = true;
             break;
+        case VK_FORMAT_R16G16B16A16_SFLOAT:
+            // The HDR output framebuffer: linear half floats, brought to 8-bit sRGB below (highlights above white clip)
+            sourceIsHalf = true;
+            break;
         default:
             qCWarning(gpu_vk_logging) << "VKBackend::readbackFramebuffer : unsupported color attachment format" << colorAttachment->format;
             return false;
@@ -2750,7 +2757,7 @@ bool VKBackend::readbackFramebuffer(VKFramebuffer* vkFramebuffer, const Vec4i& r
 
     const uint32_t width = (uint32_t)region.z;
     const uint32_t height = (uint32_t)region.w;
-    const size_t rowBytes = (size_t)width * 4;
+    const size_t rowBytes = (size_t)width * (sourceIsHalf ? 8 : 4);
     const VkDeviceSize bufferSize = (VkDeviceSize)rowBytes * height;
     auto device = _context.device;
 
@@ -2811,7 +2818,17 @@ bool VKBackend::readbackFramebuffer(VKFramebuffer* vkFramebuffer, const Vec4i& r
         const uint8_t* src = mapped + (size_t)y * rowBytes;
         // Vulkan images are top-down; store bottom-up like glReadPixels.
         uint8_t* dst = destImage.scanLine((int)(height - 1 - y));
-        if (sourceIsBGRA) {
+        if (sourceIsHalf) {
+            const uint16_t* halves = reinterpret_cast<const uint16_t*>(src);
+            for (uint32_t x = 0; x < width; ++x) {
+                for (uint32_t c = 0; c < 3; ++c) {
+                    float linear = glm::clamp(glm::unpackHalf1x16(halves[4 * x + c]), 0.0f, 1.0f);
+                    float srgb = linear <= 0.0031308f ? linear * 12.92f : 1.055f * powf(linear, 1.0f / 2.4f) - 0.055f;
+                    dst[4 * x + (2 - c)] = (uint8_t)(srgb * 255.0f + 0.5f);
+                }
+                dst[4 * x + 3] = (uint8_t)(glm::clamp(glm::unpackHalf1x16(halves[4 * x + 3]), 0.0f, 1.0f) * 255.0f + 0.5f);
+            }
+        } else if (sourceIsBGRA) {
             // QImage::Format_ARGB32 is stored as B, G, R, A on little-endian hosts.
             memcpy(dst, src, rowBytes);
         } else {
