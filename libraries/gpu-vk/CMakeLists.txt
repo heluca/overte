@@ -13,3 +13,7 @@ link_hifi_libraries(shared shaders vk gl gpu render-utils)
 GroupSources("src")
 
 target_vulkan()
+
+# Procedural shaders are compiled to SPIR-V at runtime, as the build does with glslangValidator -V100
+find_package(glslang QUIET REQUIRED)
+target_link_libraries(${TARGET_NAME} glslang::glslang glslang::SPIRV glslang::glslang-default-resource-limits)

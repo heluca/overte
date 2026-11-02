@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstring>
 
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -17,6 +19,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QDateTime>
+#include <QtCore/QRegularExpression>
 
 #include <gpu/Batch.h>
 #include <SharedUtil.h>
@@ -63,6 +66,178 @@ static std::array<bool, MAX_PROCEDURAL_TEXTURE_CHANNELS> boundChannels(const QJs
 // Shader replace strings
 static const std::string PROCEDURAL_BLOCK = "//PROCEDURAL_BLOCK";
 static const std::string PROCEDURAL_VERSION = "//PROCEDURAL_VERSION";
+
+namespace {
+
+bool isVulkanBackend() {
+    return hifi::properties::getGraphicsAPI() == hifi::properties::GraphicsAPI::Vulkan;
+}
+
+const char* CUSTOM_UNIFORM_BLOCK = "proceduralCustomBuffer";
+
+// std140 base alignment and size of a block member of this type; false for a type the block cannot hold
+bool std140Member(ProceduralCustomUniform& uniform, size_t& alignment, size_t& size) {
+    struct TypeInfo { int baseType; int components; int columns; };
+    static const std::unordered_map<std::string, TypeInfo> TYPES {
+        { "float", { 0, 1, 0 } }, { "int", { 1, 1, 0 } },   { "uint", { 2, 1, 0 } },  { "bool", { 1, 1, 0 } },
+        { "vec2", { 0, 2, 0 } },  { "ivec2", { 1, 2, 0 } }, { "uvec2", { 2, 2, 0 } }, { "bvec2", { 1, 2, 0 } },
+        { "vec3", { 0, 3, 0 } },  { "ivec3", { 1, 3, 0 } }, { "uvec3", { 2, 3, 0 } }, { "bvec3", { 1, 3, 0 } },
+        { "vec4", { 0, 4, 0 } },  { "ivec4", { 1, 4, 0 } }, { "uvec4", { 2, 4, 0 } }, { "bvec4", { 1, 4, 0 } },
+        { "mat2", { 0, 2, 2 } },  { "mat3", { 0, 3, 3 } },  { "mat4", { 0, 4, 4 } },
+    };
+    auto itr = TYPES.find(uniform.type);
+    if (itr == TYPES.end()) {
+        return false;
+    }
+    uniform.baseType = itr->second.baseType;
+    uniform.components = itr->second.components;
+    uniform.columns = itr->second.columns;
+    if (uniform.columns > 0) {
+        // Column-major, each column padded to a vec4
+        alignment = 16;
+        size = 16 * uniform.columns;
+    } else {
+        static const size_t VECTOR_ALIGNMENT[] = { 0, 4, 8, 16, 16 };
+        alignment = VECTOR_ALIGNMENT[uniform.components];
+        size = 4 * uniform.components;
+    }
+    if (uniform.arraySize > 0) {
+        // Every array element starts on a vec4
+        alignment = 16;
+        size = (size + 15) & ~size_t(15);
+    }
+    return true;
+}
+
+// Moves the `uniform TYPE NAME;` declarations out of a shader into `uniforms` (first declaration of a name wins),
+// leaving a comment in their place
+void extractLooseUniforms(QString& shaderText, std::vector<ProceduralCustomUniform>& uniforms) {
+    static const QRegularExpression DECLARATION("^[ \\t]*uniform[ \\t]+(\\w+)[ \\t]+(\\w+)[ \\t]*(?:\\[[ \\t]*(\\d+)[ \\t]*\\])?[ \\t]*;",
+                                                QRegularExpression::MultilineOption);
+    struct Found { int start; int length; };
+    std::vector<Found> found;
+    auto matches = DECLARATION.globalMatch(shaderText);
+    while (matches.hasNext()) {
+        auto match = matches.next();
+        ProceduralCustomUniform uniform;
+        uniform.type = match.captured(1).toStdString();
+        uniform.name = match.captured(2).toStdString();
+        uniform.arraySize = match.captured(3).isEmpty() ? 0 : match.captured(3).toInt();
+        size_t alignment, size;
+        if (!std140Member(uniform, alignment, size)) {
+            // Leave it: glslang reports the declaration, which is clearer than a silent drop
+            continue;
+        }
+        bool known = std::any_of(uniforms.begin(), uniforms.end(), [&](const ProceduralCustomUniform& u) { return u.name == uniform.name; });
+        if (!known) {
+            uniforms.push_back(uniform);
+        }
+        found.push_back({ match.capturedStart(0), match.capturedLength(0) });
+    }
+    for (auto itr = found.rbegin(); itr != found.rend(); ++itr) {
+        shaderText.replace(itr->start, itr->length, "// uniform moved to " + QString(CUSTOM_UNIFORM_BLOCK));
+    }
+}
+
+// Assigns std140 offsets, returning the block's size
+size_t layoutStd140(std::vector<ProceduralCustomUniform>& uniforms) {
+    size_t offset = 0;
+    for (auto& uniform : uniforms) {
+        size_t alignment, size;
+        std140Member(uniform, alignment, size);
+        offset = (offset + alignment - 1) & ~(alignment - 1);
+        uniform.offset = offset;
+        uniform.stride = size;
+        offset += size * std::max(1, uniform.arraySize);
+    }
+    return (offset + 15) & ~size_t(15);
+}
+
+// The block declaration that replaces the loose uniforms, for the dialect header's UNIFORM_BUFFER macro.
+// It starts with a newline: the scribe source keeps the `//` in front of PROCEDURAL_BLOCK_BEGIN.
+QString customUniformBlock(const std::vector<ProceduralCustomUniform>& uniforms) {
+    QString block = "\nUNIFORM_BUFFER(" + QString::number(procedural::slot::buffer::Custom) + ", " + CUSTOM_UNIFORM_BLOCK + ") {\n";
+    for (const auto& uniform : uniforms) {
+        block += "    " + QString::fromStdString(uniform.type) + " " + QString::fromStdString(uniform.name);
+        if (uniform.arraySize > 0) {
+            block += "[" + QString::number(uniform.arraySize) + "]";
+        }
+        block += ";\n";
+    }
+    block += "};\n";
+    return block;
+}
+
+void writeScalar(uint8_t* destination, int baseType, double value) {
+    switch (baseType) {
+        case 1: {
+            int32_t v = (int32_t)std::lround(value);
+            memcpy(destination, &v, sizeof(v));
+            break;
+        }
+        case 2: {
+            uint32_t v = (uint32_t)std::lround(std::max(0.0, value));
+            memcpy(destination, &v, sizeof(v));
+            break;
+        }
+        default: {
+            float v = (float)value;
+            memcpy(destination, &v, sizeof(v));
+            break;
+        }
+    }
+}
+
+// Writes a userData value into the block, with the shapes setupUniforms accepts for glUniform: a number, an array
+// of numbers (vector or matrix, column-major), or an array of those for an array uniform
+void writeCustomUniform(std::vector<uint8_t>& block, const ProceduralCustomUniform& uniform, const QJsonValue& value) {
+    std::vector<std::vector<double>> elements;
+    if (value.isDouble()) {
+        elements.push_back({ value.toDouble() });
+    } else if (value.isArray()) {
+        const QJsonArray values = value.toArray();
+        if (!values.isEmpty() && values[0].isArray()) {
+            for (const auto& inner : values) {
+                std::vector<double> element;
+                for (const auto& v : inner.toArray()) {
+                    element.push_back(v.toDouble());
+                }
+                elements.push_back(element);
+            }
+        } else if (uniform.arraySize > 0 && uniform.components == 1 && uniform.columns == 0) {
+            for (const auto& v : values) {
+                elements.push_back({ v.toDouble() });
+            }
+        } else {
+            std::vector<double> element;
+            for (const auto& v : values) {
+                element.push_back(v.toDouble());
+            }
+            elements.push_back(element);
+        }
+    }
+
+    const size_t elementCount = std::min(elements.size(), (size_t)std::max(1, uniform.arraySize));
+    for (size_t i = 0; i < elementCount; i++) {
+        const auto& values = elements[i];
+        const size_t base = uniform.offset + i * uniform.stride;
+        const int columns = std::max(1, uniform.columns);
+        for (int column = 0; column < columns; column++) {
+            for (int row = 0; row < uniform.components; row++) {
+                const size_t index = column * uniform.components + row;
+                if (index >= values.size()) {
+                    break;
+                }
+                const size_t at = base + (uniform.columns > 0 ? column * 16 : 0) + row * 4;
+                if (at + 4 <= block.size()) {
+                    writeScalar(block.data() + at, uniform.baseType, values[index]);
+                }
+            }
+        }
+    }
+}
+
+}  // namespace
 
 bool operator==(const ProceduralData& a, const ProceduralData& b) {
     return ((a.version == b.version) &&
@@ -286,9 +461,8 @@ void Procedural::setProceduralData(const ProceduralData& proceduralData) {
 
 bool Procedural::isReady() const {
     auto backendApi = hifi::properties::getGraphicsAPI();
-    // The Vulkan backend has only the SPIR-V compiled at build time and cannot take a shader from
-    // userData yet, so a procedural skybox or material keeps to its plain rendering there.
-    if (backendApi == hifi::properties::GraphicsAPI::GLES32 || backendApi == hifi::properties::GraphicsAPI::Vulkan) {
+    // GLES has no runtime shader path. The Vulkan backend compiles the shader with glslang when its pipeline is built.
+    if (backendApi == hifi::properties::GraphicsAPI::GLES32) {
         return false;
     }
 
@@ -378,28 +552,59 @@ void Procedural::prepare(gpu::Batch& batch,
 
         // Build the fragment and vertex shaders
         auto versionDefine = "#define PROCEDURAL_V" + std::to_string(_data.version);
+        QString fragmentShaderText = _fragmentShaderSource;
+        QString vertexShaderText = _vertexShaderSource;
+        _customUniforms.clear();
+        _customUniformSize = 0;
+        if (isVulkanBackend()) {
+            // Vulkan GLSL has no loose uniforms: the shader's `uniform` declarations become one block that both
+            // stages share, filled from userData in setupUniforms
+            extractLooseUniforms(fragmentShaderText, _customUniforms);
+            extractLooseUniforms(vertexShaderText, _customUniforms);
+            _customUniformSize = layoutStd140(_customUniforms);
+            if (!_customUniforms.empty()) {
+                const QString block = customUniformBlock(_customUniforms);
+                if (!fragmentShaderText.isEmpty()) {
+                    fragmentShaderText = block + fragmentShaderText;
+                }
+                if (!vertexShaderText.isEmpty()) {
+                    vertexShaderText = block + vertexShaderText;
+                }
+            }
+        }
         fragmentSource.replacements = _fragmentReplacements;
         fragmentSource.replacements[PROCEDURAL_VERSION] = versionDefine;
         if (!_fragmentShaderSource.isEmpty()) {
-            fragmentSource.replacements[PROCEDURAL_BLOCK] = _fragmentShaderSource.toStdString();
+            fragmentSource.replacements[PROCEDURAL_BLOCK] = fragmentShaderText.toStdString();
         }
         vertexSource.replacements = _vertexReplacements;
         vertexSource.replacements[PROCEDURAL_VERSION] = versionDefine;
         if (!_vertexShaderSource.isEmpty()) {
-            vertexSource.replacements[PROCEDURAL_BLOCK] = _vertexShaderSource.toStdString();
+            vertexSource.replacements[PROCEDURAL_BLOCK] = vertexShaderText.toStdString();
         }
 
         // Every dialect/variant reflection of both shaders, for the bindings added at runtime
-        std::vector<shader::Reflection*> allFragmentReflections;
-        for (auto dialectIt = fragmentSource.dialectSources.begin(); dialectIt != fragmentSource.dialectSources.end(); ++dialectIt) {
-            for (auto variantIt = (*dialectIt).second.variantSources.begin(); variantIt != (*dialectIt).second.variantSources.end(); ++variantIt) {
-                allFragmentReflections.push_back(&(*variantIt).second.reflection);
+        auto collectReflections = [](gpu::Shader::Source& source) {
+            std::vector<shader::Reflection*> reflections;
+            for (auto& dialect : source.dialectSources) {
+                for (auto& variant : dialect.second.variantSources) {
+                    reflections.push_back(&variant.second.reflection);
+                }
             }
-        }
-        std::vector<shader::Reflection*> allVertexReflections;
-        for (auto dialectIt = vertexSource.dialectSources.begin(); dialectIt != vertexSource.dialectSources.end(); ++dialectIt) {
-            for (auto variantIt = (*dialectIt).second.variantSources.begin(); variantIt != (*dialectIt).second.variantSources.end(); ++variantIt) {
-                allVertexReflections.push_back(&(*variantIt).second.reflection);
+            return reflections;
+        };
+        std::vector<shader::Reflection*> allFragmentReflections = collectReflections(fragmentSource);
+        std::vector<shader::Reflection*> allVertexReflections = collectReflections(vertexSource);
+
+        // The Vulkan pipeline layout comes from the reflection: declare the block there, or take it back out
+        for (auto reflections : { &allFragmentReflections, &allVertexReflections }) {
+            for (auto reflection : *reflections) {
+                if (_customUniforms.empty()) {
+                    reflection->uniformBuffers.erase(CUSTOM_UNIFORM_BLOCK);
+                } else {
+                    reflection->uniformBuffers[CUSTOM_UNIFORM_BLOCK] = procedural::slot::buffer::Custom;
+                }
+                reflection->updateValid();
             }
         }
 
@@ -549,6 +754,23 @@ void Procedural::prepare(gpu::Batch& batch,
 
 void Procedural::setupUniforms() {
     _uniforms.clear();
+    if (isVulkanBackend()) {
+        // The shader's uniforms are one block on Vulkan (see prepare): fill it from userData and bind it
+        if (!_customUniforms.empty()) {
+            std::vector<uint8_t> block(_customUniformSize, 0);
+            for (const auto& uniform : _customUniforms) {
+                writeCustomUniform(block, uniform, _data.uniforms.value(QString::fromStdString(uniform.name)));
+            }
+            if (!_customUniformBuffer) {
+                _customUniformBuffer = std::make_shared<gpu::Buffer>(gpu::Buffer::UniformBuffer, block.size(), block.data());
+            } else {
+                _customUniformBuffer->setData(block.size(), block.data());
+            }
+            auto buffer = _customUniformBuffer;
+            const auto size = block.size();
+            _uniforms.push_back([buffer, size](gpu::Batch& batch) { batch.setUniformBuffer(procedural::slot::buffer::Custom, buffer, 0, size); });
+        }
+    } else {
     // Set any userdata specified uniforms
     for (const auto& key : _data.uniforms.keys()) {
         const std::string uniformName = key.toLocal8Bit().data();
@@ -679,6 +901,7 @@ void Procedural::setupUniforms() {
                 }
             }
         }
+    }
     }
 
     _uniforms.push_back([this](gpu::Batch& batch) {
