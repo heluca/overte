@@ -2009,6 +2009,7 @@ const char JSON_KEY_POOL[] = "pool";
 const char JSON_KEY_PENDING_CREDITS[] = "pending_credits";
 const char JSON_KEY_UPTIME[] = "uptime";
 const char JSON_KEY_USERNAME[] = "username";
+const char JSON_KEY_VERIFIED_USERNAME[] = "verified_username";
 const char JSON_KEY_VERSION[] = "version";
 QJsonObject DomainServer::jsonObjectForNode(const SharedNodePointer& node) {
     QJsonObject nodeJson;
@@ -2036,6 +2037,9 @@ QJsonObject DomainServer::jsonObjectForNode(const SharedNodePointer& node) {
 
     // add the node username, if it exists
     nodeJson[JSON_KEY_USERNAME] = nodeData->getUsername();
+    // "username" is whatever the client claimed; this one is set only once the
+    // directory signature verifies, so it is the one to trust (empty otherwise)
+    nodeJson[JSON_KEY_VERIFIED_USERNAME] = node->getPermissions().getVerifiedUserName();
     nodeJson[JSON_KEY_VERSION] = nodeData->getNodeVersion();
 
     SharedAssignmentPointer matchingAssignment = _allAssignments.value(nodeData->getAssignmentUUID());
