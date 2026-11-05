@@ -329,6 +329,13 @@ void Application::clearDomainOctreeDetails(bool clearAll) {
     ShaderCache::instance().clearUnusedResources();
     DependencyManager::get<TextureCache>()->clearUnusedResources();
     DependencyManager::get<recording::ClipCache>()->clearUnusedResources();
+
+    // The clear can run after the next entity server was already added (a queued kill on reconnect),
+    // and nodeAdded's startSafeLanding was undone by the reset above; without a landing no octree query
+    // goes out and physics never starts. Start one for that server now.
+    if (DependencyManager::get<NodeList>()->soloNodeOfType(NodeType::EntityServer)) {
+        _octreeProcessor->startSafeLanding();
+    }
 }
 
 void Application::resettingDomain() {
