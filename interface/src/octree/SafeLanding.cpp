@@ -146,14 +146,21 @@ void SafeLanding::updateTracking() {
                      ((distance(startIter, endIter) == sequenceSize - 1) || !missingSequenceNumbers)));
             }
             if (shouldStop) {
-                stopTracking();
+                stopTracking(true);
             }
         }
     }
 }
 
-void SafeLanding::stopTracking() {
+void SafeLanding::stopTracking(bool completed) {
     Locker lock(_lock);
+    if (!completed) {
+        // A landing stopped from outside (domain lost, entity server gone) is not a finished one. Keeping
+        // the sequence would make trackingIsComplete() true and let physics start on an empty world.
+        _sequenceStart = SafeLanding::INVALID_SEQUENCE;
+        _sequenceEnd = SafeLanding::INVALID_SEQUENCE;
+        _sequenceNumbers.clear();
+    }
     if (_trackingEntities) {
         _trackingEntities = false;
         if (_entityTreeRenderer) {

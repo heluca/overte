@@ -34,7 +34,9 @@ public:
 
     void startTracking(QSharedPointer<EntityTreeRenderer> entityTreeRenderer);
     void updateTracking();
-    void stopTracking();
+    // Stops tracking. Unless the landing completed, this cancels it: the sequence seen so far is
+    // forgotten, so trackingIsComplete() stays false until a new landing completes.
+    void stopTracking(bool completed = false);
     void reset();
     bool isTracking() const { return _trackingEntities; }
     bool trackingIsComplete() const;
