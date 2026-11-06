@@ -1888,6 +1888,11 @@ public:
      */
     Q_INVOKABLE bool isSeated() { return _characterController.getSeated(); }
 
+    // Where the avatar's feet stand for its saved address: its feet, or while seated the spot it stood on
+    // before sitting (a seated avatar's feet position is its pinned hips less its standing leg length,
+    // often below the floor, and arriving there leaves it stuck in the ground).
+    glm::vec3 getAddressFeetPosition() { return isSeated() ? _feetPositionBeforeSit : getWorldFeetPosition(); }
+
     int getOverrideJointCount() const;
     bool getFlowActive() const;
     bool getNetworkGraphActive() const;
@@ -2926,6 +2931,7 @@ private:
 
     // used to prevent character from jumping after endSit is called.
     bool _endSitKeyPressComplete { false };
+    glm::vec3 _feetPositionBeforeSit;
 
     glm::vec3 _cameraEyesOffset;
     float _landingAfterJumpTime { 0.0f };

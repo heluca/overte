@@ -1503,7 +1503,7 @@ void Application::setupSignalsAndOperators() {
         addressManager->setPositionGetter([] {
             auto avatarManager = DependencyManager::get<AvatarManager>();
             auto myAvatar = avatarManager ? avatarManager->getMyAvatar() : nullptr;
-            return myAvatar ? myAvatar->getWorldFeetPosition() : Vectors::ZERO;
+            return myAvatar ? myAvatar->getAddressFeetPosition() : Vectors::ZERO;
         });
         addressManager->setOrientationGetter([] {
             auto avatarManager = DependencyManager::get<AvatarManager>();
