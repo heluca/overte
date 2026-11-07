@@ -667,11 +667,14 @@ public:
     void resetTextureOperator(const std::function<gpu::TexturePointer()>& textureOperator);
 
     bool isDefined() const;
-    std::function<gpu::TexturePointer()> getTextureOperator() const { return _gpuTextureOperator; }
+    std::function<gpu::TexturePointer()> getTextureOperator() const;
 
     void setSampler(const Sampler& sampler);
 
 protected:
+    // The texture is replaced on the main thread (NetworkTexture::setImage) while the render thread copies it, so
+    // _gpuTexture and _gpuTextureOperator are only read or written under _mutex.
+    mutable std::mutex _mutex;
     gpu::TexturePointer _gpuTexture;
     std::function<gpu::TexturePointer()> _gpuTextureOperator { nullptr };
     mutable std::atomic<bool> _locked { false };

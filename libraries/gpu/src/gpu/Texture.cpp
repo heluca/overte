@@ -901,51 +901,63 @@ void SphericalHarmonics::evalFromTexture(const Texture& texture, gpu::BackendTar
 
 // TextureSource
 const gpu::TexturePointer TextureSource::getGPUTexture() const {
-    if (_gpuTextureOperator && !_locked) {
+    gpu::TexturePointer gpuTexture;
+    std::function<gpu::TexturePointer()> textureOperator;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        gpuTexture = _gpuTexture;
+        textureOperator = _gpuTextureOperator;
+    }
+    if (textureOperator && !_locked) {
         _locked = true;
-        auto gpuTexture = _gpuTextureOperator();
+        gpuTexture = textureOperator();
         _locked = false;
         return gpuTexture;
     }
-    if (_gpuTexture) {
-        Q_ASSERT(!_gpuTexture->wasDeleted);
+    if (gpuTexture) {
+        Q_ASSERT(!gpuTexture->wasDeleted);
     }
-    return _gpuTexture;
+    return gpuTexture;
+}
+
+std::function<gpu::TexturePointer()> TextureSource::getTextureOperator() const {
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _gpuTextureOperator;
 }
 
 void TextureSource::resetTexture(const gpu::TexturePointer& texture) {
     if (texture) {
         Q_ASSERT(!texture->wasDeleted);
     }
-    _gpuTexture = texture;
-    _gpuTextureOperator = nullptr;
+    // The previous texture and operator are released after unlocking, since destroying a texture can be slow.
+    gpu::TexturePointer previousTexture = texture;
+    std::function<gpu::TexturePointer()> previousOperator;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _gpuTexture.swap(previousTexture);
+        _gpuTextureOperator.swap(previousOperator);
+    }
 }
 
 void TextureSource::resetTextureOperator(const std::function<gpu::TexturePointer()>& textureOperator) {
-    _gpuTexture = nullptr;
-    _gpuTextureOperator = textureOperator;
+    gpu::TexturePointer previousTexture;
+    std::function<gpu::TexturePointer()> previousOperator = textureOperator;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _gpuTexture.swap(previousTexture);
+        _gpuTextureOperator.swap(previousOperator);
+    }
 }
 
 bool TextureSource::isDefined() const {
-    if (_gpuTextureOperator && !_locked) {
-        _locked = true;
-        auto gpuTexture = _gpuTextureOperator();
-        _locked = false;
-        return gpuTexture && gpuTexture->isDefined();
-    }
-    return _gpuTexture && _gpuTexture->isDefined();
+    auto gpuTexture = getGPUTexture();
+    return gpuTexture && gpuTexture->isDefined();
 }
 
 void TextureSource::setSampler(const Sampler& sampler) {
-    if (_gpuTextureOperator && !_locked) {
-        _locked = true;
-        auto gpuTexture = _gpuTextureOperator();
-        _locked = false;
-        if (gpuTexture) {
-            gpuTexture->setSampler(sampler);
-        }
-    } else if (_gpuTexture) {
-        _gpuTexture->setSampler(sampler);
+    auto gpuTexture = getGPUTexture();
+    if (gpuTexture) {
+        gpuTexture->setSampler(sampler);
     }
 }
 
