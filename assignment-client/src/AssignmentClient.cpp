@@ -187,10 +187,14 @@ void AssignmentClient::sendStatusPacketToACM() {
         assignmentType = _currentAssignment->getType();
     }
 
-    auto statusPacket = NLPacket::create(PacketType::AssignmentClientStatus, sizeof(assignmentType) + NUM_BYTES_RFC4122_UUID);
+    qint64 pid = QCoreApplication::applicationPid();
+
+    auto statusPacket = NLPacket::create(PacketType::AssignmentClientStatus,
+                                         NUM_BYTES_RFC4122_UUID + sizeof(assignmentType) + sizeof(pid));
 
     statusPacket->write(_childAssignmentUUID.toRfc4122());
     statusPacket->writePrimitive(assignmentType);
+    statusPacket->writePrimitive(pid);
 
     nodeList->sendPacket(std::move(statusPacket), _assignmentClientMonitorSocket);
 }

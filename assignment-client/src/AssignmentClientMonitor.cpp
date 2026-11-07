@@ -32,6 +32,7 @@
 
 const QString ASSIGNMENT_CLIENT_MONITOR_TARGET_NAME = "assignment-client-monitor";
 const int WAIT_FOR_CHILD_MSECS = 1000;
+const int CHILD_SILENT_KILL_GRACE_MSECS = 20000;
 
 #ifdef Q_OS_WIN
 void* PROCESS_GROUP = createProcessGroup();
@@ -77,6 +78,7 @@ AssignmentClientMonitor::AssignmentClientMonitor(const unsigned int numAssignmen
     auto& packetReceiver = DependencyManager::get<LimitedNodeList>()->getPacketReceiver();
     packetReceiver.registerListener(PacketType::AssignmentClientStatus,
         PacketReceiver::makeUnsourcedListenerReference<AssignmentClientMonitor>(this, &AssignmentClientMonitor::handleChildStatusPacket));
+    connect(nodeList.data(), &LimitedNodeList::nodeKilled, this, &AssignmentClientMonitor::childNodeKilled);
 
     adjustOSResources(std::max(_numAssignmentClientForks, _maxAssignmentClientForks));
     // use QProcess to fork off a process for each of the child assignment clients
@@ -379,9 +381,44 @@ void AssignmentClientMonitor::handleChildStatusPacket(QSharedPointer<ReceivedMes
 
         childData->setChildType(Assignment::Type(assignmentType));
 
+        qint64 pid;
+        message->readPrimitive(&pid);
+        childData->setPid(pid);
+
         // note when this child talked
         matchingNode->setLastHeardMicrostamp(usecTimestampNow());
     }
+}
+
+void AssignmentClientMonitor::childNodeKilled(SharedNodePointer node) {
+    qint64 pid = static_cast<AssignmentClientChildData*>(node->getLinkedData())->getPid();
+
+    auto it = _childProcesses.constFind(pid);
+    if (it == _childProcesses.cend() || it->process->state() == QProcess::NotRunning) {
+        return;
+    }
+
+    qWarning() << "Child process" << pid << "went silent; killing it in" << CHILD_SILENT_KILL_GRACE_MSECS
+               << "ms unless it reports again";
+
+    QPointer<QProcess> process = it->process;
+    QTimer::singleShot(CHILD_SILENT_KILL_GRACE_MSECS, this, [process, pid] {
+        if (!process || process->state() == QProcess::NotRunning) {
+            return;
+        }
+
+        auto reportedAgain = DependencyManager::get<LimitedNodeList>()->nodeMatchingPredicate([pid](const SharedNodePointer& node) {
+            return static_cast<AssignmentClientChildData*>(node->getLinkedData())->getPid() == pid;
+        });
+        if (reportedAgain) {
+            return;
+        }
+
+        qWarning() << "Child process" << pid << "still silent after" << CHILD_SILENT_KILL_GRACE_MSECS << "ms, killing it";
+        // A wedged child ignores SIGTERM (its handler posts quit to the blocked main thread), so SIGKILL is
+        // the only way to reclaim it (heluca/overte#79).
+        process->kill();
+    });
 }
 
 bool AssignmentClientMonitor::handleHTTPRequest(HTTPConnection* connection, const QUrl& url, bool skipSubHandler) {

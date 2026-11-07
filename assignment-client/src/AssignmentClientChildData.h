@@ -22,8 +22,12 @@ public:
     Assignment::Type getChildType() { return _childType; }
     void setChildType(Assignment::Type childType) { _childType = childType; }
 
+    qint64 getPid() const { return _pid; }
+    void setPid(qint64 pid) { _pid = pid; }
+
 private:
     Assignment::Type _childType;
+    qint64 _pid { 0 };
 };
 
 #endif // hifi_AssignmentClientChildData_h
