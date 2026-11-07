@@ -283,35 +283,47 @@ qint64 Socket::writeDatagram(const QByteArray& datagram, const SockAddr& sockAdd
 }
 
 Connection* Socket::findOrCreateConnection(const SockAddr& sockAddr, bool filterCreate) {
+    {
+        Lock connectionsLock(_connectionsHashMutex);
+        auto it = _connectionsHash.find(sockAddr);
+        if (it != _connectionsHash.end()) {
+            return it->second.get();
+        }
+    }
+
+    // The creation filter (LimitedNodeList::sockAddrBelongsToNode) takes the node list's read lock. Every
+    // eachNode()/broadcastToNodes() send already holds that lock when it reaches us and then takes
+    // _connectionsHashMutex, so calling the filter under _connectionsHashMutex inverts the order; with a
+    // writer waiting on the node lock (removeSilentNodes), the two read-holders deadlock (heluca/overte#79).
+    // Run the filter with no lock held.
+    if (filterCreate && _connectionCreationFilterOperator && !_connectionCreationFilterOperator(sockAddr)) {
+        // the connection creation filter did not allow us to create a new connection
+#ifdef UDT_CONNECTION_DEBUG
+        qCDebug(networking) << "Socket::findOrCreateConnection refusing to create Connection class for" << sockAddr
+            << "due to connection creation filter";
+#endif // UDT_CONNECTION_DEBUG
+        return nullptr;
+    }
+
     Lock connectionsLock(_connectionsHashMutex);
     auto it = _connectionsHash.find(sockAddr);
 
     if (it == _connectionsHash.end()) {
-        // we did not have a matching connection, time to see if we should make one
-
-        if (filterCreate && _connectionCreationFilterOperator && !_connectionCreationFilterOperator(sockAddr)) {
-            // the connection creation filter did not allow us to create a new connection
-#ifdef UDT_CONNECTION_DEBUG
-            qCDebug(networking) << "Socket::findOrCreateConnection refusing to create Connection class for" << sockAddr
-                << "due to connection creation filter";
-#endif // UDT_CONNECTION_DEBUG
-            return nullptr;
-        } else {
-            auto congestionControl = _ccFactory->create();
-            congestionControl->setMaxBandwidth(_maxBandwidth);
-            auto connection = std::unique_ptr<Connection>(new Connection(this, sockAddr, std::move(congestionControl)));
-            if (QThread::currentThread() != thread()) {
-                qCDebug(networking) << "Moving new Connection to NodeList thread";
-                connection->moveToThread(thread());
-            }
-            // allow higher-level classes to find out when connections have completed a handshake
-            QObject::connect(connection.get(), &Connection::receiverHandshakeRequestComplete,
-                             this, &Socket::clientHandshakeRequestComplete);
-
-            qCDebug(networking) << "Creating new Connection class for" << sockAddr;
-
-            it = _connectionsHash.insert(it, std::make_pair(sockAddr, std::move(connection)));
+        // another thread may have created it while the filter ran; only create if still absent
+        auto congestionControl = _ccFactory->create();
+        congestionControl->setMaxBandwidth(_maxBandwidth);
+        auto connection = std::unique_ptr<Connection>(new Connection(this, sockAddr, std::move(congestionControl)));
+        if (QThread::currentThread() != thread()) {
+            qCDebug(networking) << "Moving new Connection to NodeList thread";
+            connection->moveToThread(thread());
         }
+        // allow higher-level classes to find out when connections have completed a handshake
+        QObject::connect(connection.get(), &Connection::receiverHandshakeRequestComplete,
+                         this, &Socket::clientHandshakeRequestComplete);
+
+        qCDebug(networking) << "Creating new Connection class for" << sockAddr;
+
+        it = _connectionsHash.insert(it, std::make_pair(sockAddr, std::move(connection)));
     }
 
     return it->second.get();
