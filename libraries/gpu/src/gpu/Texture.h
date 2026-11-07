@@ -18,6 +18,7 @@
 #include <QUrl>
 
 #include <functional>
+#include <mutex>
 #include <shared/Storage.h>
 #include <shared/FileCache.h>
 #include <RegisteredMetaTypes.h>
