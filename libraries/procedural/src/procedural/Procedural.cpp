@@ -9,6 +9,7 @@
 #include "Procedural.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -56,6 +57,23 @@ bool isVulkanBackend() {
 }
 
 const char* CUSTOM_UNIFORM_BLOCK = "proceduralCustomBuffer";
+
+// Which iChannelN have a texture URL in the channels array, using the same rules as Procedural::setProceduralData
+std::array<bool, MAX_PROCEDURAL_TEXTURE_CHANNELS> boundChannels(const QJsonArray& channels) {
+    std::array<bool, MAX_PROCEDURAL_TEXTURE_CHANNELS> bound{};
+    size_t channelCount = std::min(MAX_PROCEDURAL_TEXTURE_CHANNELS, (size_t)channels.size());
+    for (size_t channel = 0; channel < channelCount; ++channel) {
+        QJsonValue channelValue = channels.at((int)channel);
+        if (channelValue.isString()) {
+            bound[channel] = true;
+        } else if (channelValue.isObject()) {
+            QJsonObject channelMap = channelValue.toObject();
+            auto urlItr = channelMap.constFind("url");
+            bound[channel] = urlItr != channelMap.constEnd() && urlItr->isString();
+        }
+    }
+    return bound;
+}
 
 // std140 base alignment and size of a block member of this type; false for a type the block cannot hold
 bool std140Member(ProceduralCustomUniform& uniform, size_t& alignment, size_t& size) {
@@ -337,6 +355,10 @@ void Procedural::setProceduralData(const ProceduralData& proceduralData) {
     }
 
     if (proceduralData.channels != _data.channels) {
+        // The bound channels are declared in the shader reflection, so a change in which ones are bound needs new pipelines
+        if (boundChannels(proceduralData.channels) != boundChannels(_data.channels)) {
+            _shaderDirty = true;
+        }
         _data.channels = proceduralData.channels;
 
         static Sampler defaultSampler;
@@ -572,13 +594,24 @@ void Procedural::prepare(gpu::Batch& batch,
         std::vector<shader::Reflection*> allFragmentReflections = collectReflections(fragmentSource);
         std::vector<shader::Reflection*> allVertexReflections = collectReflections(vertexSource);
 
-        // The Vulkan pipeline layout comes from the reflection: declare the block there, or take it back out
+        // The Vulkan pipeline layout comes from the reflection: declare the block there, or take it back out.
+        // The same goes for the texture channels: without a binding for iChannelN the descriptor set has no slot
+        // for it and MoltenVK fails to compile the shader.
+        const auto channelsBound = boundChannels(_data.channels);
         for (auto reflections : { &allFragmentReflections, &allVertexReflections }) {
             for (auto reflection : *reflections) {
                 if (_customUniforms.empty()) {
                     reflection->uniformBuffers.erase(CUSTOM_UNIFORM_BLOCK);
                 } else {
                     reflection->uniformBuffers[CUSTOM_UNIFORM_BLOCK] = procedural::slot::buffer::Custom;
+                }
+                for (size_t i = 0; i < MAX_PROCEDURAL_TEXTURE_CHANNELS; ++i) {
+                    const std::string channelName = "iChannel" + std::to_string(i);
+                    if (channelsBound[i]) {
+                        reflection->textures[channelName] = (int32_t)(procedural::slot::texture::Channel0 + i);
+                    } else {
+                        reflection->textures.erase(channelName);
+                    }
                 }
                 reflection->updateValid();
             }
