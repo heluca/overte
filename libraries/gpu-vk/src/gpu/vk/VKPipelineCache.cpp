@@ -366,7 +366,8 @@ std::string Cache::Pipeline::getKey(const vks::Context& context) const {
     std::string key = bytesToAscii(shader::makeProgramId(vertexShader.id, fragmentShader.id)) +
           + "_" + getRenderpassKeyString(renderpassKey)
           + "_" + state.getKey()
-          + "_" + format->getKey()
+          // A draw with no vertex input (full-screen triangle, skybox) legitimately has no format.
+          + "_" + (format ? format->getKey() : std::string())
           + "_" + bytesToAscii(primitiveTopology)
           + "_" + (drawCallInfoPerInstance ? "i" : "c")
           + "_" + getStridesKey();
@@ -386,7 +387,10 @@ VkStencilOpState Cache::getStencilOp(const gpu::State::StencilTest& stencil) {
 }
 
 VkShaderModule Cache::getShaderModule(const vks::Context& context, const shader::Source& source) {
-    auto itr = moduleMap.find(source.id);
+    // Shaders assembled at runtime (procedural) all carry INVALID_SHADER as their id, so the id cannot identify
+    // their module: caching under it hands the first such module, usually a vertex shader, to every later one.
+    const bool cacheable = source.id != shader::INVALID_SHADER;
+    auto itr = cacheable ? moduleMap.find(source.id) : moduleMap.end();
     if (moduleMap.end() == itr) {
         const auto& dialectSource = source.dialectSources.find(shader::Dialect::glsl450)->second;
         const auto& variantSource = dialectSource.variantSources.find(shader::Variant::Mono)->second;
@@ -397,7 +401,9 @@ VkShaderModule Cache::getShaderModule(const vks::Context& context, const shader:
         shaderModuleCreateInfo.codeSize = spirv.size();
         shaderModuleCreateInfo.pCode = (const uint32_t*)spirv.data();
         VK_CHECK_RESULT(vkCreateShaderModule(context.device->logicalDevice, &shaderModuleCreateInfo, nullptr, &result));
-        moduleMap[source.id] = result;
+        if (cacheable) {
+            moduleMap[source.id] = result;
+        }
         return result;
     }
     return itr->second;
@@ -603,21 +609,27 @@ const Cache::PipelineLayout& Cache::getPipeline(const vks::Context& context) {
             // VKTODO: provide valid format here.
             attributeDescriptions.push_back({ GPU_ATTR_FADEDATA7, 0, VK_FORMAT_R8G8B8A8_UNORM, 0 });
         }
+    }
 
-        // Explicitly add the draw call info slot if required
-        if (vertexReflection.validInput(gpu::slot::attr::DrawCallInfo)) {
-            attributeDescriptions.push_back(
-                { gpu::slot::attr::DrawCallInfo, gpu::slot::attr::DrawCallInfo, VK_FORMAT_R16G16_SINT, (uint32_t)0 });
-            bindingDescriptions.push_back({ gpu::slot::attr::DrawCallInfo, (uint32_t)sizeof(uint16_t) * 2, VK_VERTEX_INPUT_RATE_INSTANCE });
-            if (!pipelineState.drawCallInfoPerInstance && context.vertexAttributeZeroDivisorEnabled) {
-                // Every instance of this draw reads the element the backend bound the buffer at.
-                builder.vertexInputState.divisorDescriptions.push_back({ gpu::slot::attr::DrawCallInfo, 0 });
-            }
+    // Explicitly add the draw call info slot if required. A draw without a vertex format (skybox, full-screen quad)
+    // still reads it through the transform includes, and updateTransform() binds its buffer for every draw.
+    if (pipelineLayout.vertexReflection.validInput(gpu::slot::attr::DrawCallInfo)) {
+        builder.vertexInputState.attributeDescriptions.push_back(
+            { gpu::slot::attr::DrawCallInfo, gpu::slot::attr::DrawCallInfo, VK_FORMAT_R16G16_SINT, (uint32_t)0 });
+        builder.vertexInputState.bindingDescriptions.push_back(
+            { gpu::slot::attr::DrawCallInfo, (uint32_t)sizeof(uint16_t) * 2, VK_VERTEX_INPUT_RATE_INSTANCE });
+        if (!pipelineState.drawCallInfoPerInstance && context.vertexAttributeZeroDivisorEnabled) {
+            // Every instance of this draw reads the element the backend bound the buffer at.
+            builder.vertexInputState.divisorDescriptions.push_back({ gpu::slot::attr::DrawCallInfo, 0 });
         }
     }
 
     auto result = builder.create();
-    builder.shaderStages.clear();
+    // The builder destroys the modules left in shaderStages, so keep only the uncached ones there.
+    std::erase_if(builder.shaderStages, [&](const VkPipelineShaderStageCreateInfo& stage) {
+        const auto& source = stage.stage == VK_SHADER_STAGE_VERTEX_BIT ? vertexShader : fragmentShader;
+        return source.id != shader::INVALID_SHADER;
+    });
     pipelineLayout.pipeline = result;
     auto pipelineInMap = pipelineMap.insert({key, pipelineLayout});
     qDebug() << "Pipeline cache size: " << pipelineMap.size();
