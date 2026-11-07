@@ -211,10 +211,10 @@ void DomainServerSettingsManager::processSettingsRequestPacket(QSharedPointer<Re
     // say who is asking
     const SockAddr& sender = message->getSenderSockAddr();
     auto nodeList = DependencyManager::get<LimitedNodeList>();
-    bool isAssignment = nodeList->nodeMatchingPredicate([&](const SharedNodePointer& node) {
+    bool isAssignment = !nodeList->nodeMatchingPredicate([&](const SharedNodePointer& node) {
         return node->getPermissions().isAssignment && Assignment::typeForNodeType(node->getType()) == type &&
             node->getActiveSocket() && *node->getActiveSocket() == sender;
-    });
+    }).isNull();
 
     sendSettings(type, isAssignment ? Authenticated : NotAuthenticated, sender);
 }
