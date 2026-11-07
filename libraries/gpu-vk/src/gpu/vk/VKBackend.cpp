@@ -333,6 +333,10 @@ void VKBackend::render(const Batch& batch) {
     if (batch.getName() == "CompositeHUD") {
         _outputTexture = syncGPUObject(_cache.pipelineState.framebuffer);
     }
+    // The splash screen is the whole frame until the shader programs have compiled.
+    if (batch.getName() == "splashFrame") {
+        _outputTexture = syncGPUObject(_cache.pipelineState.framebuffer);
+    }
     /*if (renderpassActive) {
         cmdEndLabel(commandBuffer);
         renderpassActive = false;
