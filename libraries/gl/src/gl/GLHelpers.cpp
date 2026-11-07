@@ -280,6 +280,9 @@ const QSurfaceFormat& getDefaultOpenGLSurfaceFormat() {
             format.setBlueBufferSize(8);
             format.setAlphaBufferSize(8);
         } else {
+            // Qt's Wayland EGL path picks an OpenGL ES config when the renderable type is left
+            // at the default, and then eglCreateContext fails with EGL_BAD_MATCH for desktop GL.
+            format.setRenderableType(QSurfaceFormat::OpenGL);
             format.setProfile(QSurfaceFormat::OpenGLContextProfile::CoreProfile);
         }
 
