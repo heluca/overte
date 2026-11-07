@@ -25,6 +25,8 @@
 #include <DependencyManager.h>
 #include <unordered_map>
 
+class QTimer;
+
 using GetScriptStatusCallback = std::function<void(bool responseReceived, bool isRunning, EntityScriptStatus status, QString errorInfo)>;
 
 class GetScriptStatusRequest : public QObject {
@@ -44,8 +46,11 @@ signals:
     void finished(GetScriptStatusRequest* request);
 
 private:
+    void handleNoReply();
+
     QUuid _entityID;
     MessageID _messageID;
+    QTimer* _replyTimer { nullptr };
 
     bool _responseReceived;
     bool _isRunning;
@@ -63,7 +68,8 @@ public:
     bool reloadServerScript(QUuid entityID);
     MessageID getEntityServerScriptStatus(QUuid entityID, GetScriptStatusCallback callback);
     void callEntityServerMethod(QUuid id, const QString& method, const QStringList& params);
-
+    // Forgets a pending status request without calling it back
+    void dropEntityServerScriptStatusRequest(MessageID messageID);
 
 private slots:
     void handleNodeKilled(SharedNodePointer node);

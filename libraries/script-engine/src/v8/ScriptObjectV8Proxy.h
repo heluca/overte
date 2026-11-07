@@ -249,8 +249,10 @@ private:  // storage
     public:
         V8ScriptValue thisValue;
         V8ScriptValue callback;
-        Connection(const V8ScriptValue &v8ThisValue, const V8ScriptValue &v8Callback) : 
-            thisValue(v8ThisValue), callback(v8Callback) {};
+        // Environment the connection was made in (see ScriptEngine::currentEnvironment()), the handler runs in it
+        ScriptEnvironmentPointer environment;
+        Connection(const V8ScriptValue &v8ThisValue, const V8ScriptValue &v8Callback, const ScriptEnvironmentPointer& environment) :
+            thisValue(v8ThisValue), callback(v8Callback), environment(environment) {};
     };
     using ConnectionList = QList<Connection>;
 

@@ -1153,6 +1153,11 @@ void AvatarMixer::entityRemoved(EntityItem * entity) {
 }
 
 void AvatarMixer::aboutToFinish() {
+    // The node list kills our nodes on the main thread while this mixer is deleted. Destroying _entityViewer's tree in
+    // ~AvatarMixer processes this thread's events, which would deliver those kills to a mixer whose
+    // _sessionDisplayNames is already destroyed. Kills queued before this point are delivered before the deletion.
+    disconnect(DependencyManager::get<NodeList>().data(), &NodeList::nodeKilled, this, &AvatarMixer::handleAvatarKilled);
+
     DependencyManager::destroy<ResourceManager>();
     DependencyManager::destroy<ResourceCacheSharedItems>();
     DependencyManager::destroy<ModelCache>();

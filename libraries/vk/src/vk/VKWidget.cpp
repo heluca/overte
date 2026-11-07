@@ -2,7 +2,7 @@
 //  Created by Bradley Austin Davis on 2015/12/03
 //  Copyright 2013-2018 High Fidelity, Inc.
 //  Copyright 2020 Maki.
-//  Copyright 2024 Overte e.V.
+//  Copyright 2024-2026 Overte e.V.
 //
 //  Distributed under the Apache License, Version 2.0.
 //  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
@@ -80,7 +80,9 @@ void VKWidget::createContext(QOpenGLContext* shareContext) {
 }
 
 void VKWidget::swapBuffers() {
+#ifndef Q_OS_MAC
     _context->swapBuffers();
+#endif
 }
 
 bool VKWidget::makeCurrent() {

@@ -14,6 +14,7 @@
 
 #include "ScriptValueV8Wrapper.h"
 
+#include "ScriptErrorConstructorsV8.h"
 #include "ScriptValueIteratorV8Wrapper.h"
 
 #include "../ScriptEngineLogging.h"
@@ -81,6 +82,7 @@ ScriptValue ScriptValueV8Wrapper::call(const ScriptValue& thisObject, const Scri
     Q_ASSERT(_engine == _value.getEngine());
     auto isolate = _engine->getIsolate();
     Q_ASSERT(isolate->IsCurrent());
+    MicrotaskCheckpointScopeV8 microtaskCheckpointScope(_engine);
     v8::HandleScope handleScope(isolate);
     auto context = _engine->getContext();
     v8::Context::Scope contextScope(context);
@@ -163,6 +165,7 @@ ScriptValue ScriptValueV8Wrapper::construct(const ScriptValueList& args) {
     //V8TODO: there is CallAsContructor in V8
     auto isolate = _engine->getIsolate();
     Q_ASSERT(isolate->IsCurrent());
+    MicrotaskCheckpointScopeV8 microtaskCheckpointScope(_engine);
     v8::HandleScope handleScope(isolate);
     auto context = _engine->getContext();
     v8::Context::Scope contextScope(context);
@@ -574,7 +577,7 @@ QString ScriptValueV8Wrapper::toString() const {
     v8::Context::Scope contextScope(_engine->getContext());
     v8::String::Utf8Value string(_engine->getIsolate(), _value.constGet());
     Q_ASSERT(*string != nullptr);
-    return QString(*string);
+    return QString::fromUtf8(*string, string.length());
 }
 
 quint16 ScriptValueV8Wrapper::toUInt16() const {
@@ -783,18 +786,7 @@ bool ScriptValueV8Wrapper::isError() const {
     v8::HandleScope handleScope(isolate);
     auto context = _engine->getContext();
     v8::Context::Scope contextScope(context);
-    v8::Local<v8::Value> error;
-    if (!context->Global()->Get(context, v8::String::NewFromUtf8(isolate, "Error").ToLocalChecked()).ToLocal(&error)) {
-        Q_ASSERT(false);
-    }
-    if (!error->IsObject()) {
-        Q_ASSERT(false);
-    }
-    auto errorObj = v8::Local<v8::Object>::Cast(error);
-    if (_value.constGet()->InstanceOf(context, errorObj).FromMaybe(false)) {
-        return true;
-    }
-    return false;
+    return _value.constGet()->InstanceOf(context, ScriptErrorConstructorsV8::error(isolate, context)).FromMaybe(false);
 }
 
 bool ScriptValueV8Wrapper::isFunction() const {

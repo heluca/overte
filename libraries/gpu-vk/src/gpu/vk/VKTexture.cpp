@@ -16,6 +16,7 @@
 #include <QtCore/QThread>
 #include <NumericalConstants.h>
 #include <gl/GLHelpers.h>
+#include <gl/IOSurfaceTexture.h>
 
 #include "VKBackend.h"
 #include "vk/Allocation.h"
@@ -38,24 +39,73 @@ const uint32_t VKTexture::WRAP_MODES[Sampler::NUM_WRAP_MODES] = {
     VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE        // WRAP_MIRROR_ONCE,
 };
 
+// { minFilter, magFilter }; the mip part of each filter is in samplerCreateInfo().
 const VKFilterMode VKTexture::FILTER_MODES[Sampler::NUM_FILTERS] = {
     { VK_FILTER_NEAREST, VK_FILTER_NEAREST },  //FILTER_MIN_MAG_POINT,
     { VK_FILTER_NEAREST, VK_FILTER_LINEAR },  //FILTER_MIN_POINT_MAG_LINEAR,
     { VK_FILTER_LINEAR, VK_FILTER_NEAREST },  //FILTER_MIN_LINEAR_MAG_POINT,
     { VK_FILTER_LINEAR, VK_FILTER_LINEAR },  //FILTER_MIN_MAG_LINEAR,
 
-    // VKTODO: VkSamplerMipmapMode has some related setting too
-    // VKTODO: This is not really accurate, but hopefully good enough for now
     { VK_FILTER_NEAREST, VK_FILTER_NEAREST },  //FILTER_MIN_MAG_MIP_POINT,
-    { VK_FILTER_LINEAR, VK_FILTER_NEAREST },  //FILTER_MIN_MAG_POINT_MIP_LINEAR,
+    { VK_FILTER_NEAREST, VK_FILTER_NEAREST },  //FILTER_MIN_MAG_POINT_MIP_LINEAR,
     { VK_FILTER_NEAREST, VK_FILTER_LINEAR },  //FILTER_MIN_POINT_MAG_LINEAR_MIP_POINT,
-    { VK_FILTER_LINEAR, VK_FILTER_LINEAR },  //FILTER_MIN_POINT_MAG_MIP_LINEAR,
-    { VK_FILTER_NEAREST, VK_FILTER_NEAREST },  //FILTER_MIN_LINEAR_MAG_MIP_POINT,
+    { VK_FILTER_NEAREST, VK_FILTER_LINEAR },  //FILTER_MIN_POINT_MAG_MIP_LINEAR,
+    { VK_FILTER_LINEAR, VK_FILTER_NEAREST },  //FILTER_MIN_LINEAR_MAG_MIP_POINT,
     { VK_FILTER_LINEAR, VK_FILTER_NEAREST },  //FILTER_MIN_LINEAR_MAG_POINT_MIP_LINEAR,
-    { VK_FILTER_NEAREST, VK_FILTER_LINEAR },  //FILTER_MIN_MAG_LINEAR_MIP_POINT,
+    { VK_FILTER_LINEAR, VK_FILTER_LINEAR },  //FILTER_MIN_MAG_LINEAR_MIP_POINT,
     { VK_FILTER_LINEAR, VK_FILTER_LINEAR },  //FILTER_MIN_MAG_MIP_LINEAR,
     { VK_FILTER_LINEAR, VK_FILTER_LINEAR }  //FILTER_ANISOTROPIC,
 };
+
+VkSamplerCreateInfo VKTexture::samplerCreateInfo(const Sampler& sampler, float minLod, float maxLod) {
+    VkSamplerCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+
+    const auto filter = sampler.getFilter();
+    info.minFilter = FILTER_MODES[filter].minFilter;
+    info.magFilter = FILTER_MODES[filter].magFilter;
+    switch (filter) {
+        case Sampler::FILTER_MIN_MAG_POINT_MIP_LINEAR:
+        case Sampler::FILTER_MIN_POINT_MAG_MIP_LINEAR:
+        case Sampler::FILTER_MIN_LINEAR_MAG_POINT_MIP_LINEAR:
+        case Sampler::FILTER_MIN_MAG_MIP_LINEAR:
+        case Sampler::FILTER_ANISOTROPIC:
+            info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            break;
+        default:
+            info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            break;
+    }
+    // The first four filters read the top mip only, as GL_LINEAR and GL_NEAREST do.
+    if (filter < Sampler::FILTER_MIN_MAG_MIP_POINT) {
+        maxLod = minLod;
+    }
+    info.minLod = minLod;
+    info.maxLod = maxLod;
+    info.mipLodBias = 0.0f;
+
+    info.addressModeU = (VkSamplerAddressMode)WRAP_MODES[sampler.getWrapModeU()];
+    info.addressModeV = (VkSamplerAddressMode)WRAP_MODES[sampler.getWrapModeV()];
+    info.addressModeW = (VkSamplerAddressMode)WRAP_MODES[sampler.getWrapModeW()];
+    // Vulkan has three fixed border colours; the shadow map wants white (lit beyond the cascade).
+    const auto& border = sampler.getBorderColor();
+    if (border.a <= 0.0f) {
+        info.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+    } else if (border.r >= 1.0f && border.g >= 1.0f && border.b >= 1.0f) {
+        info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    } else {
+        info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+    }
+
+    // sampler2DShadow and friends need the comparison done in the sampler.
+    info.compareEnable = sampler.doComparison() ? VK_TRUE : VK_FALSE;
+    info.compareOp = COMPARISON_TO_VK[(size_t)sampler.getComparisonFunction()];
+
+    // samplerAnisotropy is not among the device features vks::Context enables.
+    info.anisotropyEnable = VK_FALSE;
+    info.maxAnisotropy = 1.0f;
+    return info;
+}
 
 static constexpr size_t MAX_PIXEL_BYTE_SIZE{ 4 };
 static constexpr size_t MAX_TRANSFER_DIMENSION{ 1024 };
@@ -247,21 +297,9 @@ VkDescriptorImageInfo VKAttachmentTexture::getDescriptorImageInfo() {
     if (_vkSampler == VK_NULL_HANDLE) {
         auto backend = _backend.lock();
         auto device = backend->getContext().device;
-        // Create sampler
-        VkSamplerCreateInfo samplerCreateInfo = {};
-        samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        samplerCreateInfo.magFilter = VK_FILTER_LINEAR;  // VKTODO
-        samplerCreateInfo.minFilter = VK_FILTER_LINEAR;  // VKTODO
-        samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerCreateInfo.mipLodBias = 0.0f;
-        samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
-        samplerCreateInfo.minLod = 0.0f;
-        samplerCreateInfo.maxLod = 0.0f;
-        samplerCreateInfo.maxAnisotropy = 1.0f;
-        VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
+        // Create sampler. Attachments have one mip; the shadow map's sampler asks for depth comparison.
+        auto info = samplerCreateInfo(_gpuObject.getSampler(), 0.0f, 0.0f);
+        VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &info, nullptr, &_vkSampler));
     }
     if (_vkImageView == VK_NULL_HANDLE) {
         auto backend = _backend.lock();
@@ -648,20 +686,8 @@ void VKStrictResourceTexture::updateSamplerAndView(VKBackend &backend) {
     const uint32_t levelCount = _populatedMaxMip + 1;
 
     // Create sampler
-    VkSamplerCreateInfo samplerCreateInfo = {};
-    samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerCreateInfo.magFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.minFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.mipLodBias = 0.0f;
-    samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
-    samplerCreateInfo.minLod = static_cast<float>(_populatedMinMip);
-    samplerCreateInfo.maxLod = static_cast<float>(levelCount);
-    samplerCreateInfo.maxAnisotropy = 1.0f;
-    VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
+    auto info = samplerCreateInfo(_gpuObject.getSampler(), static_cast<float>(_populatedMinMip), static_cast<float>(levelCount));
+    VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &info, nullptr, &_vkSampler));
 
     // Create image view
     VkImageViewCreateInfo viewCreateInfo = {};
@@ -693,6 +719,17 @@ VKStrictResourceTexture::~VKStrictResourceTexture() {
 
 void VKExternalTexture::createTexture(VKBackend &backend) {
     auto device = backend.getContext().device;
+
+#ifdef Q_OS_MAC
+    if (backend.getContext().metalObjectsEnabled && ::gl::useIOSurfaceTextures()) {
+        // Zero copy path: images are created per IOSurface in bindIOSurface, nothing fixed to allocate here.
+        _usingIOSurface = true;
+        _imageWidth = _gpuObject.getWidth();
+        _imageHeight = _gpuObject.getHeight();
+        _vkImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        return;
+    }
+#endif
 
     VkImageCreateInfo imageCI = vks::initializers::imageCreateInfo();
     imageCI.imageType = VK_IMAGE_TYPE_2D;
@@ -787,6 +824,7 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
 
     imageCI.mipLevels = 1;
 
+#ifndef Q_OS_MAC
     VkExternalMemoryImageCreateInfo externalMemoryImageCI {};
     externalMemoryImageCI.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
 #ifdef WIN32
@@ -795,6 +833,7 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
     externalMemoryImageCI.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
 #endif
     imageCI.pNext = &externalMemoryImageCI;
+#endif
 
     VK_CHECK_RESULT(vkCreateImage(device->logicalDevice, &imageCI, nullptr, &_vkImage));
 
@@ -832,10 +871,17 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
     memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     memoryAllocateInfo.allocationSize = memoryRequirements2.memoryRequirements.size;
     memoryAllocateInfo.memoryTypeIndex = device->getMemoryType(memoryRequirements2.memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+#ifdef Q_OS_MAC
+    // Plain device memory: the image is filled from a staging buffer instead of being shared with OpenGL.
+    memoryAllocateInfo.pNext = nullptr;
+#else
     memoryAllocateInfo.pNext = &exportMemoryAllocateInfo;
+#endif
 
     VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memoryAllocateInfo, nullptr, &_sharedMemory));
-#ifdef WIN32
+#if defined(Q_OS_MAC)
+    // Nothing to export.
+#elif defined(WIN32)
     VkMemoryGetWin32HandleInfoKHR memoryGetWin32HandleInfoKHR {};
     memoryGetWin32HandleInfoKHR.sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
     memoryGetWin32HandleInfoKHR.memory = _sharedMemory,
@@ -873,7 +919,12 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT);
 
+#ifdef Q_OS_MAC
+    // Fully transparent until the first UI frame is read back, so the HUD does not tint the scene.
+    VkClearColorValue color = { .float32 = {0.0, 0.0, 0.0, 0.0} };
+#else
     VkClearColorValue color = { .float32 = {0.5, 0.0, 0.0} };
+#endif
     VkImageSubresourceRange imageSubresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     vkCmdClearColorImage(transferCmd, _vkImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &imageSubresourceRange);
 
@@ -892,6 +943,240 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
 
     device->flushCommandBuffer(transferCmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
 }
+
+#ifdef Q_OS_MAC
+
+void VKExternalTexture::initGL(gpu::vk::VKBackend& backend) {
+    if (_usingIOSurface) {
+        return;
+    }
+    // No OpenGL side objects are needed: the source texture is read back with glGetTexImage.
+    // Create the persistently mapped, host visible staging buffer used for the readback.
+    auto device = backend.getContext().device;
+    Q_ASSERT(evalTexelFormatInternal(_gpuObject.getTexelFormat(), backend.getContext()) == VK_FORMAT_R8G8B8A8_UNORM);
+    _stagingSize = (VkDeviceSize)_gpuObject.getWidth() * _gpuObject.getHeight() * 4;
+
+    VkBufferCreateInfo bufferCreateInfo = vks::initializers::bufferCreateInfo();
+    bufferCreateInfo.size = _stagingSize;
+    bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VK_CHECK_RESULT(vkCreateBuffer(device->logicalDevice, &bufferCreateInfo, nullptr, &_stagingBuffer));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(device->logicalDevice, _stagingBuffer, &memReqs);
+    VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = device->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &_stagingMemory));
+    VK_CHECK_RESULT(vkBindBufferMemory(device->logicalDevice, _stagingBuffer, _stagingMemory, 0));
+    VK_CHECK_RESULT(vkMapMemory(device->logicalDevice, _stagingMemory, 0, memReqs.size, 0, &_stagingMapped));
+}
+
+void VKExternalTexture::transferGL(VKBackend &backend) {
+    if (!_openGLSourceId) {
+        return;
+    }
+    if (_usingIOSurface) {
+        uint32_t surfaceWidth = 0, surfaceHeight = 0;
+        void* surface = ::gl::ioSurfaceForTexture(_openGLSourceId, &surfaceWidth, &surfaceHeight);
+        if (!surface) {
+            qCWarning(gpu_vk_logging) << "VKExternalTexture::transferGL: OpenGL texture" << _openGLSourceId
+                                      << "is not IOSurface backed; the UI texture cannot be shared";
+            return;
+        }
+        if (surfaceWidth != _imageWidth || surfaceHeight != _imageHeight) {
+            // The QML surface was resized but the gpu::Texture has not caught up yet (or vice versa);
+            // the backend replaces this object once the sizes agree.
+            qCDebug(gpu_vk_logging) << "VKExternalTexture::transferGL: IOSurface is" << surfaceWidth << "x" << surfaceHeight
+                                    << "but the texture is" << _imageWidth << "x" << _imageHeight << "; waiting for resize";
+            ::gl::releaseIOSurface(surface);
+            return;
+        }
+        // bindIOSurface takes over the reference returned by ioSurfaceForTexture.
+        bindIOSurface(backend, surface);
+        return;
+    }
+    if (!_stagingMapped) {
+        return;
+    }
+    auto device = backend.getContext().device;
+
+    // Read the QML texture back from OpenGL. The caller has already issued glWaitSync on the fence that
+    // guards the source texture, and glGetTexImage blocks until the GPU has finished producing it.
+    GLint previousPackAlignment = 4;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, _openGLSourceId);
+    // glGetTexImage writes the whole source texture; never let it run past the staging buffer.
+    GLint sourceWidth = 0, sourceHeight = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &sourceWidth);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &sourceHeight);
+    if (sourceWidth == (GLint)_imageWidth && sourceHeight == (GLint)_imageHeight) {
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, _stagingMapped);
+    } else {
+        qCWarning(gpu_vk_logging) << "VKExternalTexture::transferGL: source texture is" << sourceWidth << "x" << sourceHeight
+                                  << "but the Vulkan image is" << _imageWidth << "x" << _imageHeight << "; skipping readback";
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+        return;
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+    ::gl::checkGLError("GL to VK readback");
+
+    // Copy the staging buffer into the image. The image stays in VK_IMAGE_LAYOUT_GENERAL, which is what
+    // getDescriptorImageInfo reports and what the shared-memory path on other platforms uses.
+    VkCommandBuffer copyCmd = device->createCommandBuffer(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+    VkImageSubresourceRange subresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    vks::tools::insertImageMemoryBarrier(
+        copyCmd,
+        _vkImage,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        subresourceRange);
+
+    VkBufferImageCopy region {};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    region.imageOffset = { 0, 0, 0 };
+    region.imageExtent = { _imageWidth, _imageHeight, 1 };
+    vkCmdCopyBufferToImage(copyCmd, _stagingBuffer, _vkImage, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+
+    vks::tools::insertImageMemoryBarrier(
+        copyCmd,
+        _vkImage,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        subresourceRange);
+
+    // VKTODO: fold this into the frame command buffer instead of a synchronous submit.
+    device->flushCommandBuffer(copyCmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
+}
+
+// Makes the VkImage wrapping `surface` the one sampled by the shader, creating it on first use.
+void VKExternalTexture::bindIOSurface(VKBackend& backend, void* surface) {
+    ++_ioSurfaceBindCounter;
+    auto existing = _ioSurfaceImages.find(surface);
+    if (existing != _ioSurfaceImages.end()) {
+        existing->second.lastUsed = _ioSurfaceBindCounter;
+        _vkImageView = existing->second.view;
+        // The cache entry already holds its own reference.
+        ::gl::releaseIOSurface(surface);
+        return;
+    }
+
+    auto device = backend.getContext().device;
+    auto& recycler = backend.getContext().recycler;
+    // The IOSurface is allocated as BGRA (the format both CGL and Metal accept); the shader still
+    // receives the channels in RGBA order, so no swizzle is needed.
+    const VkFormat format = VK_FORMAT_B8G8R8A8_UNORM;
+
+    IOSurfaceImage entry;
+    entry.surface = surface;
+    entry.lastUsed = _ioSurfaceBindCounter;
+
+    VkImportMetalIOSurfaceInfoEXT importInfo {};
+    importInfo.sType = VK_STRUCTURE_TYPE_IMPORT_METAL_IO_SURFACE_INFO_EXT;
+    importInfo.ioSurface = static_cast<IOSurfaceRef>(surface);
+
+    VkImageCreateInfo imageCI = vks::initializers::imageCreateInfo();
+    imageCI.pNext = &importInfo;
+    imageCI.imageType = VK_IMAGE_TYPE_2D;
+    imageCI.format = format;
+    imageCI.extent = { _imageWidth, _imageHeight, 1 };
+    imageCI.mipLevels = 1;
+    imageCI.arrayLayers = 1;
+    imageCI.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageCI.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkResult result = vkCreateImage(device->logicalDevice, &imageCI, nullptr, &entry.image);
+    if (result != VK_SUCCESS) {
+        qCWarning(gpu_vk_logging) << "VKExternalTexture::bindIOSurface: vkCreateImage failed:" << vks::tools::errorString(result).c_str();
+        return;
+    }
+
+    // MoltenVK backs the MTLTexture with the IOSurface itself, but Vulkan still requires memory to be bound.
+    VkMemoryRequirements memReqs {};
+    vkGetImageMemoryRequirements(device->logicalDevice, entry.image, &memReqs);
+    VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = device->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memAllocInfo, nullptr, &entry.memory));
+    VK_CHECK_RESULT(vkBindImageMemory(device->logicalDevice, entry.image, entry.memory, 0));
+
+    VkImageViewCreateInfo viewCI = vks::initializers::imageViewCreateInfo();
+    viewCI.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewCI.format = format;
+    viewCI.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    viewCI.image = entry.image;
+    VK_CHECK_RESULT(vkCreateImageView(device->logicalDevice, &viewCI, nullptr, &entry.view));
+
+    // Move the image to the layout getDescriptorImageInfo reports. Layouts are a formality on Metal, but
+    // keep the Vulkan side consistent with the readback path.
+    VkCommandBuffer cmd = device->createCommandBuffer(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+    vks::tools::setImageLayout(cmd, entry.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                               viewCI.subresourceRange, device->queueFamilyIndices.graphics, device->queueFamilyIndices.graphics,
+                               VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    device->flushCommandBuffer(cmd, backend.getContext().graphicsQueue, device->graphicsCommandPool);
+
+    // The cache entry keeps the reference handed to us by the caller.
+    _ioSurfaceImages[surface] = entry;
+    _vkImageView = entry.view;
+    if (_ioSurfaceImages.size() == 1) {
+        qCDebug(gpu_vk_logging) << "External texture" << _imageWidth << "x" << _imageHeight
+                               << "is shared with OpenGL through an IOSurface (zero copy)";
+    }
+
+    // The QML texture cache keeps a handful of textures per size; anything beyond that is a surface that
+    // was destroyed and whose address got reused, so drop the least recently bound entries.
+    const size_t MAX_CACHED_SURFACES = 8;
+    while (_ioSurfaceImages.size() > MAX_CACHED_SURFACES) {
+        auto oldest = _ioSurfaceImages.end();
+        for (auto it = _ioSurfaceImages.begin(); it != _ioSurfaceImages.end(); ++it) {
+            if (it->first != surface && (oldest == _ioSurfaceImages.end() || it->second.lastUsed < oldest->second.lastUsed)) {
+                oldest = it;
+            }
+        }
+        recycler.trashVkImageView(oldest->second.view);
+        recycler.trashVkImage(oldest->second.image);
+        recycler.trashVkDeviceMemory(oldest->second.memory);
+        ::gl::releaseIOSurface(oldest->first);
+        _ioSurfaceImages.erase(oldest);
+    }
+}
+
+void VKExternalTexture::releaseIOSurfaceImages() {
+    auto backend = _backend.lock();
+    if (!backend) {
+        return;
+    }
+    auto& recycler = backend->getContext().recycler;
+    for (auto& pair : _ioSurfaceImages) {
+        recycler.trashVkImageView(pair.second.view);
+        recycler.trashVkImage(pair.second.image);
+        recycler.trashVkDeviceMemory(pair.second.memory);
+        ::gl::releaseIOSurface(pair.first);
+    }
+    _ioSurfaceImages.clear();
+    if (_usingIOSurface) {
+        // The view belonged to one of the cached images; never hand it to the destructor twice.
+        _vkImageView = VK_NULL_HANDLE;
+    }
+}
+
+#else
 
 void VKExternalTexture::initGL(gpu::vk::VKBackend& backend) {
     glCreateMemoryObjectsEXT(1, &_openGLMemoryObject); // VKTODO: clean these up later
@@ -927,23 +1212,18 @@ void VKExternalTexture::transferGL(VKBackend &backend) {
     // VKTODO: generate mipmaps
 }
 
+#endif // Q_OS_MAC
+
 void VKExternalTexture::postTransfer(VKBackend &backend) {
     auto device = backend.getContext().device;
     // Create sampler
-    VkSamplerCreateInfo samplerCreateInfo = {};
-    samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerCreateInfo.magFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.minFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.mipLodBias = 0.0f;
-    samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
-    samplerCreateInfo.minLod = 0.0f;
-    samplerCreateInfo.maxLod = 0.0f;
-    samplerCreateInfo.maxAnisotropy = 1.0f;
-    VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
+    auto info = samplerCreateInfo(_gpuObject.getSampler(), 0.0f, 0.0f);
+    VK_CHECK_RESULT(vkCreateSampler(device->logicalDevice, &info, nullptr, &_vkSampler));
+
+    if (_vkImage == VK_NULL_HANDLE) {
+        // IOSurface mode: views are created per surface in bindIOSurface.
+        return;
+    }
 
     // Create image view
     VkImageViewCreateInfo viewCreateInfo = {};
@@ -987,18 +1267,39 @@ VKExternalTexture::~VKExternalTexture() {
     releaseExternalTexture();
     auto backend = _backend.lock();
     auto &recycler = backend->getContext().recycler;
-    recycler.trashVkImageView(_vkImageView);
+#ifdef Q_OS_MAC
+    releaseIOSurfaceImages();
+#endif
+    if (_vkImageView) {
+        recycler.trashVkImageView(_vkImageView);
+    }
     if (_vkSampler) {
         recycler.trashVkSampler(_vkSampler);
     }
-    recycler.trashVkImage(_vkImage);
-    recycler.trashVkDeviceMemory(_sharedMemory);
+    if (_vkImage) {
+        recycler.trashVkImage(_vkImage);
+    }
+    if (_sharedMemory) {
+        recycler.trashVkDeviceMemory(_sharedMemory);
+    }
+#ifdef Q_OS_MAC
+    if (_stagingBuffer) {
+        if (_stagingMapped) {
+            vkUnmapMemory(backend->getContext().device->logicalDevice, _stagingMemory);
+            _stagingMapped = nullptr;
+        }
+        recycler.trashVkBuffer(_stagingBuffer);
+        recycler.trashVkDeviceMemory(_stagingMemory);
+    }
+#endif
 }
 
 VkDescriptorImageInfo VKExternalTexture::getDescriptorImageInfo() {
     VkDescriptorImageInfo result {};
     result.sampler = _vkSampler;
-    result.imageLayout = _vkImageLayout;
+    // No view yet (IOSurface mode before the first surface was bound): report UNDEFINED so the backend
+    // substitutes its default texture instead of writing a null view into the descriptor set.
+    result.imageLayout = _vkImageView ? _vkImageLayout : VK_IMAGE_LAYOUT_UNDEFINED;
     result.imageView = _vkImageView;
     return result;
 }
@@ -1486,20 +1787,8 @@ void VKResourceTexture::syncSampler(const Sampler& sampler) {
         _vkSampler = VK_NULL_HANDLE;
     }
     // Create sampler
-    VkSamplerCreateInfo samplerCreateInfo = {};
-    samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerCreateInfo.magFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.minFilter = VK_FILTER_LINEAR; // VKTODO
-    samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerCreateInfo.mipLodBias = 0.0f;
-    samplerCreateInfo.compareOp = VK_COMPARE_OP_NEVER;
-    samplerCreateInfo.minLod = 0.0f;
-    samplerCreateInfo.maxLod = static_cast<float>(mips);
-    samplerCreateInfo.maxAnisotropy = 1.0f;
-    VK_CHECK_RESULT(vkCreateSampler(backend->getContext().device->logicalDevice, &samplerCreateInfo, nullptr, &_vkSampler));
+    auto info = samplerCreateInfo(sampler, 0.0f, static_cast<float>(mips));
+    VK_CHECK_RESULT(vkCreateSampler(backend->getContext().device->logicalDevice, &info, nullptr, &_vkSampler));
     updateImageView();
 }
 

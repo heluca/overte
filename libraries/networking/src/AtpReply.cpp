@@ -52,6 +52,9 @@ void AtpReply::handleRequestFinish() {
     switch (_resourceRequest->getResult()) {
         case ResourceRequest::Result::Success:
             setError(NoError, "Success");
+            // As fetch reports an ATP response, for XMLHttpRequest's status
+            setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 200);
+            setAttribute(QNetworkRequest::HttpReasonPhraseAttribute, "OK");
             _content = _resourceRequest->getData();
             break;
         case ResourceRequest::Result::InvalidURL:

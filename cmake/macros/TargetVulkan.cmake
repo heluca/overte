@@ -5,9 +5,15 @@
 #  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
 # 
 macro(TARGET_VULKAN)
-    find_package(Vulkan QUIET REQUIRED)
+    if(APPLE)
+        find_package(MoltenVK QUIET REQUIRED)
+        target_include_directories(${TARGET_NAME} PRIVATE ${MoltenVK_INCLUDE_DIR})
+        target_link_libraries(${TARGET_NAME} ${MoltenVK_LIBRARY})
+    else()
+        find_package(Vulkan QUIET REQUIRED)
+        target_include_directories(${TARGET_NAME} PRIVATE ${VULKAN_INCLUDE_DIR})
+        target_link_libraries(${TARGET_NAME} ${VULKAN_LIBRARY})
+    endif()
     find_package(VulkanMemoryAllocator QUIET REQUIRED)
-    target_include_directories(${TARGET_NAME} PRIVATE ${VULKAN_INCLUDE_DIR})
     target_link_libraries(${TARGET_NAME} GPUOpen::VulkanMemoryAllocator)
-    target_link_libraries(${TARGET_NAME} ${VULKAN_LIBRARY})
 endmacro()

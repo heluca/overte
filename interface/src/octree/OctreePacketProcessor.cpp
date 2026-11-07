@@ -146,6 +146,10 @@ void OctreePacketProcessor::processPacket(QSharedPointer<ReceivedMessage> messag
 }
 
 void OctreePacketProcessor::startSafeLanding() {
+    if (_safeLanding && !_safeLanding->isTracking()) {
+        // a new landing counts its sequence from this connection's packets, not a previous one's
+        _safeLandingSequenceStart = SafeLanding::INVALID_SEQUENCE;
+    }
     if (_safeLanding) {
         _safeLanding->startTracking(qApp->getEntities());
     }
@@ -161,6 +165,7 @@ void OctreePacketProcessor::stopSafeLanding() {
     if (_safeLanding) {
         _safeLanding->stopTracking();
     }
+    _safeLandingSequenceStart = SafeLanding::INVALID_SEQUENCE;
 }
 
 void OctreePacketProcessor::resetSafeLanding() {

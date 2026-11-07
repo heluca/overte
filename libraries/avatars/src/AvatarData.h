@@ -521,7 +521,9 @@ class AvatarData : public QObject, public SpatiallyNestable {
      *     mixer rather than Interface clients. The result is unique among all avatars present in the domain at the time.
      * @property {boolean} lookAtSnappingEnabled=true - <code>true</code> if the avatar's eyes snap to look at another avatar's
      *     eyes when the other avatar is in the line of sight and also has <code>lookAtSnappingEnabled == true</code>.
-     * @property {string} skeletonModelURL - The avatar's FST file.
+     * @property {string} skeletonModelURL - The avatar's FST file. Reads as <code>""</code> except for
+     *     <code>MyAvatar</code> when its URL is not protected, and for the assignment-client <code>Avatar</code>, whose
+     *     script set it.
      * @property {string[]} jointNames - The list of joints in the current avatar model. <em>Read-only.</em>
      * @property {Uuid} sessionUUID - Unique ID of the avatar in the domain. <em>Read-only.</em>
      * @property {Mat4} sensorToWorldMatrix - The scale, rotation, and translation transform from the user's real world to the
@@ -1228,7 +1230,7 @@ public:
     }
     virtual bool isCertifyFailed() const { return _verificationFailed; }
 
-    QString getSkeletonModelURLFromScript() const;
+    virtual QString getSkeletonModelURLFromScript() const;
     void setSkeletonModelURLFromScript(const QString& skeletonModelString) { setSkeletonModelURL(QUrl(skeletonModelString)); }
 
     void setOwningAvatarMixer(const QWeakPointer<Node>& owningAvatarMixer) { _owningAvatarMixer = owningAvatarMixer; }

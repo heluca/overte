@@ -70,6 +70,19 @@ XMlHttpRequest.getResponseHeader(QString) function
  * 
  * <p>Create using <code>new XMLHttpRequest(...)</code>.</p>
  *
+ * <p>In server entity scripts and Agent scripts, a request that sets no <code>Authorization</code> header gets the domain's
+ * script credential for its URL, if there is one: the domain settings hold bearer tokens, each for requests under a URL
+ * prefix made by scripts under a script prefix. The script prefix must cover the calling script, every script whose code
+ * is on the call stack and every module the script imported. The token is added as the request is sent and is never
+ * visible to the script. A redirect away from the credential's URL prefix ends the request with <code>errorCode</code>
+ * <code>11</code> (InsecureRedirectError) rather than send the token on. A script that sets its own
+ * <code>Authorization</code> header sends that instead.</p>
+ *
+ * <p>In Interface and Agent scripts, a request under the metaverse server's <code>/api/</code> that sets no
+ * <code>Authorization</code> header gets the signed-in account's access token; in entity scripts it does not. Any
+ * other <code>Authorization</code> header, the access token or the script's own, follows a redirect within the same origin
+ * (scheme, host and port) and is left off a redirect to another origin.</p>
+ *
  * @class XMLHttpRequest
  *
  * @hifi-interface
@@ -181,7 +194,12 @@ public:
     XMLHttpRequestClass(ScriptEngine* engine);
     ~XMLHttpRequestClass();
 
-    static const int MAXIMUM_REDIRECTS = 5;
+    /// <code>"Bearer &lt;token&gt;"</code> of the signed-in metaverse account for a request under the metaverse server's
+    /// /api/ made by an Interface or Agent script, or empty. Client entity scripts come from whatever domain is visited, and
+    /// server entity scripts from anyone who may rez there, so neither may act as the account.
+    static QByteArray metaverseAuthorization(ScriptEngine* engine, const QUrl& url);
+    /// Same scheme, host and port, the port defaulting for http and https
+    static bool isSameOrigin(const QUrl& a, const QUrl& b);
 
     /*@jsdoc
      * <p>The state of an XMLHttpRequest.</p>
@@ -230,9 +248,9 @@ public:
     QString getStatusText() const;
 
     ScriptValue getOnTimeout() const { return _onTimeout; }
-    void setOnTimeout(const ScriptValue& function) { _onTimeout = function; }
+    void setOnTimeout(const ScriptValue& function);
     ScriptValue getOnReadyStateChange() const { return _onReadyStateChange; }
-    void setOnReadyStateChange(const ScriptValue& function) { _onReadyStateChange = function; }
+    void setOnReadyStateChange(const ScriptValue& function);
 
 public slots:
 
@@ -244,7 +262,8 @@ public slots:
 
     /*@jsdoc
      * Sets the value of an HTTP request header. Must be called after {@link XMLHttpRequest.open} but before 
-     * {@link XMLHttpRequest.send};
+     * {@link XMLHttpRequest.send}. Leading and trailing whitespace is removed from the value. Throws a
+     * <code>SyntaxError</code> if the name is not a valid header name or the value contains CR, LF or NUL.
      * @function XMLHttpRequest.setRequestHeader
      * @param {string} name - The name of the header to set.
      * @param {string} value - The value of the header.
@@ -316,6 +335,9 @@ private:
     ScriptValue _responseData;
     ScriptValue _onTimeout;
     ScriptValue _onReadyStateChange;
+    // The script environment each handler was assigned in, which it runs in, as a timer runs in the one it was set in
+    ScriptEnvironmentPointer _onTimeoutEnvironment;
+    ScriptEnvironmentPointer _onReadyStateChangeEnvironment;
     ReadyState _readyState { XMLHttpRequestClass::UNSENT };
 
     /*@jsdoc
@@ -371,12 +393,15 @@ private:
 
     int _timeout { 0 };
     QTimer _timer;
-    int _numRedirects { 0 };
+
+    // The script URLs of the code that opened the request, and the script credential send() attached for them
+    QList<QUrl> _credentialScope;
+    QByteArray _authorization;
 
 private slots:
     void requestFinished();
+    void requestRedirected(const QUrl& target);
     void requestError(QNetworkReply::NetworkError code);
-    void requestMetaDataChanged();
     void requestDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
     void requestTimeout();
 };

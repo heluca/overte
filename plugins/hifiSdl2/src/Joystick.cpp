@@ -11,6 +11,8 @@
 
 #include "Joystick.h"
 
+#include <glm/glm.hpp>
+
 #include <PathUtils.h>
 
 const float CONTROLLER_THRESHOLD = 0.3f;
@@ -21,15 +23,10 @@ Joystick::Joystick(SDL_JoystickID instanceId, SDL_GameController* sdlGameControl
         InputDevice("GamePad"),
     _sdlGameController(sdlGameController),
     _sdlJoystick(SDL_GameControllerGetJoystick(_sdlGameController)),
-    _sdlHaptic(SDL_HapticOpenFromJoystick(_sdlJoystick)),
     _instanceId(instanceId)
 {
-    if (!_sdlHaptic) {
-        qDebug() << "SDL Haptic Open Failure: " << QString(SDL_GetError());
-    } else {
-        if (SDL_HapticRumbleInit(_sdlHaptic) != 0) {
-            qDebug() << "SDL Haptic Rumble Init Failure: " << QString(SDL_GetError());
-        }
+    if (!SDL_GameControllerHasRumble(_sdlGameController)) {
+        qDebug() << "Game controller" << SDL_GameControllerName(_sdlGameController) << "has no rumble support";
     }
 }
 
@@ -38,9 +35,6 @@ Joystick::~Joystick() {
 }
 
 void Joystick::closeJoystick() {
-    if (_sdlHaptic) {
-        SDL_HapticClose(_sdlHaptic);
-    }
     SDL_GameControllerClose(_sdlGameController);
 }
 
@@ -73,10 +67,14 @@ void Joystick::handleButtonEvent(const SDL_ControllerButtonEvent& event) {
 }
 
 bool Joystick::triggerHapticPulse(float strength, float duration, uint16_t index) {
-    if (SDL_HapticRumblePlay(_sdlHaptic, strength, duration) != 0) {
-        return false;
-    }
-    return true;
+    // SDL_GameControllerRumble drives the controller's own motors through the game controller
+    // driver (XInput, hidapi for DualShock/DualSense, ...). The legacy SDL_Haptic rumble it replaces
+    // only worked for devices exposed through the OS force feedback API, which excludes every
+    // PlayStation controller on macOS.
+    const float MAX_RUMBLE = 65535.0f;
+    uint16_t rumble = (uint16_t)(glm::clamp(strength, 0.0f, 1.0f) * MAX_RUMBLE);
+    uint32_t durationMs = (uint32_t)glm::max(duration, 0.0f);
+    return SDL_GameControllerRumble(_sdlGameController, rumble, rumble, durationMs) == 0;
 }
 
 controller::Input::NamedVector Joystick::getAvailableInputs() const {

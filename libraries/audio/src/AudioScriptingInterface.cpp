@@ -18,6 +18,9 @@
 #include <shared/QtHelpers.h>
 
 #include "ScriptAudioInjector.h"
+#include <ResourceManager.h>
+#include <Scriptable.h>
+#include <ScriptCredentials.h>
 #include <ScriptEngine.h>
 #include <ScriptEngineCast.h>
 #include <ScriptEngineLogging.h>
@@ -81,6 +84,40 @@ ScriptAudioInjector* AudioScriptingInterface::playSound(SharedSoundPointer sound
         qCDebug(scriptengine) << "AudioScriptingInterface::playSound called with null Sound object.";
         return nullptr;
     }
+}
+
+AudioStreamCredential AudioScriptingInterface::scriptCredentialFor(const QUrl& url) {
+    AudioStreamCredential credential;
+    auto engine = Scriptable::engine();
+    if (!DependencyManager::isSet<ScriptCredentials>() || !engine || !engine->manager()) {
+        return credential;
+    }
+    const QList<QUrl> scope = engine->manager()->scriptCredentialScope();
+    credential.authorization = ScriptCredentials::find(url, scope);
+    credential.appliesTo = [scope, authorization = credential.authorization](const QUrl& target) {
+        return ScriptCredentials::find(target, scope) == authorization;
+    };
+    return credential;
+}
+
+ScriptAudioInjector* AudioScriptingInterface::playStream(const QString& url, const AudioInjectorOptions& injectorOptions) {
+    AudioInjectorOptions optionsCopy = injectorOptions;
+    optionsCopy.ambisonic = false;
+
+    // Looked up here, on the script thread, for the URL the stream will request
+    QUrl streamURL(url);
+    AudioStreamCredential credential;
+    auto engine = Scriptable::engine();
+    if (DependencyManager::isSet<ScriptCredentials>() && engine && engine->manager()) {
+        streamURL = DependencyManager::get<ResourceManager>()->normalizeURL(streamURL);
+        credential = scriptCredentialFor(streamURL);
+    }
+
+    auto injector = DependencyManager::get<AudioInjectorManager>()->playStream(streamURL, optionsCopy, credential);
+    if (!injector) {
+        return nullptr;
+    }
+    return new ScriptAudioInjector(injector);
 }
 
 void AudioScriptingInterface::setStereoInput(bool stereo) {

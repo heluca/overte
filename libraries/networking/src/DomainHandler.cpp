@@ -14,6 +14,7 @@
 
 #include <math.h>
 
+#include <LogHandler.h>
 #include <PathUtils.h>
 
 #include <shared/QtHelpers.h>
@@ -28,6 +29,7 @@
 #include "DomainAccountManager.h"
 #include "SockAddr.h"
 #include "NodeList.h"
+#include "ScriptCredentials.h"
 #include "udt/Packet.h"
 #include "udt/PacketHeaders.h"
 #include "NLPacket.h"
@@ -187,6 +189,16 @@ void DomainHandler::setSockAddr(const SockAddr& sockAddr, const QString& hostnam
     _domainURL.setScheme(URL_SCHEME_OVERTE);
     _domainURL.setHost(hostname);
     _domainURL.setPort(_sockAddr.getPort());
+}
+
+// The packets only the domain server sends are unsourced, so LimitedNodeList accepts them from any socket.
+bool DomainHandler::isFromDomainServer(ReceivedMessage& message) const {
+    if (message.getSenderSockAddr() == _sockAddr) {
+        return true;
+    }
+    HIFI_FCDEBUG(networking(), "Ignoring" << message.getType() << "from" << message.getSenderSockAddr()
+        << "which is not the domain server at" << _sockAddr);
+    return false;
 }
 
 void DomainHandler::setUUID(const QUuid& uuid) {
@@ -443,6 +455,10 @@ void DomainHandler::requestDomainSettings() {
 }
 
 void DomainHandler::processSettingsPacketList(QSharedPointer<ReceivedMessage> packetList) {
+    if (!isFromDomainServer(*packetList)) {
+        return;
+    }
+
     // stop our settings timer since we successfully requested the settings we need
     _settingsTimer.stop();
     
@@ -451,7 +467,11 @@ void DomainHandler::processSettingsPacketList(QSharedPointer<ReceivedMessage> pa
     _settingsObject = QJsonDocument::fromJson(data).object();
     
     if (!_settingsObject.isEmpty()) {
-        qCDebug(networking) << "Received domain settings: \n" << _settingsObject;
+        QJsonObject loggedSettings = _settingsObject;
+        if (loggedSettings.contains(ScriptCredentials::SETTINGS_GROUP)) {
+            loggedSettings[ScriptCredentials::SETTINGS_GROUP] = "(not logged)";
+        }
+        qCDebug(networking) << "Received domain settings: \n" << loggedSettings;
     }
 
     emit settingsReceived(_settingsObject);
@@ -554,8 +574,8 @@ bool DomainHandler::reasonSuggestsDomainLogin(ConnectionRefusedReason reasonCode
 
 void DomainHandler::processDomainServerConnectionDeniedPacket(QSharedPointer<ReceivedMessage> message) {
 
-    // Ignore any residual packets from previous domain.
-    if (!message->getSenderSockAddr().getAddress().isEqual(_sockAddr.getAddress())) {
+    // Also drops residual packets from a previous domain.
+    if (!isFromDomainServer(*message)) {
         return;
     }
 

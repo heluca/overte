@@ -20,6 +20,7 @@
 #include "ScriptEngine.h"
 #include "ScriptEngineCast.h"
 #include "ScriptEngineLogging.h"
+#include "ScriptEnvironment.h"
 #include "ScriptValue.h"
 #include "ScriptManager.h"
 
@@ -89,6 +90,26 @@ void WebSocketClass::close(QWebSocketProtocol::CloseCode closeCode, QString reas
     _webSocket->close(closeCode, reason);
 }
 
+void WebSocketClass::setOnClose(const ScriptValue& eventFunction) {
+    _onCloseEvent = eventFunction;
+    _onCloseEnvironment = _engine->currentEnvironment();
+}
+
+void WebSocketClass::setOnError(const ScriptValue& eventFunction) {
+    _onErrorEvent = eventFunction;
+    _onErrorEnvironment = _engine->currentEnvironment();
+}
+
+void WebSocketClass::setOnMessage(const ScriptValue& eventFunction) {
+    _onMessageEvent = eventFunction;
+    _onMessageEnvironment = _engine->currentEnvironment();
+}
+
+void WebSocketClass::setOnOpen(const ScriptValue& eventFunction) {
+    _onOpenEvent = eventFunction;
+    _onOpenEnvironment = _engine->currentEnvironment();
+}
+
 /*@jsdoc
  * Called when the connection closes.
  * @callback WebSocket~onCloseCallback
@@ -110,6 +131,7 @@ void WebSocketClass::handleOnClose() {
         arg.setProperty("reason", _webSocket->closeReason());
         arg.setProperty("wasClean", !hasError);
         args << arg;
+        ScriptEnvironmentScope environmentScope(_engine, _onCloseEnvironment);
         _onCloseEvent.call(ScriptValue(), args);
     }
 }
@@ -167,6 +189,7 @@ void WebSocketClass::handleOnClose() {
  */
 void WebSocketClass::handleOnError(QAbstractSocket::SocketError error) {
     if (_onErrorEvent.isFunction()) {
+        ScriptEnvironmentScope environmentScope(_engine, _onErrorEnvironment);
         _onErrorEvent.call();
     }
 }
@@ -187,6 +210,7 @@ void WebSocketClass::handleOnMessage(const QString& message) {
         ScriptValue arg = _engine->newObject();
         arg.setProperty("data", message);
         args << arg;
+        ScriptEnvironmentScope environmentScope(_engine, _onMessageEnvironment);
         _onMessageEvent.call(ScriptValue(), args);
     }
 }
@@ -201,6 +225,7 @@ void WebSocketClass::handleOnBinaryMessage(const QByteArray& message) {
         }
         arg.setProperty("data", arrayBuffer);
         args << arg;
+        ScriptEnvironmentScope environmentScope(_engine, _onMessageEnvironment);
         _onMessageEvent.call(ScriptValue(), args);
     }
 }
@@ -211,6 +236,7 @@ void WebSocketClass::handleOnBinaryMessage(const QByteArray& message) {
  */
 void WebSocketClass::handleOnOpen() {
     if (_onOpenEvent.isFunction()) {
+        ScriptEnvironmentScope environmentScope(_engine, _onOpenEnvironment);
         _onOpenEvent.call();
     }
 }

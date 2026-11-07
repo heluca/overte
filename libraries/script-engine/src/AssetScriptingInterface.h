@@ -37,6 +37,16 @@
  * compressed.</p>
  * <p>The client cache can be accessed directly, using <code>"atp:"</code> or <code>"cache:"</code> URLs. Interface, avatar, 
  * and assignment client scripts can write to the cache. All script types can read from the cache.</p>
+ * <p><code>getAsset</code>, <code>putAsset</code>, <code>getMapping</code>, <code>setMapping</code>,
+ * <code>resolveAsset</code>, <code>compressData</code> and <code>decompressData</code> return a <code>Promise</code> when
+ * called without a callback (or with <code>undefined</code> or <code>null</code> in its place), and
+ * <code>undefined</code> when given one. The promise resolves with what the callback would get as its result. It rejects
+ * with an <code>Error</code> whose message is what the callback would get as its error, carrying the result's properties
+ * if the result is an object; with a <code>TypeError</code> if an argument is invalid, where the callback form throws; and
+ * with a <code>TypeError</code> if a callback is given that is not a function.</p>
+ * <p>The promise and its errors come from the main script context. Where an entity script runs in a context of its own,
+ * <code>instanceof Promise</code> and <code>instanceof Error</code> are <code>false</code> there: check
+ * <code>error.name</code> instead.</p>
  *
  * @namespace Assets
  *
@@ -47,6 +57,7 @@
  * @hifi-assignment-client
  */
 
+class ScriptCompletion;
 class ScriptManager;
 
 /// Provides the <code><a href="https://apidocs.overte.org/Assets.html">Assets</a></code> scripting API
@@ -131,7 +142,20 @@ public:
      * @param {string} hash - The hash in the asset server.
      * @param {Assets~setMappingCallback} callback - The function to call upon completion.
      */
-    Q_INVOKABLE void setMapping(QString path, QString hash, const ScriptValue& callback);
+    /*@jsdoc
+     * What the promise returned by {@link Assets.setMapping} resolves with, and the callback's second argument.
+     * @typedef {object} Assets.SetMappingResult
+     * @property {number} error - The error code: <code>0</code> once the mapping is set.
+     */
+    /*@jsdoc
+     * Sets a path-to-hash mapping within the asset server.
+     * @function Assets.setMapping
+     * @param {string} path - A user-friendly path for the file in the asset server, without leading <code>"atp:"</code>.
+     * @param {string} hash - The hash in the asset server.
+     * @returns {Promise<Assets.SetMappingResult>} Resolves once the path-to-hash mapping is set; rejects with an
+     *     <code>Error</code> describing the error, whose <code>error</code> property is the error code, if it isn't.
+     */
+    Q_INVOKABLE ScriptValue setMapping(QString path, QString hash, const ScriptValue& callback = ScriptValue());
 
     /*@jsdoc
      * Called when an {@link Assets.getMapping} call is complete.
@@ -155,7 +179,15 @@ public:
      *     });
      * }
      */
-    Q_INVOKABLE void getMapping(QString path, const ScriptValue& callback);
+    /*@jsdoc
+     * Gets the hash for a path within the asset server. The hash is for the unbaked or baked version of the
+     * asset, according to the asset server setting for the particular path.
+     * @function Assets.getMapping
+     * @param {string} path - The path to a file in the asset server to get the hash of.
+     * @returns {Promise<string>} Resolves with the hash if the path was found; rejects with an <code>Error</code>
+     *     describing the error if it wasn't.
+     */
+    Q_INVOKABLE ScriptValue getMapping(QString path, const ScriptValue& callback = ScriptValue());
 
     /*@jsdoc
      * Called when an {@link Assets.setBakingEnabled} call is complete.
@@ -227,7 +259,23 @@ public:
      *     }
      * );
      */
-    Q_INVOKABLE void getAsset(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback = ScriptValue());
+    /*@jsdoc
+     * Downloads content from the asset server.
+     * @function Assets.getAsset
+     * @param {string|Assets.GetOptions} source - What to download and download options. If a string, the mapped path or hash 
+     *     to download, optionally including a leading <code>"atp:"</code>.
+     * @returns {Promise<Assets.GetResult>} Resolves with information on and the content downloaded; rejects with an
+     *     <code>Error</code> describing the error if the content wasn't downloaded.
+     * @example <caption>Retrieve a string from the asset server, in a module script (<code>.mjs</code>).</caption>
+     * try {
+     *     const result = await Assets.getAsset({ url: "/assetsExamples/helloWorld.txt", responseType: "text" });
+     *     print("Data: " + result.response);
+     * } catch (error) {
+     *     print("ERROR: Data not downloaded: " + error.message);
+     * }
+     */
+    Q_INVOKABLE ScriptValue getAsset(const ScriptValue& options, const ScriptValue& scope = ScriptValue(),
+                                     const ScriptValue& callback = ScriptValue());
 
     /*@jsdoc
      * Called when an {@link Assets.putAsset} call is complete.
@@ -264,7 +312,16 @@ public:
      *     }
      * );
      */
-    Q_INVOKABLE void putAsset(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback = ScriptValue());
+    /*@jsdoc
+     * Uploads content to the asset server and sets a path-to-hash mapping.
+     * @function Assets.putAsset
+     * @param {string|Assets.PutOptions} options - The content to upload and upload options. If a string, the value of the
+     *     string is uploaded but a path-to-hash mapping is not set.
+     * @returns {Promise<Assets.PutResult>} Resolves with information on the content uploaded; rejects with an
+     *     <code>Error</code> describing the error if the content wasn't uploaded or the mapping wasn't set.
+     */
+    Q_INVOKABLE ScriptValue putAsset(const ScriptValue& options, const ScriptValue& scope = ScriptValue(),
+                                     const ScriptValue& callback = ScriptValue());
 
     /*@jsdoc
      * Called when an {@link Assets.deleteAsset} call is complete.
@@ -315,7 +372,16 @@ public:
      *     }
      * );
      */
-    Q_INVOKABLE void resolveAsset(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback = ScriptValue());
+    /*@jsdoc
+     * Resolves and returns information on a hash or a path in the asset server.
+     * @function Assets.resolveAsset
+     * @param {string|Assets.ResolveOptions} source - The hash or path to resolve if a string, otherwise an object specifying 
+     *     what to resolve. If a string, it may have a leading <code>"atp:"</code>.
+     * @returns {Promise<Assets.ResolveResult>} Resolves with information on the hash or path resolved; rejects with an
+     *     <code>Error</code> describing the error if it wasn't resolved.
+     */
+    Q_INVOKABLE ScriptValue resolveAsset(const ScriptValue& options, const ScriptValue& scope = ScriptValue(),
+                                         const ScriptValue& callback = ScriptValue());
     
     /*@jsdoc
      * Called when an {@link Assets.decompressData} call is complete.
@@ -336,7 +402,15 @@ public:
      *     in a string. If the name of a function or a function identifier, it must be a member of the scope specified by
      *     <code>scopeOrCallback</code>.</p>
      */
-    Q_INVOKABLE void decompressData(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback = ScriptValue());
+    /*@jsdoc
+     * Decompresses data in memory using gunzip.
+     * @function Assets.decompressData
+     * @param {Assets.DecompressOptions} source - What to decompress and decompression options.
+     * @returns {Promise<Assets.DecompressResult>} Resolves with information on and the decompressed data; rejects with an
+     *     <code>Error</code> describing the error if the data couldn't be decompressed.
+     */
+    Q_INVOKABLE ScriptValue decompressData(const ScriptValue& options, const ScriptValue& scope = ScriptValue(),
+                                           const ScriptValue& callback = ScriptValue());
     
     /*@jsdoc
      * Called when an {@link Assets.compressData} call is complete.
@@ -358,7 +432,16 @@ public:
      *     in a string. If the name of a function or a function identifier, it must be a member of the scope specified by
      *     <code>scopeOrCallback</code>.</p>
      */
-    Q_INVOKABLE void compressData(const ScriptValue& options, const ScriptValue& scope, const ScriptValue& callback = ScriptValue());
+    /*@jsdoc
+     * Compresses data in memory using gzip.
+     * @function Assets.compressData
+     * @param {string|ArrayBuffer|Assets.CompressOptions} source - What to compress and compression options. If a string or 
+     *     ArrayBuffer, the data to compress.
+     * @returns {Promise<Assets.CompressResult>} Resolves with information on and the compressed data; rejects with an
+     *     <code>Error</code> describing the error if the data couldn't be compressed.
+     */
+    Q_INVOKABLE ScriptValue compressData(const ScriptValue& options, const ScriptValue& scope = ScriptValue(),
+                                         const ScriptValue& callback = ScriptValue());
     
     /*@jsdoc
      * Initializes the cache if it isn't already initialized.
@@ -544,13 +627,9 @@ public:
     Q_INVOKABLE void saveToCache(const QUrl& url, const QByteArray& data, const QVariantMap& metadata,
                                  const ScriptValue& scope, const ScriptValue& callback = ScriptValue());
 protected:
-    ScriptValue jsBindCallback(const ScriptValue& scope, const ScriptValue& callback = ScriptValue());
     Promise jsPromiseReady(Promise promise, const ScriptValue& scope, const ScriptValue& callback = ScriptValue());
-
-    void jsCallback(const ScriptValue& handler, const ScriptValue& error, const QVariantMap& result);
-    void jsCallback(const ScriptValue& handler, const ScriptValue& error, const ScriptValue& result);
+    Promise jsPromiseReady(Promise promise, const ScriptCompletion& completion);
     bool jsVerify(bool condition, const QString& error);
-    ScriptManager *_scriptManager;
 };
 
 #endif // hifi_AssetScriptingInterface_h

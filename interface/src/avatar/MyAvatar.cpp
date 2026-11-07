@@ -6319,6 +6319,7 @@ void MyAvatar::beginSit(const glm::vec3& position, const glm::quat& rotation) {
     }
 
     if (!_characterController.getSeated()) {
+        _feetPositionBeforeSit = getWorldFeetPosition();
         _characterController.setSeated(true);
         setCollisionsEnabled(false);
         setHMDLeanRecenterEnabled(false);

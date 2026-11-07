@@ -19,6 +19,10 @@ public:
     MixedAudioStream(int numFramesCapacity, int numStaticJitterFrames = -1);
 
     float getNextOutputFrameLoudness() const { return _ringBuffer.getNextOutputFrameLoudness(); }
+
+    // Reads up to maxSamples of what is in the ring, without popSamples' jitter buffer and starve bookkeeping, for a
+    // reader that takes every frame as it arrives. Returns the number of samples read.
+    int readAvailableSamples(int16_t* destination, int maxSamples);
 };
 
 #endif // hifi_MixedAudioStream_h

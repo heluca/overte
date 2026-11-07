@@ -29,10 +29,19 @@ private slots:
     void testRequire();
     void testScriptRequire();
     void testRequireInfinite();
+    void testMetaverseTokenRedirect();
+    void testMetaverseTokenContexts();
+    void testRequestHeaderValidation();
+    void testAtpRequest();
 
 
 private:
-    ScriptManagerPointer makeManager(const QString &source, const QString &filename);
+    ScriptManagerPointer makeManager(const QString &source, const QString &filename,
+                                     ScriptManager::Context context = ScriptManager::CLIENT_SCRIPT);
+    // Runs the script with the metaverse server at the base URL and a signed-in account, and returns what it printed
+    QString runWithMetaverseToken(const QString& base, const QString& source, ScriptManager::Context context);
+    // Runs a client script and returns what it printed
+    QString runPrinting(const QString& source, const QString& filename);
 
 };
 

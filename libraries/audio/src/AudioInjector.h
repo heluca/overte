@@ -28,6 +28,7 @@
 
 #include "AudioInjectorLocalBuffer.h"
 #include "AudioInjectorOptions.h"
+#include "AudioStreamSource.h"
 #include "AudioHRTF.h"
 #include "AudioFOA.h"
 #include "Sound.h"
@@ -56,6 +57,7 @@ class AudioInjector : public QObject, public QEnableSharedFromThis<AudioInjector
 public:
     AudioInjector(SharedSoundPointer sound, const AudioInjectorOptions& injectorOptions);
     AudioInjector(AudioDataPointer audioData, const AudioInjectorOptions& injectorOptions);
+    AudioInjector(AudioStreamSourcePointer stream, const AudioInjectorOptions& injectorOptions);
     ~AudioInjector();
 
     bool isFinished() const { return (stateHas(AudioInjectorState::Finished)); }
@@ -98,6 +100,7 @@ signals:
 
 private:
     int64_t injectNextFrame();
+    bool readStreamFrame(QByteArray& decodedAudio);
     bool inject(bool(AudioInjectorManager::*injection)(const AudioInjectorPointer&));
     bool injectLocally();
     void sendStopInjectorPacket();
@@ -106,6 +109,7 @@ private:
 
     const SharedSoundPointer _sound;
     AudioDataPointer _audioData;
+    const AudioStreamSourcePointer _stream;
     AudioInjectorOptions _options;
     AudioInjectorState _state { AudioInjectorState::NotFinished };
     bool _hasSentFirstFrame { false };

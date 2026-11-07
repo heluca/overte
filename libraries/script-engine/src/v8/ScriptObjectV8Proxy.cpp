@@ -20,6 +20,7 @@
 #include <QtCore/QSharedPointer>
 
 #include "../ScriptEngineLogging.h"
+#include "../ScriptEnvironment.h"
 
 #include "ScriptContextV8Wrapper.h"
 #include "ScriptValueV8Wrapper.h"
@@ -689,8 +690,10 @@ V8ScriptValue ScriptObjectV8Proxy::property(const V8ScriptValue& object, const V
                                                         //V8TODO ScriptEngine::ExcludeDeleteLater |
                                                         ScriptEngine::PreferExistingWrapperObject;
             // It's not necessarily new, newQObject looks for it first in object wrapper map
-            // V8TODO: won't ScriptEngine::ScriptOwnership cause trouble here?
-            return ScriptObjectV8Proxy::newQObject(_engine, proxy, ScriptEngine::ScriptOwnership, options);
+            // The wrapper lives as long as the proxy, which is deleted with the object it belongs to or with the engine. A
+            // script-owned wrapper is collected once the last handler is disconnected, and the proxy's deletion is deferred,
+            // so this would hand out the dead wrapper's empty handle on the next access (#84).
+            return ScriptObjectV8Proxy::newQObject(_engine, proxy, ScriptEngine::QtOwnership, options);
         }
     }
     return V8ScriptValue(_engine, v8::Null(isolate));
@@ -931,6 +934,11 @@ ScriptMethodV8Proxy::ScriptMethodV8Proxy(ScriptEngineV8* engine, QObject* object
 }
 
 ScriptMethodV8Proxy::~ScriptMethodV8Proxy() {
+    // weakHandleCallback has reset the handle already. The deferred delete it posts can run once nothing holds the
+    // isolate lock, e.g. from an Agent's event loop after ScriptManager::run() returned, so V8 is not entered then.
+    if (_objectLifetime.IsEmpty()) {
+        return;
+    }
     auto isolate = _engine->getIsolate();
     Q_ASSERT(isolate->IsCurrent());
     v8::HandleScope handleScope(isolate);
@@ -1352,6 +1360,8 @@ int ScriptSignalV8Proxy::qt_metacall(QMetaObject::Call call, int id, void** argu
                     v8This = functionContext->Global();
                 }
 
+                MicrotaskCheckpointScopeV8 microtaskCheckpointScope(_engine);
+                ScriptEnvironmentScope environmentScope(_engine, conn.environment);
                 v8::TryCatch tryCatch(isolate);
                 auto maybeResult = callback->Call(functionContext, v8This, numArgs, args);
                 Q_UNUSED(maybeResult); // Signals don't have return values
@@ -1514,7 +1524,7 @@ void ScriptSignalV8Proxy::connect(ScriptValue arg0, ScriptValue arg1) {
     }
 
     // add this to our internal list of connections
-    Connection newConnection(callbackThis, callback);
+    Connection newConnection(callbackThis, callback, _engine->currentEnvironment());
 
     withWriteLock([&]{
         _connections.append(newConnection);
@@ -1589,7 +1599,7 @@ void ScriptSignalV8Proxy::disconnect(ScriptValue arg0, ScriptValue arg1) {
     ScriptEngine::QObjectWrapOptions options = ScriptEngine::ExcludeSuperClassContents |
                                                ScriptEngine::PreferExistingWrapperObject;
     // It's not necessarily new, newQObject looks for it first in object wrapper map, and for already existing signal it should be found there
-    V8ScriptValue v8ThisObject = ScriptObjectV8Proxy::newQObject(_engine, this, ScriptEngine::ScriptOwnership, options);
+    V8ScriptValue v8ThisObject = ScriptObjectV8Proxy::newQObject(_engine, this, ScriptEngine::QtOwnership, options);
     if (!destFunction->Get(destFunctionContext, destDataName).ToLocal(&destData)) {
         Q_ASSERT(false);
     }

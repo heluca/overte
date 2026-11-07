@@ -13,6 +13,8 @@
 
 #include "Agent.h"
 
+#include <algorithm>
+
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEventLoop>
 #include <QtCore/QStandardPaths>
@@ -27,6 +29,7 @@
 #include <AudioInjectorManager.h>
 #include <AssetClient.h>
 #include <DebugDraw.h>
+#include <EntityScriptClient.h>
 #include <EntityScriptingInterface.h>
 #include <LocationScriptingInterface.h>
 #include <AudioScriptingInterface.h>
@@ -37,6 +40,7 @@
 #include <ResourceCache.h>
 #include <ResourceScriptingInterface.h>
 #include <ScriptCache.h>
+#include <ScriptCredentials.h>
 #include <ScriptEngine.h>
 #include <ScriptEngines.h>
 #include <ScriptManager.h>
@@ -51,10 +55,8 @@
 #include <recording/Recorder.h>
 #include <recording/Frame.h>
 
-#include <plugins/CodecPlugin.h>
 #include <plugins/PluginManager.h>
 
-#include <WebSocketServerClass.h>
 #include <EntityScriptingInterface.h> // TODO: consider moving to scriptengine.h
 
 #include <hfm/ModelFormatRegistry.h>
@@ -62,7 +64,7 @@
 #include "entities/AssignmentParentFinder.h"
 #include "AssignmentDynamicFactory.h"
 #include <recording/RecordingScriptingInterface.h>
-#include "AbstractAudioInterface.h"
+#include "AgentAvatarAudio.h"
 #include "AgentScriptingInterface.h"
 
 static const int RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES = 10;
@@ -70,8 +72,8 @@ static const int RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES = 10;
 Agent::Agent(ReceivedMessage& message) :
     ThreadedAssignment(message),
     _receivedAudioStream(RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES, RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES),
-    _audioGate(AudioConstants::SAMPLE_RATE, AudioConstants::MONO),
-    _avatarAudioTimer(this)
+    _scriptRequestTimeout(this),
+    _scriptRetryTimer(this)
 {
     DependencyManager::set<ScriptableAvatar>();
 
@@ -81,6 +83,7 @@ Agent::Agent(ReceivedMessage& message) :
     DependencyManager::set<AnimationCache>();
     DependencyManager::set<AnimationCacheScriptingInterface>();
     DependencyManager::set<EntityScriptingInterface>(false);
+    DependencyManager::set<EntityScriptClient>();
 
     DependencyManager::set<ResourceScriptingInterface>();
     DependencyManager::set<UserActivityLoggerScriptingInterface>();
@@ -90,6 +93,8 @@ Agent::Agent(ReceivedMessage& message) :
 
     DependencyManager::set<ResourceManager>();
     DependencyManager::set<PluginManager>()->instantiate();
+    _avatarAudio = std::make_unique<AgentAvatarAudio>(*this, _receivedAudioStream);
+    connect(_avatarAudio.get(), &AgentAvatarAudio::voiceStreamFinished, this, &Agent::voiceStreamFinished);
 
     DependencyManager::registerInheritance<SpatialParentFinder, AssignmentParentFinder>();
 
@@ -109,6 +114,8 @@ Agent::Agent(ReceivedMessage& message) :
     DependencyManager::set<ModelFormatRegistry>();
     DependencyManager::set<ModelCache>();
 
+    DependencyManager::set<ScriptCredentials>();
+
     // Needed to ensure the creation of the DebugDraw instance on the main thread
     DebugDraw::getInstance();
 
@@ -121,15 +128,18 @@ Agent::Agent(ReceivedMessage& message) :
     packetReceiver.registerListenerForTypes(
         { PacketType::OctreeStats, PacketType::EntityData, PacketType::EntityErase },
         PacketReceiver::makeSourcedListenerReference<Agent>(this, &Agent::handleOctreePacket));
-    packetReceiver.registerListener(PacketType::SelectedAudioFormat,
-        PacketReceiver::makeUnsourcedListenerReference<Agent>(this, &Agent::handleSelectedAudioFormat));
 
-    // 100Hz timer for audio
-    const int TARGET_INTERVAL_MSEC = 10; // 10ms
-    connect(&_avatarAudioTimer, &QTimer::timeout, this, &Agent::processAgentAvatarAudio);
-    _avatarAudioTimer.setSingleShot(false);
-    _avatarAudioTimer.setInterval(TARGET_INTERVAL_MSEC);
-    _avatarAudioTimer.setTimerType(Qt::PreciseTimer);
+    static const int SCRIPT_TIMEOUT_MS = 10000;
+    _scriptRequestTimeout.setSingleShot(true);
+    _scriptRequestTimeout.setInterval(SCRIPT_TIMEOUT_MS);
+    connect(&_scriptRequestTimeout, &QTimer::timeout, this, [this] {
+        qWarning() << "Failed to download script - request timed out.";
+        abandonScriptRequest();
+        retryScriptRequest();
+    });
+
+    _scriptRetryTimer.setSingleShot(true);
+    connect(&_scriptRetryTimer, &QTimer::timeout, this, &Agent::requestScript);
 }
 
 void Agent::playAvatarSound(SharedSoundPointer sound) {
@@ -142,7 +152,9 @@ void Agent::playAvatarSound(SharedSoundPointer sound) {
         // correct to do this, but need to figure out for sure, so commenting this
         // out until I verify.
         // _numAvatarSoundSentBytes = 0;
-        setAvatarSound(sound);
+        if (_avatarAudio) {
+            _avatarAudio->setAvatarSound(sound);
+        }
     }
 }
 
@@ -178,7 +190,102 @@ void Agent::handleOctreePacket(QSharedPointer<ReceivedMessage> message, SharedNo
 void Agent::handleAudioPacket(QSharedPointer<ReceivedMessage> message) {
     _receivedAudioStream.parseData(*message);
     _lastReceivedAudioLoudness = _receivedAudioStream.getNextOutputFrameLoudness();
+    if (_audioSink) {
+        const int MAX_SAMPLES = AudioConstants::NETWORK_FRAME_SAMPLES_STEREO;
+        int16_t samples[MAX_SAMPLES];
+        int numSamples;
+        // Frames concealed for packets lost before this one, then the packet's own audio. The stream puts 20 ms of
+        // zeros in its ring for a 10 ms silent packet, and the mixer sends a listener one packet every 10 ms, so a
+        // silent packet gives one of its two frames. The Agent clears the ring after every packet, so its jitter
+        // buffer never grows and the stream never drops silent frames to catch up.
+        int frames = _receivedAudioStream.getFramesAvailable();
+        if (message->getType() == PacketType::SilentAudioFrame) {
+            frames--;
+        }
+        while (frames-- > 0 && (numSamples = _receivedAudioStream.readAvailableSamples(samples, MAX_SAMPLES)) > 0) {
+            _audioSink->writeFrame(samples, numSamples);
+        }
+    }
     _receivedAudioStream.clearBuffer();
+}
+
+bool Agent::startAudioSink(const QUrl& url, int framesPerMessage, const AudioStreamCredential& credential) {
+    stopAudioSink();
+    auto sink = AudioStreamSink::create(url, AudioConstants::STEREO, framesPerMessage, credential);
+    if (!sink) {
+        return false;
+    }
+    const quint32 serial = ++_audioSinkSerial;
+    connect(sink.get(), &AudioStreamSink::finished, this, [this, serial](const QString& reason) {
+        // A sink that was stopped or replaced may still have its finished signal queued
+        if (serial != _audioSinkSerial || !_audioSink) {
+            return;
+        }
+        // Closed already, so destroying it does not wait
+        resetAudioSink();
+        emit audioSinkFinished(reason);
+    });
+    _audioSink = std::move(sink);
+    _audioSink->start();
+    return true;
+}
+
+void Agent::stopAudioSink() {
+    if (_audioSink) {
+        retireAudioSink();
+        emit audioSinkFinished("stopped");
+    }
+}
+
+void Agent::retireAudioSink() {
+    ++_audioSinkSerial;
+    if (!_audioSink) {
+        return;
+    }
+    // The close handshake runs on the sink's thread, for up to 500 ms when the server has stopped reading, while this
+    // thread sends the avatar's audio. The sink is destroyed once it has closed, when destroying it no longer waits.
+    AudioStreamSink* sink = _audioSink.get();
+    sink->disconnect(this);
+    connect(sink, &AudioStreamSink::closed, this, [this, sink] {
+        auto retired = std::find_if(_retiredAudioSinks.begin(), _retiredAudioSinks.end(),
+            [sink](const std::unique_ptr<AudioStreamSink>& candidate) { return candidate.get() == sink; });
+        if (retired != _retiredAudioSinks.end()) {
+            _retiredAudioSinks.erase(retired);
+        }
+    });
+    _retiredAudioSinks.push_back(std::move(_audioSink));
+    sink->stop();
+}
+
+void Agent::resetAudioSink() {
+    ++_audioSinkSerial;
+    if (_audioSink) {
+        _audioSink->disconnect(this);
+        _audioSink.reset();
+    }
+}
+
+bool Agent::playVoiceStream(const QUrl& url, int prebufferFrames, int idleTimeoutFrames,
+                            const AudioStreamCredential& credential) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    // The send loop reads the stream only while the agent is an avatar
+    if (!_isAvatar) {
+        qWarning() << "Agent.playVoiceStream: the agent is not an avatar; set Agent.isAvatar first";
+        return false;
+    }
+    auto voiceStream = AvatarVoiceStream::create(url, prebufferFrames, idleTimeoutFrames, credential);
+    if (!voiceStream || !_avatarAudio) {
+        return false;
+    }
+    _avatarAudio->playVoiceStream(std::move(voiceStream));
+    return true;
+}
+
+void Agent::stopVoiceStream() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (_avatarAudio) {
+        _avatarAudio->stopVoiceStream();
+    }
 }
 
 static const QString AGENT_LOGGING_NAME = "agent";
@@ -193,6 +300,7 @@ void Agent::run() {
     auto nodeList = DependencyManager::get<NodeList>();
 
     connect(&nodeList->getDomainHandler(), &DomainHandler::connectedToDomain, this, &Agent::requestScript);
+    connect(&nodeList->getDomainHandler(), &DomainHandler::settingsReceived, this, &Agent::handleSettings);
 
     ThreadedAssignment::commonInit(AGENT_LOGGING_NAME, NodeType::Agent);
 
@@ -212,9 +320,17 @@ void Agent::run() {
     });
 }
 
+void Agent::handleSettings(const QJsonObject& settingsObject) {
+    ScriptCredentials::loadDomainSettings(settingsObject);
+}
+
 void Agent::requestScript() {
     auto nodeList = DependencyManager::get<NodeList>();
     disconnect(&nodeList->getDomainHandler(), &DomainHandler::connectedToDomain, this, &Agent::requestScript);
+
+    if (_isFinished) {
+        return;
+    }
 
     // figure out the URL for the script for this agent assignment
     QUrl scriptURL;
@@ -230,7 +346,7 @@ void Agent::requestScript() {
     // make sure this is not a script request for the file scheme
     if (scriptURL.scheme() == HIFI_URL_SCHEME_FILE) {
         qWarning() << "Cannot load script for Agent from local filesystem.";
-        scriptRequestFinished();
+        retryScriptRequest();
         return;
     }
 
@@ -239,15 +355,12 @@ void Agent::requestScript() {
 
     if (!request) {
         qWarning() << "Could not create ResourceRequest for Agent script at" << scriptURL.toString();
-        scriptRequestFinished();
+        retryScriptRequest();
         return;
     }
 
-    // setup a timeout for script request
-    static const int SCRIPT_TIMEOUT_MS = 10000;
-    _scriptRequestTimeout = new QTimer;
-    connect(_scriptRequestTimeout, &QTimer::timeout, this, &Agent::scriptRequestFinished);
-    _scriptRequestTimeout->start(SCRIPT_TIMEOUT_MS);
+    _scriptRequest = request;
+    _scriptRequestTimeout.start();
 
     connect(request, &ResourceRequest::finished, this, &Agent::scriptRequestFinished);
 
@@ -278,8 +391,14 @@ void Agent::nodeActivated(SharedNodePointer activatedNode) {
 
         _pendingScriptRequest = nullptr;
     }
-    if (activatedNode->getType() == NodeType::AudioMixer) {
-        negotiateAudioFormat();
+    if (activatedNode->getType() == NodeType::AudioMixer && _avatarAudio) {
+        _avatarAudio->negotiateAudioFormat();
+    }
+    if (activatedNode->getType() == NodeType::AvatarMixer) {
+        // An identity sent before the mixer was active went nowhere, yet still cleared the changed flag.
+        if (auto scriptableAvatar = DependencyManager::get<ScriptableAvatar>()) {
+            scriptableAvatar->markIdentityDataChanged();
+        }
     }
 }
 
@@ -290,69 +409,34 @@ void Agent::nodeKilled(SharedNodePointer killedNode) {
     }
 }
 
-void Agent::negotiateAudioFormat() {
-    auto nodeList = DependencyManager::get<NodeList>();
-    auto negotiateFormatPacket = NLPacket::create(PacketType::NegotiateAudioFormat);
-    const auto& codecPlugins = PluginManager::getInstance()->getCodecPlugins();
-    quint8 numberOfCodecs = (quint8)codecPlugins.size();
-    negotiateFormatPacket->writePrimitive(numberOfCodecs);
-    for (const auto& plugin : codecPlugins) {
-        auto codecName = plugin->getName();
-        negotiateFormatPacket->writeString(codecName);
-    }
-
-    // grab our audio mixer from the NodeList, if it exists
-    SharedNodePointer audioMixer = nodeList->soloNodeOfType(NodeType::AudioMixer);
-
-    if (audioMixer) {
-        // send off this mute packet
-        nodeList->sendPacket(std::move(negotiateFormatPacket), *audioMixer);
-    }
+// Unguarded on purpose: only a script reaches these, and the script engine is gone before _avatarAudio is reset.
+QStringList Agent::getAudioCodecs() const {
+    return _avatarAudio->getAudioCodecs();
 }
 
-void Agent::handleSelectedAudioFormat(QSharedPointer<ReceivedMessage> message) {
-    QString selectedCodecName = message->readString();
-    selectAudioFormat(selectedCodecName);
+void Agent::setAudioCodecs(const QStringList& audioCodecs) {
+    _avatarAudio->setAudioCodecs(audioCodecs);
 }
 
-void Agent::selectAudioFormat(const QString& selectedCodecName) {
-    if (_selectedCodecName == selectedCodecName) {
-        return;
-    }
-    _selectedCodecName = selectedCodecName;
+glm::vec3 Agent::getAudioPositionOffset() const {
+    return _avatarAudio->getAudioPositionOffset();
+}
 
-    qDebug() << "Selected Codec:" << _selectedCodecName;
-
-    // release any old codec encoder/decoder first...
-    if (_codec && _encoder) {
-        _codec->releaseEncoder(_encoder);
-        _encoder = nullptr;
-        _codec = nullptr;
-    }
-    _receivedAudioStream.cleanupCodec();
-
-    const auto& codecPlugins = PluginManager::getInstance()->getCodecPlugins();
-    for (const auto& plugin : codecPlugins) {
-        if (_selectedCodecName == plugin->getName()) {
-            _codec = plugin;
-            _receivedAudioStream.setupCodec(plugin, _selectedCodecName, AudioConstants::STEREO);
-            _encoder = plugin->createEncoder(AudioConstants::SAMPLE_RATE, AudioConstants::MONO);
-            qDebug() << "Selected Codec Plugin:" << _codec.get();
-            break;
-        }
-    }
+void Agent::setAudioPositionOffset(const glm::vec3& audioPositionOffset) {
+    _avatarAudio->setAudioPositionOffset(audioPositionOffset);
 }
 
 void Agent::scriptRequestFinished() {
     auto request = qobject_cast<ResourceRequest*>(sender());
 
-    // stop the script request timeout, if it's running
-    if (_scriptRequestTimeout) {
-        QMetaObject::invokeMethod(_scriptRequestTimeout, "stop");
-        _scriptRequestTimeout->deleteLater();
+    // a request abandoned on timeout can still report in
+    if (!request || request != _scriptRequest) {
+        return;
     }
+    _scriptRequest = nullptr;
+    _scriptRequestTimeout.stop();
 
-    if (request && request->getResult() == ResourceRequest::Success) {
+    if (request->getResult() == ResourceRequest::Success) {
         _scriptContents = request->getData();
         qInfo() << "Downloaded script:" << _scriptContents;
 
@@ -360,17 +444,33 @@ void Agent::scriptRequestFinished() {
         // to return before calling executeScript
         QMetaObject::invokeMethod(this, "executeScript", Qt::QueuedConnection);
     } else {
-        if (request) {
-            qWarning() << "Failed to download script at" << request->getUrl().toString() << " - bailing on assignment.";
-            qWarning() << "ResourceRequest error was" << request->getResult();
-        } else {
-            qWarning() << "Failed to download script - request timed out. Bailing on assignment.";
-        }
-
-        setFinished(true);
+        qWarning() << "Failed to download script at" << request->getUrl().toString()
+            << "- ResourceRequest error was" << request->getResult();
+        retryScriptRequest();
     }
 
     request->deleteLater();
+}
+
+void Agent::retryScriptRequest() {
+    // Finishing here would have the domain-server hand a persistent script's assignment straight back, once a second
+    // for as long as its host is down, and each finished assignment costs the assignment-client memory (#93).
+    static const int FIRST_RETRY_MSEC = 1000;
+    static const int MAX_RETRY_MSEC = 5 * 60 * 1000;
+    static const int MAX_DOUBLINGS = 16;
+    const int retryMsec = std::min(FIRST_RETRY_MSEC << std::min(_scriptRequestFailures, MAX_DOUBLINGS), MAX_RETRY_MSEC);
+    ++_scriptRequestFailures;
+
+    qWarning() << "Retrying the script download in" << retryMsec << "ms - failed attempts so far:" << _scriptRequestFailures;
+    _scriptRetryTimer.start(retryMsec);
+}
+
+void Agent::abandonScriptRequest() {
+    if (_scriptRequest) {
+        _scriptRequest->deleteLater();
+        _scriptRequest = nullptr;
+    }
+    _pendingScriptRequest = nullptr;
 }
 
 void Agent::executeScript() {
@@ -387,7 +487,7 @@ void Agent::executeScript() {
         scriptedAvatar->setSkeletonModelURL(QUrl());
 
         // force lazy initialization of the head data for the scripted avatar
-        // since it is referenced below by computeLoudness and getAudioLoudness
+        // since it is referenced by AgentAvatarAudio::computeLoudness and getAudioLoudness
         scriptedAvatar->getHeadOrientation();
 
         auto scriptEngine = _scriptManager->engine();
@@ -445,63 +545,11 @@ void Agent::executeScript() {
         using namespace recording;
         static const FrameType AUDIO_FRAME_TYPE = Frame::registerFrameType(AudioConstants::getAudioFrameName());
         Frame::registerFrameHandler(AUDIO_FRAME_TYPE, [this, &player, &scriptedAvatar](Frame::ConstPointer frame) {
-            if (_shouldMuteRecordingAudio) {
-                return;
-            }
-
-            static quint16 audioSequenceNumber{ 0 };
-
-            QByteArray audio(frame->data);
-
-            int16_t* samples = reinterpret_cast<int16_t*>(audio.data());
-            int numSamples = AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL;
-
-            auto volume = player->getVolume();
-            if (volume >= 0.0f && volume < 1.0f) {
-                int32_t fract = (int32_t)(volume * (float)(1 << 16));   // Q16
-                for (int i = 0; i < numSamples; i++) {
-                    samples[i] = (fract * (int32_t)samples[i]) >> 16;
-                }
-            }
-
-            if (_isNoiseGateEnabled) {
-                _audioGate.render(samples, samples, numSamples);
-            }
-
-            computeLoudness(&audio, scriptedAvatar);
-
-            // state machine to detect gate opening and closing
-            bool audioGateOpen = (scriptedAvatar->getAudioLoudness() != 0.0f);
-            bool openedInLastBlock = !_audioGateOpen && audioGateOpen;  // the gate just opened
-            bool closedInLastBlock = _audioGateOpen && !audioGateOpen;  // the gate just closed
-            _audioGateOpen = audioGateOpen;
-            Q_UNUSED(openedInLastBlock);
-
-            // the codec must be flushed to silence before sending silent packets,
-            // so delay the transition to silent packets by one packet after becoming silent.
-            auto packetType = PacketType::MicrophoneAudioNoEcho;
-            if (!audioGateOpen && !closedInLastBlock) {
-                packetType = PacketType::SilentAudioFrame;
-            }
-
-            Transform audioTransform;
-            auto headOrientation = scriptedAvatar->getHeadOrientation();
-            audioTransform.setTranslation(scriptedAvatar->getWorldPosition());
-            audioTransform.setRotation(headOrientation);
-
-            QByteArray encodedBuffer;
-            if (_encoder) {
-                _encoder->encode(audio, encodedBuffer);
-            } else {
-                encodedBuffer = audio;
-            }
-
-            AbstractAudioInterface::emitAudioPacket(encodedBuffer.data(), encodedBuffer.size(), audioSequenceNumber, false,
-                                                    audioTransform, scriptedAvatar->getWorldPosition(), glm::vec3(0),
-                                                    packetType, _selectedCodecName);
+            _avatarAudio->handleRecordingAudioFrame(frame->data, player->getVolume(), scriptedAvatar);
         });
 
         auto avatarHashMap = DependencyManager::set<AvatarHashMap>();
+        avatarHashMap->setOwnAvatar(scriptedAvatar);
         scriptEngine->registerGlobalObject(sgp, "AvatarList", avatarHashMap.data());
 
         // register ourselves to the script engine
@@ -509,11 +557,6 @@ void Agent::executeScript() {
 
         scriptEngine->registerGlobalObject(sgp, "AnimationCache", DependencyManager::get<AnimationCacheScriptingInterface>().data());
         scriptEngine->registerGlobalObject(sgp, "SoundCache", DependencyManager::get<SoundCacheScriptingInterface>().data());
-
-        {
-            ScriptValue webSocketServerConstructorValue = scriptEngine->newFunction(WebSocketServerClass::constructor);
-            scriptEngine->globalObject().setProperty("WebSocketServer", webSocketServerConstructorValue);
-        }
 
         auto entityScriptingInterface = DependencyManager::get<EntityScriptingInterface>();
 
@@ -535,6 +578,10 @@ void Agent::executeScript() {
 
         DependencyManager::get<ScriptEngines>()->runScriptInitializers(_scriptManager);
         _scriptManager->run();
+
+        // audioSinkFinished and voiceStreamFinished are never emitted once the script has ended
+        retireAudioSink();
+        _avatarAudio->resetVoiceStream();
 
         Frame::clearFrameHandler(AUDIO_FRAME_TYPE);
         Frame::clearFrameHandler(AVATAR_FRAME_TYPE);
@@ -563,7 +610,7 @@ void Agent::setIsListeningToAudioStream(bool isListeningToAudioStream) {
         QMetaObject::invokeMethod(this, "setIsListeningToAudioStream", Q_ARG(bool, isListeningToAudioStream));
         return;
     }
-    if (_isListeningToAudioStream) {
+    if (_isListeningToAudioStream && !isListeningToAudioStream) {
         // have to tell just the audio mixer to KillAvatar.
 
         auto nodeList = DependencyManager::get<NodeList>();
@@ -617,7 +664,12 @@ void Agent::setIsAvatar(bool isAvatar) {
                     scriptableAvatar.data(), &ScriptableAvatar::update, Qt::QueuedConnection);
 
             // tell the avatarAudioTimer to start ticking
-            QMetaObject::invokeMethod(&_avatarAudioTimer, "start");
+            if (_avatarAudio) {
+                _avatarAudio->startSending();
+            }
+
+            // The KillAvatar sent when we stopped being an avatar made the mixer drop our identity.
+            scriptableAvatar->markIdentityDataChanged();
         }
 
         _entityEditSender.setMyAvatar(scriptableAvatar.data());
@@ -652,7 +704,11 @@ void Agent::setIsAvatar(bool isAvatar) {
             disconnect(_scriptManager.get(), &ScriptManager::update,
                        scriptableAvatar.data(), &ScriptableAvatar::update);
 
-            QMetaObject::invokeMethod(&_avatarAudioTimer, "stop");
+            if (_avatarAudio) {
+                _avatarAudio->stopSending();
+                // A live stream that is not read cannot be paused, only ended
+                _avatarAudio->stopVoiceStream();
+            }
         }
 
         _entityEditSender.setMyAvatar(nullptr);
@@ -686,166 +742,20 @@ void Agent::queryAvatars() {
                                                          { NodeType::AvatarMixer });
 }
 
-void Agent::encodeFrameOfZeros(QByteArray& encodedZeros) {
-    _flushEncoder = false;
-    static const QByteArray zeros(AudioConstants::NETWORK_FRAME_BYTES_PER_CHANNEL, 0);
-    if (_encoder) {
-        _encoder->encode(zeros, encodedZeros);
-    } else {
-        encodedZeros = zeros;
-    }
-}
-
-void Agent::computeLoudness(const QByteArray* decodedBuffer, QSharedPointer<ScriptableAvatar> scriptableAvatar) {
-    float lastInputLoudness = 0.0f;
-    if (decodedBuffer) {
-        auto samples = reinterpret_cast<const int16_t*>(decodedBuffer->constData());
-        int numSamples = decodedBuffer->size() / AudioConstants::SAMPLE_SIZE;
-
-        assert(numSamples < 65536); // int32_t loudness cannot overflow
-        if (numSamples > 0) {
-            int32_t loudness = 0;
-            for (int i = 0; i < numSamples; ++i) {
-                loudness += std::abs((int32_t)samples[i]);
-            }
-            lastInputLoudness = (float)loudness / numSamples;
-        }
-    }
-    scriptableAvatar->setAudioLoudness(lastInputLoudness);
-}
-
-void Agent::processAgentAvatarAudio() {
-    auto recordingInterface = DependencyManager::get<RecordingScriptingInterface>();
-    bool isPlayingRecording = recordingInterface->isPlaying();
-
-    if (_isAvatar && ((_isListeningToAudioStream && !isPlayingRecording) || _avatarSound)) {
-        // if we have an avatar audio stream then send it out to our audio-mixer
-        auto scriptedAvatar = DependencyManager::get<ScriptableAvatar>();
-        bool silentFrame = true;
-
-        int16_t numAvailableSamples = AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL;
-        const int16_t* nextSoundOutput = NULL;
-
-        if (_avatarSound && _avatarSound->isReady()) {
-            if (isPlayingRecording && !_shouldMuteRecordingAudio) {
-                _shouldMuteRecordingAudio = true;
-            }
-            
-            auto audioData = _avatarSound->getAudioData();
-            nextSoundOutput = reinterpret_cast<const int16_t*>(audioData->rawData()
-                    + _numAvatarSoundSentBytes);
-
-            int numAvailableBytes = (audioData->getNumBytes() - _numAvatarSoundSentBytes) > AudioConstants::NETWORK_FRAME_BYTES_PER_CHANNEL
-                ? AudioConstants::NETWORK_FRAME_BYTES_PER_CHANNEL
-                : audioData->getNumBytes() - _numAvatarSoundSentBytes;
-            numAvailableSamples = (int16_t)numAvailableBytes / sizeof(int16_t);
-
-
-            // check if the all of the _numAvatarAudioBufferSamples to be sent are silence
-            for (int i = 0; i < numAvailableSamples; ++i) {
-                if (nextSoundOutput[i] != 0) {
-                    silentFrame = false;
-                    break;
-                }
-            }
-
-            _numAvatarSoundSentBytes += numAvailableBytes;
-            if (_numAvatarSoundSentBytes == (int)audioData->getNumBytes()) {
-                // we're done with this sound object - so set our pointer back to NULL
-                // and our sent bytes back to zero
-                _avatarSound.reset();
-                _numAvatarSoundSentBytes = 0;
-                _flushEncoder = true;
-
-                if (_shouldMuteRecordingAudio) {
-                    _shouldMuteRecordingAudio = false;
-                }
-            }
-        }
-
-        auto audioPacket = NLPacket::create(silentFrame && !_flushEncoder
-                ? PacketType::SilentAudioFrame
-                : PacketType::MicrophoneAudioNoEcho);
-
-        // seek past the sequence number, will be packed when destination node is known
-        audioPacket->seek(sizeof(quint16));
-
-        if (silentFrame && !_flushEncoder) {
-
-            if (!_isListeningToAudioStream) {
-                // if we have a silent frame and we're not listening then just send nothing and break out of here
-                return;
-            }
-
-            // write the codec
-            audioPacket->writeString(_selectedCodecName);
-
-            // write the number of silent samples so the audio-mixer can uphold timing
-            audioPacket->writePrimitive(numAvailableSamples);
-
-            // use the orientation and position of this avatar for the source of this audio
-            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
-            glm::quat headOrientation = scriptedAvatar->getHeadOrientation();
-            audioPacket->writePrimitive(headOrientation);
-            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
-            audioPacket->writePrimitive(glm::vec3(0));
-
-            // no matter what, the loudness should be set to 0
-            computeLoudness(nullptr, scriptedAvatar);
-        } else if (nextSoundOutput || _flushEncoder) {
-
-            // write the codec
-            audioPacket->writeString(_selectedCodecName);
-
-            // assume scripted avatar audio is mono and set channel flag to zero
-            audioPacket->writePrimitive((quint8)0);
-
-            // use the orientation and position of this avatar for the source of this audio
-            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition());
-            glm::quat headOrientation = scriptedAvatar->getHeadOrientation();
-            audioPacket->writePrimitive(headOrientation);
-            audioPacket->writePrimitive(scriptedAvatar->getWorldPosition()); // HUH? why do we write this twice??
-            audioPacket->writePrimitive(glm::vec3(0));
-
-            QByteArray encodedBuffer;
-            if (_flushEncoder) {
-                encodeFrameOfZeros(encodedBuffer);
-                // loudness is 0
-                computeLoudness(nullptr, scriptedAvatar);
-            } else {
-                QByteArray decodedBuffer(reinterpret_cast<const char*>(nextSoundOutput), numAvailableSamples*sizeof(int16_t));
-                if (_encoder) {
-                    // encode it
-                    _encoder->encode(decodedBuffer, encodedBuffer);
-                } else {
-                    encodedBuffer = decodedBuffer;
-                }
-                computeLoudness(&decodedBuffer, scriptedAvatar);
-            }
-            audioPacket->write(encodedBuffer.constData(), encodedBuffer.size());
-        }
-
-        // we should never have both nextSoundOutput being null and silentFrame being false, but lets
-        // assert on it in case things above change in a bad way
-        assert(nextSoundOutput || silentFrame);
-
-        // write audio packet to AudioMixer nodes
-        auto nodeList = DependencyManager::get<NodeList>();
-        nodeList->eachNode([this, &nodeList, &audioPacket](const SharedNodePointer& node) {
-            // only send to nodes of type AudioMixer
-            if (node->getType() == NodeType::AudioMixer) {
-                // pack sequence number
-                quint16 sequence = _outgoingScriptAudioSequenceNumbers[node->getUUID()]++;
-                audioPacket->seek(0);
-                audioPacket->writePrimitive(sequence);
-                // send audio packet
-                nodeList->sendUnreliablePacket(*audioPacket, *node);
-            }
-        });
-    }
-}
-
 void Agent::aboutToFinish() {
+    _scriptRetryTimer.stop();
+    _scriptRequestTimeout.stop();
+    // before ResourceManager::cleanup stops the thread the request lives on, so the deferred delete still runs
+    abandonScriptRequest();
+
+    // Aborts rather than waiting for a close handshake
+    resetAudioSink();
+    _retiredAudioSinks.clear();
+    // before the ResourceManager, whose thread the voice stream's source lives on, goes
+    if (_avatarAudio) {
+        _avatarAudio->resetVoiceStream();
+    }
+
     // our entity tree is going to go away so tell that to the EntityScriptingInterface
     DependencyManager::get<EntityScriptingInterface>()->setEntityTree(nullptr);
 
@@ -866,12 +776,14 @@ void Agent::aboutToFinish() {
     DependencyManager::destroy<RecordingScriptingInterface>();
     DependencyManager::destroy<AnimationCacheScriptingInterface>();
     DependencyManager::destroy<EntityScriptingInterface>();
+    DependencyManager::destroy<EntityScriptClient>();
     DependencyManager::destroy<ResourceScriptingInterface>();
     DependencyManager::destroy<UserActivityLoggerScriptingInterface>();
 
     DependencyManager::destroy<ScriptCache>();
     DependencyManager::destroy<SoundCache>();
     DependencyManager::destroy<AnimationCache>();
+    DependencyManager::destroy<ScriptCredentials>();
 
     DependencyManager::destroy<recording::Deck>();
     DependencyManager::destroy<recording::Recorder>();
@@ -898,11 +810,8 @@ void Agent::aboutToFinish() {
 
     DependencyManager::destroy<ScriptableAvatar>();
 
-    // cleanup codec & encoder
-    if (_codec && _encoder) {
-        _codec->releaseEncoder(_encoder);
-        _encoder = nullptr;
-    }
+    // stops the audio timers, then releases the codec & encoder
+    _avatarAudio.reset();
 }
 
 void Agent::stop() {

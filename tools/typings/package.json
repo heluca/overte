@@ -1,0 +1,43 @@
+{
+  "name": "@heluca/overte-types",
+  "version": "0.0.0",
+  "description": "TypeScript declarations for the Overte scripting API, generated from the engine's JSDoc, one file per script context.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/heluca/overte.git",
+    "directory": "tools/typings"
+  },
+  "keywords": [
+    "overte",
+    "typescript",
+    "types",
+    "scripting"
+  ],
+  "types": "dist/overte-types.d.ts",
+  "typesVersions": {
+    "*": {
+      "interface": ["dist/overte-interface.d.ts"],
+      "client-entity": ["dist/overte-client-entity.d.ts"],
+      "server-entity": ["dist/overte-server-entity.d.ts"],
+      "assignment-client": ["dist/overte-assignment-client.d.ts"],
+      "avatar": ["dist/overte-avatar.d.ts"],
+      "types": ["dist/overte-types.d.ts"]
+    }
+  },
+  "files": [
+    "dist/*.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "jsdoc": "jsdoc ../jsdoc/root.js -c jsdoc.json -d build",
+    "generate": "node generate.js build/hifiJSDoc.json dist",
+    "build": "npm run jsdoc && npm run generate",
+    "check": "node check.js",
+    "prepack": "npm run build && npm run check"
+  },
+  "devDependencies": {
+    "jsdoc": "^3.6.11",
+    "typescript": "^7.0.2"
+  }
+}

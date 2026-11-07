@@ -78,6 +78,9 @@ public:
     const AvatarHash getHashCopy() const { QReadLocker lock(&_hashLock); return _avatarHash; }
     int size() { QReadLocker lock(&_hashLock); return _avatarHash.size(); }
 
+    // For an Agent, whose own avatar is not in the hash: the mixer's echo of our identity goes to it instead.
+    void setOwnAvatar(const QWeakPointer<AvatarData>& ownAvatar) { _ownAvatar = ownAvatar; }
+
     // Currently, your own avatar will be included as the null avatar id.
     
     /*@jsdoc
@@ -244,6 +247,7 @@ protected:
 
 private:
     QUuid _lastOwnerSessionUUID;
+    QWeakPointer<AvatarData> _ownAvatar;
 };
 
 #endif // hifi_AvatarHashMap_h

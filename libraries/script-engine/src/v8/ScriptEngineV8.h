@@ -19,7 +19,10 @@
 #ifndef hifi_ScriptEngineV8_h
 #define hifi_ScriptEngineV8_h
 
+#include <functional>
 #include <memory>
+#include <unordered_map>
+#include <vector>
 
 #include <QtCore/QByteArray>
 #include <QtCore/QHash>
@@ -27,6 +30,7 @@
 #include <QtCore/QMutex>
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
+#include <QtCore/QSet>
 #include <QtCore/QSharedPointer>
 #include <QtCore/QString>
 #include <QQueue>
@@ -41,13 +45,16 @@
 #include "../ScriptManager.h"
 #include "../ScriptException.h"
 
-#include "ArrayBufferClass.h"
-
+struct ScriptClosureFailureV8;
 class ScriptContextV8Wrapper;
 class ScriptEngineV8;
+class ScriptEnvironmentTableV8;
+class ScriptModuleLoaderV8;
+class ScriptModuleMapV8;
 class ScriptManager;
 class ScriptObjectV8Proxy;
 class ScriptMethodV8Proxy;
+class ScriptPromiseBridgeV8;
 class ScriptValueV8Wrapper;
 class ScriptSignalV8Proxy;
 
@@ -58,6 +65,8 @@ typedef V8ScriptValueTemplate<v8::Script> V8ScriptProgram;
 using ScriptContextV8Pointer = std::shared_ptr<ScriptContextV8Wrapper>;
 
 const double GARBAGE_COLLECTION_TIME_LIMIT_S = 1.0;
+// Isolate data slot holding the ScriptEngineV8, for static V8 callbacks
+static const uint32_t ENGINE_ISOLATE_DATA_SLOT { 0 };
 
 Q_DECLARE_METATYPE(ScriptEngine::FunctionSignature)
 
@@ -100,6 +109,7 @@ public:  // ScriptEngine implementation
     virtual ScriptValue newArrayBuffer(const QByteArray& message) override;
     virtual ScriptValue newFunction(ScriptEngine::FunctionSignature fun, int length = 0) override;
     virtual ScriptValue newObject() override;
+    virtual ScriptPromise newPromise() override;
     virtual ScriptValue newMethod(QObject* object, V8ScriptValue lifetime,
                                const QList<QMetaMethod>& metas, int numMaxParams);
     virtual ScriptProgramPointer newProgram(const QString& sourceCode, const QString& fileName) override;
@@ -144,6 +154,19 @@ public:  // ScriptEngine implementation
     virtual void updateMemoryCost(const qint64& deltaSize) override;
     virtual void requestCollectGarbage() override { _v8Isolate->MemoryPressureNotification(v8::MemoryPressureLevel::kCritical); }
     virtual void processEvents() override;
+    virtual void performMicrotaskCheckpoint() override;
+    virtual void queueMicrotask(const ScriptValue& callback) override;
+    virtual void loadModule(const ScriptModuleRequest& request, ScriptModuleCallback onEvaluated) override;
+    virtual void reportStalledTopLevelAwaits() override;
+    virtual int newModuleEpoch(bool reload) override;
+    virtual void releaseModuleEpoch(int epoch) override;
+    virtual ScriptValue callReportingRejection(const ScriptValue& function, const ScriptValue& thisObject,
+        const ScriptValueList& args,
+        std::function<void(const QString& reason, const QString& fileName, int lineNumber)> onRejected) override;
+    virtual ScriptValue constructCatching(const ScriptValue& constructor, std::shared_ptr<ScriptException>* thrown,
+                                          QString* thrownFileName) override;
+    virtual ScriptEnvironmentPointer currentEnvironment() override;
+    virtual ScriptEnvironmentPointer swapCurrentEnvironment(const ScriptEnvironmentPointer& environment) override;
     virtual void compileTest() override;
     virtual QString scriptValueDebugDetails(const ScriptValue &value) override;
     QString scriptValueDebugDetailsV8(const V8ScriptValue &value);
@@ -178,9 +201,14 @@ public: // public non-interface methods for other QtScript-specific classes to u
     /// registers a global object by name
     Q_INVOKABLE void registerValue(ScriptEngineScopeGuardV8* scopeGuard, const QString& valueName, V8ScriptValue value);
 
-    // NOTE - this is used by the TypedArray implementation. we need to review this for thread safety
-    // V8TODO
-    //inline ArrayBufferClass* getArrayBufferClass() { return _arrayBufferClass; }
+    /// Whether a call from C++ into script is in progress. A nested event loop (Script.require, a synchronous
+    /// Script.include or XMLHttpRequest) may be running inside it, delivering events with script frames below them.
+    bool isScriptOnStack() const { return _scriptEntryDepth > 0; }
+    /// For work that must not run inside script code: queues the task to the engine's thread as the outermost call into
+    /// script returns. Engine thread only.
+    void deferUntilScriptReturns(std::function<void()> task);
+    /// Whether ScriptEnvironmentTableV8::selfTest passed when the engine was made
+    bool isEnvironmentCarriedAcrossAwait() const { return _environmentCarriedAcrossAwait; }
 
 public: // not for public use, but I don't like how Qt strings this along with private friend functions
     virtual ScriptValue create(int type, const void* ptr) override;
@@ -202,7 +230,7 @@ public: // not for public use, but I don't like how Qt strings this along with p
     const v8::Local<v8::Context> getConstContext() const;
     QString formatErrorMessageFromTryCatch(v8::TryCatch &tryCatch);
     // Useful for debugging
-    virtual QStringList getCurrentScriptURLs() const override;
+    virtual QStringList getCurrentScriptURLs(bool includeOtherContexts = false) const override;
 
     using ObjectWrapperMap = QMap<QObject*, QWeakPointer<ScriptObjectV8Proxy>>;
     mutable QMutex _qobjectWrapperMapProtect;
@@ -246,6 +274,11 @@ protected:
     void setUncaughtException(std::shared_ptr<ScriptException> exception);
 
     friend class ScriptSignalV8Proxy;
+    friend class MicrotaskCheckpointScopeV8;
+    friend class ScriptModuleLoaderV8;
+
+    static void promiseRejectCallback(v8::PromiseRejectMessage message);
+    void reportPendingPromiseRejections();
 
     std::shared_ptr<ScriptException> _uncaughtException;
 
@@ -282,10 +315,55 @@ protected:
 public:
     volatile int _memoryCorruptionIndicator = 12345678;
 private:
-    //V8TODO
-    //ArrayBufferClass* _arrayBufferClass;
     // Counts how many nested evaluate calls are there at a given point
     int _evaluatingCounter;
+    // Nesting depth of C++ -> JS entries, see MicrotaskCheckpointScopeV8
+    int _scriptEntryDepth { 0 };
+
+    // Rejected promises without a handler, reported after the microtask queue drains unless a handler is attached first
+    struct PendingPromiseRejection {
+        v8::Global<v8::Promise> promise;
+        v8::Global<v8::Value> reason;
+        QString fileName;
+        int lineNumber;
+    };
+    std::vector<PendingPromiseRejection> _pendingPromiseRejections;
+    // ES modules of this isolate, see ScriptModuleLoaderV8
+    std::unique_ptr<ScriptModuleMapV8> _modules;
+    // Set by ScriptModuleLoaderV8 for the evaluateInClosure of a CommonJS file an ES module imports, which then hands
+    // its failure over instead of reporting it; the closures of the require() calls inside do not see it
+    ScriptClosureFailureV8* _closureFailure { nullptr };
+    // Resolvers made by newPromise() reach the engine only through this, see ScriptPromiseV8.h
+    std::shared_ptr<ScriptPromiseBridgeV8> _promiseBridge;
+    // See deferUntilScriptReturns; posted by performMicrotaskCheckpoint once the entry depth is back to zero
+    std::vector<std::function<void()>> _deferredUntilScriptReturns;
+    void postDeferredUntilScriptReturns();
+    // The current ScriptEnvironment, in continuation-preserved embedder data
+    std::unique_ptr<ScriptEnvironmentTableV8> _environments;
+    bool _environmentCarriedAcrossAwait { false };
+    void initEnvironments(v8::Local<v8::Context> context);
+    // loadModule() without an environment that survives await: reports ScriptModuleLoaderV8::MODULES_UNAVAILABLE
+    void refuseModuleLoad(const QUrl& url, ScriptModuleCallback onEvaluated);
+    // See newModuleEpoch(); epoch 0 is the one every engine starts with
+    int _lastModuleEpoch { 0 };
+    // Epochs whose modules all bypass ScriptCache, see ScriptModuleRequest::forceDownload
+    QSet<int> _downloadModuleEpochs;
+    // Epochs made for a reload, see newModuleEpoch()
+    QSet<int> _reloadModuleEpochs;
+    // The entry URL of each entity epoch's first load, and which epoch's CommonJS import made the Script.require.cache
+    // entry of a URL; see ScriptModuleLoaderV8::evaluateCommonJs
+    QHash<int, QUrl> _moduleEpochEntries;
+    QHash<QString, int> _commonJsCacheEpochs;
+    void applyModuleEpochDownload(ScriptModuleRequest& request);
+    // Reports the modules of the epoch (of every epoch if negative) still suspended in a top-level await, as a warning
+    // starting with what
+    void reportStalledTopLevelAwaits(int epoch, const QString& what);
+    // See callReportingRejection(); by id, as the promise may never settle
+    using RejectionHandler = std::function<void(const QString& reason, const QString& fileName, int lineNumber)>;
+    std::unordered_map<quint64, RejectionHandler> _rejectionHandlers;
+    quint64 _lastRejectionHandler { 0 };
+    static void rejectionHandlerFulfilled(const v8::FunctionCallbackInfo<v8::Value>& info);
+    static void rejectionHandlerRejected(const v8::FunctionCallbackInfo<v8::Value>& info);
 #ifdef OVERTE_V8_MEMORY_DEBUG
     std::atomic<size_t> scriptValueCount{0};
     std::atomic<size_t> scriptValueProxyCount{0};
@@ -317,6 +395,22 @@ public:
     ~ContextScopeV8();
 private:
     bool _isContextChangeNeeded;
+    ScriptEngineV8* _engine;
+};
+
+// Wraps every call from C++ into JS. The isolate runs with MicrotasksPolicy::kExplicit, so when the outermost of these
+// returns it performs the microtask checkpoint that V8's default kAuto policy used to perform implicitly.
+class MicrotaskCheckpointScopeV8 {
+public:
+    explicit MicrotaskCheckpointScopeV8(ScriptEngineV8* engine) : _engine(engine) { _engine->_scriptEntryDepth++; }
+    ~MicrotaskCheckpointScopeV8() {
+        if (--_engine->_scriptEntryDepth == 0) {
+            _engine->performMicrotaskCheckpoint();
+        }
+    }
+    MicrotaskCheckpointScopeV8(const MicrotaskCheckpointScopeV8&) = delete;
+    MicrotaskCheckpointScopeV8& operator=(const MicrotaskCheckpointScopeV8&) = delete;
+private:
     ScriptEngineV8* _engine;
 };
 

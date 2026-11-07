@@ -16,12 +16,14 @@
 
 #include <glm/common.hpp>
 
+#include "AudioStreamSource.h"
 #include "Sound.h"
 
 class AudioInjectorLocalBuffer : public QIODevice {
     Q_OBJECT
 public:
     AudioInjectorLocalBuffer(AudioDataPointer audioData);
+    AudioInjectorLocalBuffer(AudioStreamSourcePointer stream);
     ~AudioInjectorLocalBuffer();
 
     void stop();
@@ -38,6 +40,7 @@ private:
     qint64 recursiveReadFromFront(char* data, qint64 maxSize);
 
     AudioDataPointer _audioData;
+    AudioStreamSourcePointer _stream;
     bool _shouldLoop { false };
     bool _isStopped { false };
     int _currentOffset { 0 };

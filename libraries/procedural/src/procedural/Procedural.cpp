@@ -262,7 +262,9 @@ void Procedural::setProceduralData(const ProceduralData& proceduralData) {
 
 bool Procedural::isReady() const {
     auto backendApi = hifi::properties::getGraphicsAPI();
-    if (backendApi == hifi::properties::GraphicsAPI::GLES32) {
+    // The Vulkan backend has only the SPIR-V compiled at build time and cannot take a shader from
+    // userData yet, so a procedural skybox or material keeps to its plain rendering there.
+    if (backendApi == hifi::properties::GraphicsAPI::GLES32 || backendApi == hifi::properties::GraphicsAPI::Vulkan) {
         return false;
     }
 

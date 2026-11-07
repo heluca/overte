@@ -386,24 +386,45 @@ VkStencilOpState Cache::getStencilOp(const gpu::State::StencilTest& stencil) {
     return result;
 }
 
+// The key a Source's module is cached under. A shader from the build has a unique id. A Source
+// copied at runtime (Procedural, HighlightEffect, DebugDeferredBuffer) has none, since
+// shader::Source::operator= drops the id on purpose; keying those by id put every copy under
+// INVALID_SHADER, so a procedural skybox's fragment stage was handed its vertex module. Until
+// this backend compiles replacements, the module of a copy depends only on the name it was copied from.
+static std::string moduleKey(const shader::Source& source) {
+    if (source.id != shader::INVALID_SHADER) {
+        return std::to_string(source.id);
+    }
+    return "copy:" + source.name;
+}
+
 VkShaderModule Cache::getShaderModule(const vks::Context& context, const shader::Source& source) {
-    // Shaders assembled at runtime (procedural) all carry INVALID_SHADER as their id, so the id cannot identify
-    // their module: caching under it hands the first such module, usually a vertex shader, to every later one.
-    const bool cacheable = source.id != shader::INVALID_SHADER;
-    auto itr = cacheable ? moduleMap.find(source.id) : moduleMap.end();
+    const auto key = moduleKey(source);
+    auto itr = moduleMap.find(key);
     if (moduleMap.end() == itr) {
-        const auto& dialectSource = source.dialectSources.find(shader::Dialect::glsl450)->second;
+        auto dialectItr = source.dialectSources.find(shader::Dialect::glsl450);
+        if (dialectItr == source.dialectSources.end()) {
+            // shader::allDialects() loads glsl450 for the Vulkan and GL45 graphics API properties.
+            // Fail loudly instead of dereferencing end() and crashing with a bare SIGSEGV.
+            qFatal("Vulkan backend: shader %s has no glsl450 dialect loaded. "
+                   "The Vulkan backend requires hifi::properties::GraphicsAPI::Vulkan or GL45 (see --graphicsAPI).",
+                   key.c_str());
+        }
+        if (!source.replacements.empty()) {
+            // Procedural and debug shaders swap GLSL blocks in at runtime. This backend has only the
+            // SPIR-V compiled at build time, so the shader renders as it was written.
+            qWarning() << "Vulkan backend: ignoring the source replacements of shader" << source.name.c_str();
+        }
+        const auto& dialectSource = dialectItr->second;
         const auto& variantSource = dialectSource.variantSources.find(shader::Variant::Mono)->second;
         const auto& spirv = variantSource.spirv;
-        VkShaderModule result;
+        VkShaderModule result = VK_NULL_HANDLE;
         VkShaderModuleCreateInfo shaderModuleCreateInfo{};
         shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         shaderModuleCreateInfo.codeSize = spirv.size();
         shaderModuleCreateInfo.pCode = (const uint32_t*)spirv.data();
         VK_CHECK_RESULT(vkCreateShaderModule(context.device->logicalDevice, &shaderModuleCreateInfo, nullptr, &result));
-        if (cacheable) {
-            moduleMap[source.id] = result;
-        }
+        moduleMap[key] = result;
         return result;
     }
     return itr->second;
@@ -625,11 +646,6 @@ const Cache::PipelineLayout& Cache::getPipeline(const vks::Context& context) {
     }
 
     auto result = builder.create();
-    // The builder destroys the modules left in shaderStages, so keep only the uncached ones there.
-    std::erase_if(builder.shaderStages, [&](const VkPipelineShaderStageCreateInfo& stage) {
-        const auto& source = stage.stage == VK_SHADER_STAGE_VERTEX_BIT ? vertexShader : fragmentShader;
-        return source.id != shader::INVALID_SHADER;
-    });
     pipelineLayout.pipeline = result;
     auto pipelineInMap = pipelineMap.insert({key, pipelineLayout});
     qDebug() << "Pipeline cache size: " << pipelineMap.size();

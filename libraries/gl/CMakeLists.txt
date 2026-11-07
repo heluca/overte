@@ -10,3 +10,10 @@ target_glad()
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_egl()
 endif()
+
+# IOSurface backed textures shared with the Vulkan (MoltenVK) backend, see IOSurfaceTexture.cpp
+if (APPLE)
+    find_library(IOSurface IOSurface)
+    find_library(OpenGL OpenGL)
+    target_link_libraries(${TARGET_NAME} ${IOSurface} ${OpenGL})
+endif()

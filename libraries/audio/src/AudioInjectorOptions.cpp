@@ -44,6 +44,7 @@ ScriptValue injectorOptionsToScriptValue(ScriptEngine* engine, const AudioInject
     obj.setProperty("orientation", quatToScriptValue(engine, injectorOptions.orientation));
     obj.setProperty("ignorePenumbra", injectorOptions.ignorePenumbra);
     obj.setProperty("localOnly", injectorOptions.localOnly);
+    obj.setProperty("stereo", injectorOptions.stereo);
     obj.setProperty("secondOffset", injectorOptions.secondOffset);
     obj.setProperty("pitch", injectorOptions.pitch);
     return obj;
@@ -65,6 +66,8 @@ ScriptValue injectorOptionsToScriptValue(ScriptEngine* engine, const AudioInject
  *     <code>0</code>.
  * @property {boolean} localOnly=false - If <code>true</code>, the sound is played back locally on the client rather than to
  *     others via the audio mixer.
+ * @property {boolean} stereo=false - <code>true</code> if the audio is interleaved stereo, <code>false</code> if it is mono.
+ *     Only {@link Audio.playStream} reads this; {@link Audio.playSound} takes it from the sound.
  * @property {boolean} ignorePenumbra=false - <p class="important">Deprecated: This property is deprecated and will be
  *     removed.</p>
  */
@@ -111,6 +114,12 @@ bool injectorOptionsFromScriptValue(const ScriptValue& object, AudioInjectorOpti
                 injectorOptions.localOnly = it->value().toBool();
             } else {
                 qCWarning(audio) << "Audio injector options: localOnly is not a boolean";
+            }
+        } else if (it->name() == "stereo") {
+            if (it->value().isBool()) {
+                injectorOptions.stereo = it->value().toBool();
+            } else {
+                qCWarning(audio) << "Audio injector options: stereo is not a boolean";
             }
         } else if (it->name() == "secondOffset") {
             if (it->value().isNumber()) {

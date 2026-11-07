@@ -1399,10 +1399,6 @@ void VKBackend::renderPassDraw(const Batch& batch) {
             // updates for draw calls
             ++_currentDraw;
 
-            // VKTODO: procedural shaders are not supported yet.
-            if (_cache.pipelineState.pipeline->getProgram()->getShaders()[0]->getSource().name == "simple_procedural.vert") {
-                break;
-            }
             _cache.pipelineState.primitiveTopology = getPrimitiveTopologyFromCommand(*command, batch, *offset);
             _cache.pipelineState.drawCallInfoPerInstance = !batch._currentNamedCall.empty();
             updateInput();
@@ -1582,11 +1578,16 @@ VKTexture* VKBackend::syncGPUObject(const std::shared_ptr<Texture> &texture) {
     VKTexture* object = Backend::getGPUObject<VKTexture>(*texture);
 
     if (TextureUsageType::EXTERNAL == texture->getUsageType()) {
+#ifdef DISABLE_QML
+        return nullptr;
+#endif
         if (_isFramePlayer) {
             return nullptr; // Frame player does not support external textures
         }
+#ifndef Q_OS_MAC
         Q_ASSERT(GLAD_GL_EXT_memory_object);
         Q_ASSERT(GLAD_GL_EXT_semaphore);
+#endif
         Texture::ExternalUpdates updates = texture->getUpdates();
         if (!updates.empty()) {
             Texture::ExternalRecycler recycler = texture->getExternalRecycler();
@@ -1607,7 +1608,16 @@ VKTexture* VKBackend::syncGPUObject(const std::shared_ptr<Texture> &texture) {
             // Check for a fence, and if it exists, inject a wait into the command stream, then destroy the fence
             if (update.second) {
                 GLsync fence = static_cast<GLsync>(update.second);
+#ifdef Q_OS_MAC
+                // The texture is consumed by Metal through an IOSurface (or by glGetTexImage), neither of which is
+                // ordered by a server side wait, so block until the QML render has actually completed. The QML
+                // thread flushed after creating the fence, and by the time the update is picked up here it has
+                // almost always signalled already.
+                const GLuint64 ONE_SECOND_NS = 1000000000ull;
+                glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, ONE_SECOND_NS);
+#else
                 glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); // VKTODO: Maybe take earlier texture instead of waiting to avoid stall?
+#endif
                 glDeleteSync(fence);
             }
 

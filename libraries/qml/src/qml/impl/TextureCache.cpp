@@ -3,6 +3,7 @@
 #include <cassert>
 
 #include <gl/Config.h>
+#include <gl/IOSurfaceTexture.h>
 
 #include <QtCore/QThread>
 #include <QtCore/QCoreApplication>
@@ -99,6 +100,10 @@ void TextureCache::destroyTexture(uint32_t texture) {
     assert(getMemoryForSize(size) <= _totalTextureUsage);
     _totalTextureUsage -= getMemoryForSize(size);
     _textureSizes.erase(texture);
+    if (gl::isIOSurfaceTexture(texture)) {
+        gl::destroyIOSurfaceTexture(texture);
+        return;
+    }
     // FIXME prevents crash on shutdown, but we should migrate to a global functions object owned by the shared context.
     glDeleteTextures(1, &texture);
 }
@@ -115,7 +120,18 @@ void TextureCache::destroy(const Value& textureAndFence) {
 
 uint32_t TextureCache::createTexture(const QSize& size) {
     // Need a new texture
-    uint32_t newTexture;
+    uint32_t newTexture = 0;
+    if (gl::useIOSurfaceTextures()) {
+        // macOS + Vulkan: the texture lives on an IOSurface so the Vulkan backend can sample it without a readback.
+        newTexture = gl::createIOSurfaceTexture(size.width(), size.height());
+        if (newTexture) {
+            ++_allTextureCount;
+            _textureSizes[newTexture] = size;
+            _totalTextureUsage += getMemoryForSize(size);
+            return newTexture;
+        }
+        // Fall through to a plain texture; the backend reads those back.
+    }
     glGenTextures(1, &newTexture);
     ++_allTextureCount;
     _textureSizes[newTexture] = size;

@@ -39,9 +39,11 @@
 #include <SettingHelpers.h>
 #include <FingerprintUtils.h>
 #include <ModerationFlags.h>
+#include <ScriptCredentials.h>
 
 #include "DomainServerNodeData.h"
 #include "NodePermissions.h"
+#include "SettingsPasswordColumns.h"
 
 const QString SETTINGS_DESCRIPTION_RELATIVE_PATH = "/resources/describe-settings.json";
 const QString SETTINGS_PATH = "/settings";
@@ -58,6 +60,9 @@ const QString DESCRIPTION_BACKUP_FLAG_KEY = "backup";
 const QString SETTING_DESCRIPTION_TYPE_KEY = "type";
 const QString DESCRIPTION_COLUMNS_KEY = "columns";
 const QString CONTENT_SETTING_FLAG_KEY = "content_setting";
+// A setting held for assignment clients alone: sent to a requester the gatekeeper admitted as an assignment client of the
+// requested type, and to the settings page with its password columns masked
+const QString DESCRIPTION_ASSIGNMENT_ONLY_KEY = "assignment-only";
 static const QString SPLIT_MENU_GROUPS_DOMAIN_SETTINGS_KEY = "domain_settings";
 static const QString SPLIT_MENU_GROUPS_CONTENT_SETTINGS_KEY = "content_settings";
 
@@ -202,7 +207,21 @@ void DomainServerSettingsManager::processSettingsRequestPacket(QSharedPointer<Re
     Assignment::Type type;
     message->readPrimitive(&type);
 
-    QJsonObject responseObject = settingsResponseObjectForType(QString::number(type));
+    // The request is unsourced and names its own type, and Interface asks as an AgentType, so the type alone does not
+    // say who is asking
+    const SockAddr& sender = message->getSenderSockAddr();
+    auto nodeList = DependencyManager::get<LimitedNodeList>();
+    bool isAssignment = nodeList->nodeMatchingPredicate([&](const SharedNodePointer& node) {
+        return node->getPermissions().isAssignment && Assignment::typeForNodeType(node->getType()) == type &&
+            node->getActiveSocket() && *node->getActiveSocket() == sender;
+    });
+
+    sendSettings(type, isAssignment ? Authenticated : NotAuthenticated, sender);
+}
+
+void DomainServerSettingsManager::sendSettings(Assignment::Type type, SettingsRequestAuthentication authentication,
+                                               const SockAddr& destination) {
+    QJsonObject responseObject = settingsResponseObjectForType(QString::number(type), authentication);
     auto json = QJsonDocument(responseObject).toJson();
 
     auto packetList = NLPacketList::create(PacketType::DomainSettings, QByteArray(), true, true);
@@ -210,7 +229,22 @@ void DomainServerSettingsManager::processSettingsRequestPacket(QSharedPointer<Re
     packetList->write(json);
 
     auto nodeList = DependencyManager::get<LimitedNodeList>();
-    nodeList->sendPacketList(std::move(packetList), message->getSenderSockAddr());
+    nodeList->sendPacketList(std::move(packetList), destination);
+}
+
+// Assignment clients ask for their settings once, as they connect. The script credentials change without a restart, so
+// the assignment clients that run scripts get their settings again.
+void DomainServerSettingsManager::resendSettingsToScriptAssignments() {
+    std::vector<std::pair<Assignment::Type, SockAddr>> destinations;
+    DependencyManager::get<LimitedNodeList>()->eachMatchingNode([](const SharedNodePointer& node) {
+        return node->getPermissions().isAssignment && node->getActiveSocket() &&
+            (node->getType() == NodeType::Agent || node->getType() == NodeType::EntityScriptServer);
+    }, [&destinations](const SharedNodePointer& node) {
+        destinations.emplace_back(Assignment::typeForNodeType(node->getType()), *node->getActiveSocket());
+    });
+    for (const auto& destination : destinations) {
+        sendSettings(destination.first, Authenticated, destination.second);
+    }
 }
 
 void DomainServerSettingsManager::setupConfigMap(const QString& userConfigFilename) {
@@ -567,6 +601,35 @@ void DomainServerSettingsManager::setupConfigMap(const QString& userConfigFilena
                 }
             }
             packPermissions();
+        }
+
+        if (oldVersion < 2.8) {
+            // The settings page saved the AC subnet allowlist as ac_subnet_whitelist after the server had moved to reading
+            // ac_subnet_allowlist, so carry over any subnets saved under the old name.
+            const QString SECURITY_KEY = "security";
+            const QString AC_SUBNET_WHITELIST_KEY = "ac_subnet_whitelist";
+            const QString AC_SUBNET_ALLOWLIST_KEYPATH = SECURITY_KEY + ".ac_subnet_allowlist";
+
+            QVariant* oldAllowlist = _configMap.valueForKeyPath(SECURITY_KEY + "." + AC_SUBNET_WHITELIST_KEY);
+            if (oldAllowlist) {
+                // copied out before the new key is created, which can invalidate oldAllowlist
+                QVariantList oldSubnets = oldAllowlist->toList();
+                QVariant* newAllowlist = _configMap.valueForKeyPath(AC_SUBNET_ALLOWLIST_KEYPATH, true);
+                QVariantList allowlist(newAllowlist->toList());
+                for (const auto& subnet : oldSubnets) {
+                    if (!allowlist.contains(subnet)) {
+                        allowlist.append(subnet);
+                    }
+                }
+                *newAllowlist = allowlist;
+
+                QVariant* securityVariant = _configMap.valueForKeyPath(SECURITY_KEY);
+                QVariantMap securityMap = securityVariant->toMap();
+                securityMap.remove(AC_SUBNET_WHITELIST_KEY);
+                *securityVariant = securityMap;
+
+                qDebug() << "Migrated security.ac_subnet_whitelist to security.ac_subnet_allowlist:" << allowlist;
+            }
         }
 
         // write the current description version to our settings
@@ -1235,6 +1298,7 @@ bool DomainServerSettingsManager::handleAuthenticatedHTTPRequest(HTTPConnection 
                 apiRefreshGroupInformation();
                 emit updateNodePermissions();
                 emit settingsUpdated();
+                resendSettingsToScriptAssignments();
             }
 
             return true;
@@ -1518,7 +1582,10 @@ QJsonObject DomainServerSettingsManager::settingsResponseObjectForType(const QSt
                 bool includedInBackups = !settingObject.contains(DESCRIPTION_BACKUP_FLAG_KEY)
                     || settingObject[DESCRIPTION_BACKUP_FLAG_KEY].toBool();
 
-                if (!settingObject[VALUE_HIDDEN_FLAG_KEY].toBool() && (settingsBackupFlag != ForBackup || includedInBackups)) {
+                bool isAssignmentOnly = settingObject[DESCRIPTION_ASSIGNMENT_ONLY_KEY].toBool();
+
+                if (!settingObject[VALUE_HIDDEN_FLAG_KEY].toBool() && (settingsBackupFlag != ForBackup || includedInBackups)
+                    && (!isAssignmentOnly || authentication == Authenticated)) {
                     QJsonArray affectedTypesArray = settingObject[AFFECTED_TYPES_JSON_KEY].toArray();
                     if (affectedTypesArray.isEmpty()) {
                         affectedTypesArray = groupObject[AFFECTED_TYPES_JSON_KEY].toArray();
@@ -1557,6 +1624,10 @@ QJsonObject DomainServerSettingsManager::settingsResponseObjectForType(const QSt
                                 }
                             } else {
                                 result = QJsonValue::fromVariant(variantValue);
+                            }
+
+                            if (queryType.isNull()) {
+                                result = maskPasswordColumns(result, settingObject);
                             }
 
                             if (!groupKey.isEmpty()) {
@@ -1689,7 +1760,8 @@ void DomainServerSettingsManager::updateSetting(const QString& key, const QJsonV
     } else if (newValue.isArray()) {
         // we just assume array is replacement
         // TODO: we still need to recurse here with the description in case values in the array have special types
-        settingMap[key] = newValue.toArray().toVariantList();
+        settingMap[key] = restorePasswordColumns(newValue.toArray(), settingMap.value(key).toList(), settingDescription)
+            .toVariantList();
     }
 
     sortPermissions();
@@ -1834,7 +1906,8 @@ bool DomainServerSettingsManager::recurseJSONObjectAndOverwriteSettings(const QJ
                     updateSetting(settingKey, settingValue, *thisMap, matchingDescriptionObject);
 
                     if ((rootKey != SECURITY_ROOT_KEY && rootKey != BROADCASTING_KEY &&
-                         rootKey != DESCRIPTION_ROOT_KEY && rootKey != WIZARD_KEY) ||
+                         rootKey != DESCRIPTION_ROOT_KEY && rootKey != WIZARD_KEY &&
+                         rootKey != ScriptCredentials::SETTINGS_GROUP) ||
                         settingKey == AC_SUBNET_ALLOWLIST_KEY) {
                         needRestart = true;
                     }

@@ -16,3 +16,7 @@
 MixedAudioStream::MixedAudioStream(int numFramesCapacity, int numStaticJitterFrames) :
     InboundAudioStream(AudioConstants::STEREO, AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL,
         numFramesCapacity, numStaticJitterFrames) {}
+
+int MixedAudioStream::readAvailableSamples(int16_t* destination, int maxSamples) {
+    return _ringBuffer.readSamples(destination, maxSamples);
+}

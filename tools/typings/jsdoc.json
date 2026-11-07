@@ -1,0 +1,9 @@
+{
+    "opts": {
+        "template": "null-template"
+    },
+    "plugins": [
+        "../jsdoc/plugins/hifi",
+        "../jsdoc/plugins/hifiJSONExport"
+    ]
+}

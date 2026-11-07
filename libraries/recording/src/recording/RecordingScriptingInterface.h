@@ -27,6 +27,8 @@
 #include "Forward.h"
 #include "Frame.h"
 
+class ScriptCompletion;
+
 /*@jsdoc
  * The <code>Recording</code> API makes and plays back recordings of voice and avatar movements. Playback may be done on a 
  * user's avatar or an assignment client agent (see the {@link Agent} API).
@@ -58,7 +60,7 @@ public slots:
      * Loads a recording so that it is ready for playing.
      * @function Recording.loadRecording
      * @param {string} url - The ATP, HTTP, or file system URL of the recording to load.
-     * @param {Recording~loadRecordingCallback} [callback=null] - The function to call upon completion.
+     * @param {Recording~loadRecordingCallback} callback - The function to call upon completion.
      * @example <caption>Load and play back a recording from the asset server.</caption>
      * var assetPath = Window.browseAssets();
      * print("Asset path: " + assetPath);
@@ -73,7 +75,16 @@ public slots:
      *     });
      * }
      */
-    void loadRecording(const QString& url, const ScriptValue& callback = ScriptValue());
+    /*@jsdoc
+     * Loads a recording so that it is ready for playing. Called without a callback (or with <code>undefined</code> or
+     * <code>null</code> in its place), returns a promise; given a callback, returns <code>undefined</code>. A callback that
+     * isn't a function makes a promise rejected with a <code>TypeError</code>, and nothing is loaded.
+     * @function Recording.loadRecording
+     * @param {string} url - The ATP, HTTP, or file system URL of the recording to load.
+     * @returns {Promise<string>} Resolves with the URL once the recording is loaded; rejects with an <code>Error</code>
+     *     naming the URL if it couldn't be loaded.
+     */
+    ScriptValue loadRecording(const QString& url, const ScriptValue& callback = ScriptValue());
 
 
     /*@jsdoc
@@ -355,7 +366,7 @@ protected:
     QSet<recording::NetworkClipLoaderPointer> _clipLoaders;
 
 private:
-    void playClip(recording::NetworkClipLoaderPointer clipLoader, const QString& url, const ScriptValue& callback);
+    void playClip(recording::NetworkClipLoaderPointer clipLoader, const QString& url, const ScriptCompletion& completion);
 };
 
 #endif // hifi_RecordingScriptingInterface_h

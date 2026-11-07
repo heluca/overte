@@ -25,17 +25,32 @@ macro(fixup_interface)
             ")
         endif ()
 
+        # The Conan Qt is a non-framework build, and macdeployqt then leaves out QtWebEngine's helper
+        # process and data; cmake/MacDeployQtWebEngine.cmake adds them after macdeployqt has run.
+        set(_QT_PREFIX "${QT_DIR}")
+        if (NOT _QT_PREFIX)
+            get_filename_component(_QT_PREFIX "${MACDEPLOYQT_COMMAND}" DIRECTORY)
+            get_filename_component(_QT_PREFIX "${_QT_PREFIX}" DIRECTORY)
+        endif ()
+        set(_WEBENGINE_DEPLOY_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/MacDeployQtWebEngine.cmake")
+
         if (OVERTE_RELEASE_TYPE STREQUAL "DEV")
             install(CODE "
                 execute_process(COMMAND ${MACDEPLOYQT_COMMAND}\
                     \${CMAKE_INSTALL_PREFIX}/${_INTERFACE_INSTALL_PATH}/\
                     -verbose=2 -qmldir=${CMAKE_SOURCE_DIR}/interface/resources/qml/\
+                )
+                execute_process(COMMAND ${CMAKE_COMMAND}\
+                    -DBUNDLE=\${CMAKE_INSTALL_PREFIX}/${_INTERFACE_INSTALL_PATH}\
+                    -DQT_PREFIX=${_QT_PREFIX}\
+                    -P ${_WEBENGINE_DEPLOY_SCRIPT}\
                 )"
                 COMPONENT ${CLIENT_COMPONENT}
             )
         else ()
             add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
                 COMMAND ${MACDEPLOYQT_COMMAND} "$<TARGET_FILE_DIR:${TARGET_NAME}>/../.." -verbose=2 -qmldir=${CMAKE_SOURCE_DIR}/interface/resources/qml/
+                COMMAND ${CMAKE_COMMAND} -DBUNDLE="$<TARGET_FILE_DIR:${TARGET_NAME}>/../.." -DQT_PREFIX=${_QT_PREFIX} -P ${_WEBENGINE_DEPLOY_SCRIPT}
             )
         endif()
     endif ()
