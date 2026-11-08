@@ -73,6 +73,7 @@ public:
     bool isHDR() const { return colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT && colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT; }
     /* "format/colourspace" for logs */
     std::string describeFormat() const;
+    static std::string describeFormat(const VkSurfaceFormatKHR& surfaceFormat);
     /**
     * Acquires the next image in the swap chain
     * 

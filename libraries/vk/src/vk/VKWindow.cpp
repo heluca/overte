@@ -17,6 +17,7 @@
 #include <QtGui/qevent.h>
 #include <QtCore/QTimer>
 #include <QtCore/QDebug>
+#include <QtCore/QStringList>
 #include <QWidget>
 #include <QWindow>
 #include <QOpenGLContext>
@@ -69,6 +70,11 @@ void VKWindow::createSurface() {
     create();
     setVulkanInstance(_context.qtInstance);
     _swapchain.initSurface(QVulkanInstance::surfaceForWindow(this));
+    QStringList offered;
+    for (const auto& surfaceFormat : _swapchain.surfaceFormats) {
+        offered << VulkanSwapChain::describeFormat(surfaceFormat).c_str();
+    }
+    qDebug() << "VKWindow::createSurface surface formats:" << offered.join(", ");
     qDebug() << "VKWindow::createSurface platform:" << QGuiApplication::platformName()
              << "format:" << _swapchain.colorFormat << "color space:" << _swapchain.colorSpace;
 }

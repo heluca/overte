@@ -97,36 +97,47 @@ void VulkanSwapChain::initSurface(VkSurfaceKHR windowSurface)
 
 bool VulkanSwapChain::selectFormat(bool hdr) {
     assert(!surfaceFormats.empty());
-    // Initialize the format to the first one returned by the implementation in case we can't find a preferred one
-    VkSurfaceFormatKHR selectedFormat = surfaceFormats[0];
-    bool selectedHDR = false;
-    if (hdr) {
+    auto find = [&](VkFormat format, VkColorSpaceKHR space) -> const VkSurfaceFormatKHR* {
         for (auto& availableFormat : surfaceFormats) {
-            if (availableFormat.format == VK_FORMAT_R16G16B16A16_SFLOAT && availableFormat.colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT) {
-                selectedFormat = availableFormat;
-                selectedHDR = true;
+            if (availableFormat.format == format && availableFormat.colorSpace == space) {
+                return &availableFormat;
+            }
+        }
+        return nullptr;
+    };
+    const VkSurfaceFormatKHR* chosen = hdr ? find(VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT) : nullptr;
+    const bool selectedHDR = chosen != nullptr;
+    if (!chosen) {
+        chosen = find(VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+    }
+    if (!chosen) {
+        // With VK_EXT_swapchain_colorspace enabled the implementation's first entry can be a float or pass-through
+        // pair, so prefer any plain sRGB pair before falling back to it
+        for (auto& availableFormat : surfaceFormats) {
+            if (availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                chosen = &availableFormat;
                 break;
             }
         }
     }
-    if (!selectedHDR) {
-        for (auto& availableFormat : surfaceFormats) {
-            if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-                selectedFormat = availableFormat;
-                break;
-            }
-        }
-    }
+    const VkSurfaceFormatKHR selectedFormat = chosen ? *chosen : surfaceFormats[0];
     colorFormat = selectedFormat.format;
     colorSpace = selectedFormat.colorSpace;
     return selectedHDR;
 }
 
 std::string VulkanSwapChain::describeFormat() const {
-    std::string format = colorFormat == VK_FORMAT_B8G8R8A8_SRGB ? "B8G8R8A8_SRGB" :
-                         colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT ? "R16G16B16A16_SFLOAT" : std::to_string((int)colorFormat);
-    std::string space = colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ? "sRGB" :
-                        colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT ? "extended linear sRGB" : std::to_string((int)colorSpace);
+    return describeFormat({ colorFormat, colorSpace });
+}
+
+std::string VulkanSwapChain::describeFormat(const VkSurfaceFormatKHR& surfaceFormat) {
+    const auto f = surfaceFormat.format;
+    const auto cs = surfaceFormat.colorSpace;
+    std::string format = f == VK_FORMAT_B8G8R8A8_SRGB ? "B8G8R8A8_SRGB" :
+                         f == VK_FORMAT_R16G16B16A16_SFLOAT ? "R16G16B16A16_SFLOAT" : std::to_string((int)f);
+    std::string space = cs == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ? "sRGB" :
+                        cs == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT ? "extended linear sRGB" :
+                        cs == VK_COLOR_SPACE_PASS_THROUGH_EXT ? "pass-through" : std::to_string((int)cs);
     return format + "/" + space;
 }
 
