@@ -968,14 +968,18 @@ void NodeList::activateSocketFromNodeCommunication(ReceivedMessage& message, con
     quint8 pingType;
     packetStream >> pingType;
 
-    // if this is a local or public ping then we can activate a socket
-    // we do nothing with agnostic pings, those are simply for timing
-    if (pingType == PingType::Local && sendingNode->getActiveSocket() != &sendingNode->getLocalSocket()) {
-        sendingNode->activateLocalSocket();
-    } else if (pingType == PingType::Public && !sendingNode->getActiveSocket()) {
-        sendingNode->activatePublicSocket();
-    } else if (pingType == PingType::Symmetric && !sendingNode->getActiveSocket()) {
-        sendingNode->activateSymmetricSocket();
+    // Activate the address the reply came from, not the one the ping was sent to. On a route that is not
+    // symmetric (a peer on the host of this server's container answers a ping sent to its LAN address from the
+    // bridge address) unreliable packets still arrive, but UDT keys a reliable connection by address: the
+    // peer's handshake ACK lands on another connection, the send queue waits for it forever and no reliable
+    // packet is ever sent (heluca/overte#144). When the addresses match this is the same socket as before.
+    // We do nothing with agnostic pings, those are simply for timing.
+    const SockAddr& replySocket = message.getSenderSockAddr();
+    const SockAddr* activeSocket = sendingNode->getActiveSocket();
+    if (pingType == PingType::Local && (!activeSocket || *activeSocket != replySocket)) {
+        sendingNode->activateMatchingOrNewSymmetricSocket(replySocket);
+    } else if ((pingType == PingType::Public || pingType == PingType::Symmetric) && !activeSocket) {
+        sendingNode->activateMatchingOrNewSymmetricSocket(replySocket);
     }
 
     if (sendingNode->getType() == NodeType::AudioMixer) {
