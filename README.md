@@ -54,6 +54,42 @@ Overte is a free and open source 3D social virtual worlds software.
 - [For Linux](https://github.com/overte-org/overte/blob/master/BUILD_LINUX.md)
 - [For Linux - Overte Builder](https://github.com/overte-org/overte-builder)
 
+#### Running the Qt 6 Vulkan Interface on Linux
+
+The Vulkan Interface presents through the Qt platform plugin, so the plugin decides what the swapchain can offer:
+
+- `QT_QPA_PLATFORM=wayland` is required for HDR output. Under the default `xcb` plugin the swapchain is always SDR (`B8G8R8A8_SRGB`), whatever the display supports. HDR also needs a Wayland compositor with HDR enabled for the display and a Vulkan driver that offers `VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT` (NVIDIA 595 or later; the 580 series does not).
+- `OVERTE_HDR_HEADROOM` states the display's HDR headroom, peak luminance divided by the compositor's SDR white level (for example 910 nits / 500 nits = `1.82`). Linux has no API that reports it yet, so without this variable the Interface keeps an SDR swapchain even when HDR output is turned on. Values above `1.01` enable the HDR path.
+- *Developer > Render > HDR Output* toggles HDR live once those two are set; the choice persists in the settings.
+
+The log confirms which path is active: `VKWindow::createSwapchain R16G16B16A16_SFLOAT/extended linear sRGB (HDR requested)` for HDR, `B8G8R8A8_SRGB/sRGB` for SDR. Set `OVERTE_LOG_OPTIONS=nojournald QT_FORCE_STDERR_LOGGING=1` to see the log in the terminal instead of journald.
+
+A wrapper script keeps the variables in one place, so the Interface can be started without retyping them. Put it on your `PATH`, for example as `~/.local/bin/overte-dev`:
+
+```bash
+#!/bin/bash
+export QT_QPA_PLATFORM=wayland
+export OVERTE_HDR_HEADROOM="${OVERTE_HDR_HEADROOM:-<your headroom>}"
+exec "<path to build>/interface/Release/interface" --display=Desktop "$@"
+```
+
+Extra arguments pass through, so `overte-dev --url hifi://<host>:<port>` still works. A desktop entry then puts it in the application menu, for example `~/.local/share/applications/overte-dev.desktop` (the Interface reads no positional URL argument, so no `%u` or `MimeType` here):
+
+```ini
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Overte (dev)
+Comment=Overte Qt 6 Vulkan client, HDR on Wayland
+Exec=<path to>/overte-dev
+Icon=<path to source>/interface/icon/interface.svg
+Terminal=false
+Categories=Game;Qt;
+StartupWMClass=interface
+```
+
+Run `update-desktop-database ~/.local/share/applications` afterwards so the menu picks it up.
+
 #### How to build a Server
 
 - [For Windows](https://github.com/overte-org/overte/blob/master/BUILD_WIN.md)
