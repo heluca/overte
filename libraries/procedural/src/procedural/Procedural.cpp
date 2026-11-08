@@ -8,6 +8,9 @@
 
 #include "Procedural.h"
 
+#include <algorithm>
+#include <array>
+
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
@@ -39,6 +42,23 @@ static const QString URL_KEY = "shaderUrl";
 static const QString VERSION_KEY = "version";
 static const QString UNIFORMS_KEY = "uniforms";
 static const QString CHANNELS_KEY = "channels";
+
+// Which iChannelN have a texture URL in the channels array, using the same rules as Procedural::setProceduralData
+static std::array<bool, MAX_PROCEDURAL_TEXTURE_CHANNELS> boundChannels(const QJsonArray& channels) {
+    std::array<bool, MAX_PROCEDURAL_TEXTURE_CHANNELS> bound{};
+    size_t channelCount = std::min(MAX_PROCEDURAL_TEXTURE_CHANNELS, (size_t)channels.size());
+    for (size_t channel = 0; channel < channelCount; ++channel) {
+        QJsonValue channelValue = channels.at((int)channel);
+        if (channelValue.isString()) {
+            bound[channel] = true;
+        } else if (channelValue.isObject()) {
+            QJsonObject channelMap = channelValue.toObject();
+            auto urlItr = channelMap.constFind("url");
+            bound[channel] = urlItr != channelMap.constEnd() && urlItr->isString();
+        }
+    }
+    return bound;
+}
 
 // Shader replace strings
 static const std::string PROCEDURAL_BLOCK = "//PROCEDURAL_BLOCK";
@@ -160,6 +180,10 @@ void Procedural::setProceduralData(const ProceduralData& proceduralData) {
     }
 
     if (proceduralData.channels != _data.channels) {
+        // The bound channels are declared in the shader reflection, so a change in which ones are bound needs new pipelines
+        if (boundChannels(proceduralData.channels) != boundChannels(_data.channels)) {
+            _shaderDirty = true;
+        }
         _data.channels = proceduralData.channels;
 
         static Sampler defaultSampler;
@@ -365,22 +389,40 @@ void Procedural::prepare(gpu::Batch& batch,
             vertexSource.replacements[PROCEDURAL_BLOCK] = _vertexShaderSource.toStdString();
         }
 
+        // Every dialect/variant reflection of both shaders, for the bindings added at runtime
+        std::vector<shader::Reflection*> allFragmentReflections;
+        for (auto dialectIt = fragmentSource.dialectSources.begin(); dialectIt != fragmentSource.dialectSources.end(); ++dialectIt) {
+            for (auto variantIt = (*dialectIt).second.variantSources.begin(); variantIt != (*dialectIt).second.variantSources.end(); ++variantIt) {
+                allFragmentReflections.push_back(&(*variantIt).second.reflection);
+            }
+        }
+        std::vector<shader::Reflection*> allVertexReflections;
+        for (auto dialectIt = vertexSource.dialectSources.begin(); dialectIt != vertexSource.dialectSources.end(); ++dialectIt) {
+            for (auto variantIt = (*dialectIt).second.variantSources.begin(); variantIt != (*dialectIt).second.variantSources.end(); ++variantIt) {
+                allVertexReflections.push_back(&(*variantIt).second.reflection);
+            }
+        }
+
+        // The Vulkan pipeline layout comes from the reflection: without a binding for iChannelN the descriptor set
+        // has no slot for the channel, SPIRV-Cross aliases it onto another texture and the pipeline fails to build.
+        const auto channelsBound = boundChannels(_data.channels);
+        for (auto reflections : { &allFragmentReflections, &allVertexReflections }) {
+            for (auto reflection : *reflections) {
+                for (size_t i = 0; i < MAX_PROCEDURAL_TEXTURE_CHANNELS; ++i) {
+                    const std::string channelName = "iChannel" + std::to_string(i);
+                    if (channelsBound[i]) {
+                        reflection->textures[channelName] = (int32_t)(procedural::slot::texture::Channel0 + i);
+                    } else {
+                        reflection->textures.erase(channelName);
+                    }
+                }
+                reflection->updateValid();
+            }
+        }
+
         // Set any userdata specified uniforms (if any)
         if (!_data.uniforms.empty()) {
-            // First grab all the possible dialect/variant/reflections
-            std::vector<shader::Reflection*> allFragmentReflections;
-            for (auto dialectIt = fragmentSource.dialectSources.begin(); dialectIt != fragmentSource.dialectSources.end(); ++dialectIt) {
-                for (auto variantIt = (*dialectIt).second.variantSources.begin(); variantIt != (*dialectIt).second.variantSources.end(); ++variantIt) {
-                    allFragmentReflections.push_back(&(*variantIt).second.reflection);
-                }
-            }
-            std::vector<shader::Reflection*> allVertexReflections;
-            for (auto dialectIt = vertexSource.dialectSources.begin(); dialectIt != vertexSource.dialectSources.end(); ++dialectIt) {
-                for (auto variantIt = (*dialectIt).second.variantSources.begin(); variantIt != (*dialectIt).second.variantSources.end(); ++variantIt) {
-                    allVertexReflections.push_back(&(*variantIt).second.reflection);
-                }
-            }
-            // Then fill in every reflections the new custom bindings
+            // Fill in every reflection the new custom bindings
             int customSlot = procedural::slot::uniform::Custom;
             _slotMap.clear();
             for (const auto& key : _data.uniforms.keys()) {

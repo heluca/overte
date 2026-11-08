@@ -646,6 +646,14 @@ const Cache::PipelineLayout& Cache::getPipeline(const vks::Context& context) {
     }
 
     auto result = builder.create();
+    if (result == VK_NULL_HANDLE) {
+        // vkCreateGraphicsPipelines failed (e.g. MoltenVK could not compile the shader to Metal). Flag the program as
+        // GL does for a compile failure, so Procedural switches to its error shader. The null pipeline stays cached so
+        // the creation is not retried every frame; the backend skips draws that use it.
+        pipeline.getProgram()->setCompilationHasFailed(true);
+        qWarning() << "Vulkan backend: pipeline creation failed for vertex shader" << vertexShader.name.c_str()
+                   << "and fragment shader" << fragmentShader.name.c_str();
+    }
     pipelineLayout.pipeline = result;
     auto pipelineInMap = pipelineMap.insert({key, pipelineLayout});
     qDebug() << "Pipeline cache size: " << pipelineMap.size();

@@ -64,6 +64,8 @@ struct Reflection {
 
     void parse(const std::string& json);
     void merge(const Reflection& reflection);
+    // Recompute the valid-location sets after editing the maps directly (Procedural adds bindings at runtime)
+    void updateValid();
 
     bool validInput(int32_t location) const { return validLocation(validInputs, location); }
     bool validOutput(int32_t location) const { return validLocation(validOutputs, location); }
@@ -98,8 +100,6 @@ private:
     bool validLocation(const ValidSet& locations, int32_t location) const {
         return locations.contains(location);
     }
-
-    void updateValid();
 
     ValidSet validInputs;
     ValidSet validOutputs;

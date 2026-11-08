@@ -1408,6 +1408,11 @@ void VKBackend::renderPassDraw(const Batch& batch) {
 
             bool hasPipelineChanged{ false };
             const auto &layout = _cache.getPipeline(_context);
+            if (layout.pipeline == VK_NULL_HANDLE) {
+                // Pipeline creation failed: binding a null pipeline crashes, so drop this draw
+                currentPipeline = VK_NULL_HANDLE;
+                break;
+            }
             if (layout.pipeline != currentPipeline) {
                 vkCmdBindPipeline(_currentCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.pipeline);
                 currentPipeline = layout.pipeline;
