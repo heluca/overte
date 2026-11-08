@@ -411,6 +411,14 @@ void VKWindow::resizeFramebuffer() {
         qDebug() << "VKWindow::resizeFramebuffer swapchain is now" << _swapchain.describeFormat().c_str();
         setupRenderPass();
     }
+    if (_drawCommandBuffers.size() != _swapchain.imageCount) {
+        // present() indexes the command buffers by swapchain image, and a new format or colour space can change the count
+        auto& device = _context.device;
+        vkFreeCommandBuffers(device->logicalDevice, device->graphicsCommandPool, static_cast<uint32_t>(_drawCommandBuffers.size()), _drawCommandBuffers.data());
+        _drawCommandBuffers.resize(_swapchain.imageCount);
+        VkCommandBufferAllocateInfo cmdBufAllocateInfo = vks::initializers::commandBufferAllocateInfo(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, static_cast<uint32_t>(_drawCommandBuffers.size()));
+        VK_CHECK_RESULT(vkAllocateCommandBuffers(device->logicalDevice, &cmdBufAllocateInfo, _drawCommandBuffers.data()));
+    }
     // TODO: add an assert here to see if width and height changed?
     setupDepthStencil();
     setupFramebuffers();
