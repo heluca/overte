@@ -10,7 +10,14 @@
 
 #include "VKPipelineCache.h"
 
+#include <cstdio>
 #include <iomanip>
+
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QRegularExpression>
+
+#include "VKShaderCompiler.h"
 
 #include "VKShared.h"
 #include <vk/Pipelines.h>
@@ -362,8 +369,8 @@ std::string Cache::Pipeline::getKey(const vks::Context& context) const {
     const gpu::State& state = *pipeline.getState();
     const auto& vertexShader = pipeline.getProgram()->getShaders()[0]->getSource();
     const auto& fragmentShader = pipeline.getProgram()->getShaders()[1]->getSource();
-    // VKTODO account for customized shaders (preferably by forcing shaders to have a new unique ID at runtime when they're using replacement strings)
-    std::string key = bytesToAscii(shader::makeProgramId(vertexShader.id, fragmentShader.id)) +
+    // A shader with runtime replacements (Procedural) has no build id; its key is the hash of what was replaced
+    std::string key = sourceKey(vertexShader) + "_" + sourceKey(fragmentShader)
           + "_" + getRenderpassKeyString(renderpassKey)
           + "_" + state.getKey()
           // A draw with no vertex input (full-screen triangle, skybox) legitimately has no format.
@@ -386,20 +393,42 @@ VkStencilOpState Cache::getStencilOp(const gpu::State::StencilTest& stencil) {
     return result;
 }
 
-// The key a Source's module is cached under. A shader from the build has a unique id. A Source
-// copied at runtime (Procedural, HighlightEffect, DebugDeferredBuffer) has none, since
-// shader::Source::operator= drops the id on purpose; keying those by id put every copy under
-// INVALID_SHADER, so a procedural skybox's fragment stage was handed its vertex module. Until
-// this backend compiles replacements, the module of a copy depends only on the name it was copied from.
-static std::string moduleKey(const shader::Source& source) {
-    if (source.id != shader::INVALID_SHADER) {
+// The key a Source's module and pipelines are cached under. A shader from the build has a unique id. A Source
+// copied at runtime (Procedural, HighlightEffect, DebugDeferredBuffer) has none, since shader::Source::operator=
+// drops the id on purpose; those are keyed by the name they were copied from and a hash of their replacements, so
+// two procedural shaders with different GLSL never share a module or a pipeline. The hash is order-independent
+// because unordered_map iteration order depends on insertion history, not content.
+std::string Cache::sourceKey(const shader::Source& source) {
+    if (source.id != shader::INVALID_SHADER && source.replacements.empty()) {
         return std::to_string(source.id);
     }
-    return "copy:" + source.name;
+    std::hash<std::string> hasher;
+    size_t combined = hasher(source.name);
+    for (const auto& replacement : source.replacements) {
+        size_t entry = hasher(replacement.first);
+        hash_combine(entry, hasher(replacement.second));
+        combined ^= entry;
+    }
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%016zx", combined);
+    return "rt:" + source.name + ":" + buffer;
 }
 
-VkShaderModule Cache::getShaderModule(const vks::Context& context, const shader::Source& source) {
-    const auto key = moduleKey(source);
+static void dumpFailedShader(const std::string& key, const std::string& glsl, const std::string& log) {
+    const QString path = QDir::tempPath() + "/overte-shader-" + QString::fromStdString(key).replace(QRegularExpression("[^A-Za-z0-9_.-]"), "_") + ".glsl";
+    QFile file(path);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        file.write(glsl.c_str(), glsl.size());
+        file.write("\n/* glslang:\n");
+        file.write(log.c_str(), log.size());
+        file.write("\n*/\n");
+        qWarning() << "Vulkan backend: the shader that failed to compile is in" << path;
+    }
+}
+
+VkShaderModule Cache::getShaderModule(const vks::Context& context, const shader::Source& source, VkShaderStageFlagBits stage, bool& compileFailed) {
+    const auto key = sourceKey(source);
+    compileFailed = failedModuleKeys.count(key) > 0;
     auto itr = moduleMap.find(key);
     if (moduleMap.end() == itr) {
         auto dialectItr = source.dialectSources.find(shader::Dialect::glsl450);
@@ -410,19 +439,37 @@ VkShaderModule Cache::getShaderModule(const vks::Context& context, const shader:
                    "The Vulkan backend requires hifi::properties::GraphicsAPI::Vulkan or GL45 (see --graphicsAPI).",
                    key.c_str());
         }
-        if (!source.replacements.empty()) {
-            // Procedural and debug shaders swap GLSL blocks in at runtime. This backend has only the
-            // SPIR-V compiled at build time, so the shader renders as it was written.
-            qWarning() << "Vulkan backend: ignoring the source replacements of shader" << source.name.c_str();
-        }
         const auto& dialectSource = dialectItr->second;
         const auto& variantSource = dialectSource.variantSources.find(shader::Variant::Mono)->second;
-        const auto& spirv = variantSource.spirv;
+        const uint8_t* code = variantSource.spirv.data();
+        size_t codeSize = variantSource.spirv.size();
+
+        std::vector<uint32_t> compiled;
+        if (!source.replacements.empty()) {
+            // Procedural and debug shaders swap GLSL blocks in at runtime: compile the text the GL backends compile
+            const auto glsl = source.getSource(shader::Dialect::glsl450, shader::Variant::Mono);
+            std::string log;
+            if (compileGlslToSpirv(glsl, stage, compiled, log)) {
+                code = reinterpret_cast<const uint8_t*>(compiled.data());
+                codeSize = compiled.size() * sizeof(uint32_t);
+                if (!log.empty()) {
+                    qDebug() << "Vulkan backend: compiled shader" << source.name.c_str() << "with notes:" << log.c_str();
+                }
+            } else {
+                // Keep the pipeline buildable with the shader as it was written; the program is flagged so
+                // Procedural switches to its error shader on the next frame
+                qWarning() << "Vulkan backend: shader" << source.name.c_str() << "failed to compile at runtime:" << log.c_str();
+                dumpFailedShader(key, glsl, log);
+                failedModuleKeys.insert(key);
+                compileFailed = true;
+            }
+        }
+
         VkShaderModule result = VK_NULL_HANDLE;
         VkShaderModuleCreateInfo shaderModuleCreateInfo{};
         shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        shaderModuleCreateInfo.codeSize = spirv.size();
-        shaderModuleCreateInfo.pCode = (const uint32_t*)spirv.data();
+        shaderModuleCreateInfo.codeSize = codeSize;
+        shaderModuleCreateInfo.pCode = (const uint32_t*)code;
         VK_CHECK_RESULT(vkCreateShaderModule(context.device->logicalDevice, &shaderModuleCreateInfo, nullptr, &result));
         moduleMap[key] = result;
         return result;
@@ -462,19 +509,25 @@ const Cache::PipelineLayout& Cache::getPipeline(const vks::Context& context) {
     // Shader modules
     {
         builder.shaderStages.resize(2, {});
+        bool vertexCompileFailed = false;
+        bool fragmentCompileFailed = false;
         {
             auto& shaderStage = builder.shaderStages[0];
             shaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             shaderStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
             shaderStage.pName = "main";
-            shaderStage.module = getShaderModule(context, vertexShader);
+            shaderStage.module = getShaderModule(context, vertexShader, VK_SHADER_STAGE_VERTEX_BIT, vertexCompileFailed);
         }
         {
             auto& shaderStage = builder.shaderStages[1];
             shaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             shaderStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
             shaderStage.pName = "main";
-            shaderStage.module = getShaderModule(context, fragmentShader);
+            shaderStage.module = getShaderModule(context, fragmentShader, VK_SHADER_STAGE_FRAGMENT_BIT, fragmentCompileFailed);
+        }
+        if (vertexCompileFailed || fragmentCompileFailed) {
+            // What the GL backends do when glCompileShader fails: Procedural reads this and draws its error shader
+            pipeline.getProgram()->setCompilationHasFailed(true);
         }
     }
 

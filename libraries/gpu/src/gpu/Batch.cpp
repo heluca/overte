@@ -42,7 +42,10 @@ ProfileRangeBatch::~ProfileRangeBatch() {
 using namespace gpu;
 
 // FIXME make these backend / pipeline dependent.
-static const int MAX_NUM_UNIFORM_BUFFERS = 14;
+// Slots 0-13 are the render pipelines'; 16 is the block the Vulkan backend gives a procedural shader's own
+// uniforms (PROCEDURAL_BUFFER_CUSTOM). That backend's binding array holds MIN_REQUIRED_UNIFORM_BUFFER_BINDINGS
+// slots; the GL backends keep 14 and drop a higher slot with a message in do_setUniformBuffer.
+static const int MAX_NUM_UNIFORM_BUFFERS = 17;
 static const int MAX_NUM_RESOURCE_BUFFERS = 16;
 static const int MAX_NUM_RESOURCE_TEXTURES = 16;
 
