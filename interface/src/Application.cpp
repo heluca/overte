@@ -221,8 +221,11 @@ Application::Application(
     //_window(new MainWindow(desktop())),
 #else
     _vkWindow(new VKWindow()),
-    _vkWindowWrapper(QWidget::createWindowContainer(_vkWindow)),
-    _window(new MainWindow(_vkWindowWrapper)),
+    // The window container is created once, in Application::initialize(), where the main window takes it as its central widget.
+    // A second QWindowContainer for the same QWindow leaves the first one with a null window pointer (reparenting
+    // the window out of its fake parent does that), and Qt 6 dereferences it when the top-levels are destroyed.
+    _vkWindowWrapper(nullptr),
+    _window(new MainWindow()),
 #endif
     // Menu needs to be initialized before other initializers. Otherwise deadlock happens on qApp->getWindow()->menuBar().
     _isMenuInitialized(initMenu()),
