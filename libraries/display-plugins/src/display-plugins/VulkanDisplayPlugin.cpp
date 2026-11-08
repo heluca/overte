@@ -278,6 +278,23 @@ private:
 #endif
 };
 
+// OVERTE_HDR_HEADROOM states the display's headroom where the platform cannot report it (Linux) or for testing;
+// unset reads as 0, meaning unknown
+static float configuredHeadroom() {
+    static const float headroom = qEnvironmentVariable("OVERTE_HDR_HEADROOM").toFloat();
+    return headroom;
+}
+
+static bool wantsHDRSwapchain(bool settingEnabled) {
+#ifdef Q_OS_MAC
+    // macOS reports headroom only once extended-range content is on screen, so the swapchain has to come first
+    return settingEnabled;
+#else
+    // Nothing reports the headroom here: without a configured one the window would be tagged scRGB but keep the SDR curve
+    return settingEnabled && configuredHeadroom() > 1.01f;
+#endif
+}
+
 bool VulkanDisplayPlugin::activate() {
 #ifdef USE_GL
     return false;
@@ -331,7 +348,9 @@ bool VulkanDisplayPlugin::activate() {
         _vkWindow->setVisible(true);
         _vkWindow->createSurface();
         // The same key RenderScriptingInterface saves; read here because the plugin may activate before or after it
-        _vkWindow->setHDRRequested(Setting::Handle<bool>("hdrOutputEnabled", false).get());
+        const bool hdrOutputEnabled = Setting::Handle<bool>("hdrOutputEnabled", false).get();
+        qCDebug(displayPlugins) << "HDR output setting" << hdrOutputEnabled << ", configured headroom" << configuredHeadroom();
+        _vkWindow->setHDRRequested(wantsHDRSwapchain(hdrOutputEnabled));
         _vkWindow->createSwapchain();
         vkWidget->moveToThread(presentThread.get());
         _vkWindow->moveToThread(presentThread.get());
@@ -1099,7 +1118,7 @@ bool VulkanDisplayPlugin::setDisplayTexture(const QString& name) {
 
 void VulkanDisplayPlugin::setHDROutputEnabled(bool enabled) {
     if (_vkWindow) {
-        _vkWindow->setHDRRequested(enabled);
+        _vkWindow->setHDRRequested(wantsHDRSwapchain(enabled));
     }
 }
 
@@ -1111,9 +1130,7 @@ void VulkanDisplayPlugin::updateHDRPeak() {
         auto headroom = _displayHeadroom;
         _vkWindow->requestDisplayHeadroom([headroom](float value) { *headroom = value; });
     }
-    // OVERTE_HDR_HEADROOM states the display's headroom where the platform cannot report it (Linux) or for testing
-    static const float forcedHeadroom = qEnvironmentVariable("OVERTE_HDR_HEADROOM").toFloat();
-    const float headroom = forcedHeadroom > 0.0f ? forcedHeadroom : _displayHeadroom->load();
+    const float headroom = configuredHeadroom() > 0.0f ? configuredHeadroom() : _displayHeadroom->load();
     // A screen without headroom (1.0) shows nothing above SDR white, so the tone mapper keeps its SDR curve there
     const float peak = (hdrSwapchain && headroom > 1.01f) ? headroom : 0.0f;
     if (peak != _hdrPeak) {
