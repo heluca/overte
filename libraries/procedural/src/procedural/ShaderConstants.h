@@ -16,6 +16,8 @@
 #define PROCEDURAL_SHADER_CONSTANTS_H
 
 #define PROCEDURAL_BUFFER_INPUTS 7
+// The Vulkan backend has no loose uniforms; Procedural packs a shader's `uniform` declarations into one block here
+#define PROCEDURAL_BUFFER_CUSTOM 16
 
 #define PROCEDURAL_UNIFORM_CUSTOM 220
 
@@ -37,6 +39,7 @@ namespace procedural { namespace slot {
 namespace buffer {
 enum Bufffer {
     Inputs = PROCEDURAL_BUFFER_INPUTS,
+    Custom = PROCEDURAL_BUFFER_CUSTOM,
 };
 }
 
