@@ -15,7 +15,7 @@
 
 #include <QtCore/QDir>
 #include <QtCore/QFile>
-#include <QtCore/QRegExp>
+#include <QtCore/QRegularExpression>
 
 #include "VKShaderCompiler.h"
 
@@ -415,7 +415,7 @@ std::string Cache::sourceKey(const shader::Source& source) {
 }
 
 static void dumpFailedShader(const std::string& key, const std::string& glsl, const std::string& log) {
-    const QString path = QDir::tempPath() + "/overte-shader-" + QString::fromStdString(key).replace(QRegExp("[^A-Za-z0-9_.-]"), "_") + ".glsl";
+    const QString path = QDir::tempPath() + "/overte-shader-" + QString::fromStdString(key).replace(QRegularExpression("[^A-Za-z0-9_.-]"), "_") + ".glsl";
     QFile file(path);
     if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         file.write(glsl.c_str(), glsl.size());

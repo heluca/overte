@@ -114,7 +114,7 @@ bool std140Member(ProceduralCustomUniform& uniform, size_t& alignment, size_t& s
 void extractLooseUniforms(QString& shaderText, std::vector<ProceduralCustomUniform>& uniforms) {
     static const QRegularExpression DECLARATION("^[ \\t]*uniform[ \\t]+(\\w+)[ \\t]+(\\w+)[ \\t]*(?:\\[[ \\t]*(\\d+)[ \\t]*\\])?[ \\t]*;",
                                                 QRegularExpression::MultilineOption);
-    struct Found { int start; int length; };
+    struct Found { qsizetype start; qsizetype length; };
     std::vector<Found> found;
     auto matches = DECLARATION.globalMatch(shaderText);
     while (matches.hasNext()) {
