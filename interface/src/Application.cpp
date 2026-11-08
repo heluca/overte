@@ -274,6 +274,15 @@ Application::Application(
 
     DependencyManager::set<PathUtils>();
 
+#if defined(Q_OS_LINUX)
+    // The offscreen QML surfaces render through Qt Quick's OpenGL RHI into GL textures; the software
+    // adaptation leaves them blank (QQuickRenderControl::initialize() fails). A desktop platform theme can
+    // request the software backend for every Qt app while QApplication is constructed, so clear that
+    // request here, after construction. setGraphicsApi() alone does not clear it.
+    QQuickWindow::setSceneGraphBackend(QString());
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+#endif
+
 #if defined(Q_OS_MAC)
     // The crash recovery and display mode dialogs are shown before the settings are loaded, which is
     // where the Fusion style and the dark/light palette are normally applied (loadSettings). Qt 5.15's
