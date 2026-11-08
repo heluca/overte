@@ -2349,9 +2349,10 @@ void AudioClient::AudioOutputCallback::operator()(QSpan<AudioConstants::AudioSam
         }
     }
 
-    // prepare injectors for the next callback
+    // prepare injectors for the next callback. Capture the AudioClient, not this callback object: the sink owns
+    // a copy of the callback and destroys it on a device switch, which can happen while the pooled task still runs.
     _audio->_localPrepInjectorFuture =
-        QtConcurrent::run(QThreadPool::globalInstance(), [this] { _audio->prepareLocalAudioInjectors(); });
+        QtConcurrent::run(QThreadPool::globalInstance(), [audio = _audio] { audio->prepareLocalAudioInjectors(); });
 
     int samplesPopped = std::max(networkSamplesPopped, injectorSamplesPopped);
     if (samplesPopped == 0) {
