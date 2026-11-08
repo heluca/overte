@@ -125,8 +125,11 @@ void VKBackend::shutdown() {
 
     _context.shutdownWindows();
 
-    // Release frames so their destructors can do a cleanup
+    // Release every frame here, while the device still exists: a FrameData destroyed later, by ~VKBackend after
+    // destroyContext(), destroys its render passes through a dead device and the client segfaults on quit.
     _currentFrame.reset();
+    _currentlyRenderedFrame.reset();
+    _previouslyRenderedFrame.reset();
     _framesToReuse.resize(0);
     _framePool.resize(0);
 
