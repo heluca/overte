@@ -332,10 +332,11 @@ void Application::initializeUi() {
     setupPreferences();
 
 #if !defined(DISABLE_QML)
-#ifdef USE_GL
     _primaryWidget->installEventFilter(offscreenUi.data());
-#else
-    _vkWindow->installEventFilter(offscreenUi.data()); //VKTODO
+#ifndef USE_GL
+    // Mouse events arrive at the Vulkan window. Key events arrive at the canvas, the window container's focus
+    // proxy, except on macOS, where Application::initialize hands the focus to the Vulkan window.
+    _vkWindow->installEventFilter(offscreenUi.data());
 #endif
     offscreenUi->setMouseTranslator([=, this](const QPointF& pt) {
         QPointF result = pt;

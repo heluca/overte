@@ -53,9 +53,15 @@ private:
     SharedObject* const _shared;
     OffscreenGLCanvas _canvas;
     QSize _currentSize;
+    // Size of the scene graph's render target in device pixels: _currentSize scaled by the render window's
+    // device pixel ratio. When it differs from _currentSize the scene is rendered into _renderTexture and
+    // scaled down into the handed-over texture, which stays at _currentSize.
+    QSize _renderSize;
 
     uint32_t _fbo{ 0 };
     uint32_t _depthStencil{ 0 };
+    uint32_t _renderTexture{ 0 };
+    uint32_t _resolveFbo{ 0 };
 
     bool _initialized { false };
 };
