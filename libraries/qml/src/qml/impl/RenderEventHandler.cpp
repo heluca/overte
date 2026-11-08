@@ -96,23 +96,56 @@ void RenderEventHandler::resize() {
         if (_currentSize != QSize()) {
             qCDebug(qmlLogging) << "Upating offscreen textures to " << _currentSize.width() << " x " << _currentSize.height();
             offscreenTextures.acquireSize(_currentSize);
-            if (_depthStencil) {
-                glDeleteRenderbuffers(1, &_depthStencil);
-                _depthStencil = 0;
-            }
-            glGenRenderbuffers(1, &_depthStencil);
-            glBindRenderbuffer(GL_RENDERBUFFER, _depthStencil);
-            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, _currentSize.width(), _currentSize.height());
-            if (!_fbo) {
-                glGenFramebuffers(1, &_fbo);
-            }
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _fbo);
-            glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, _depthStencil);
-            glViewport(0, 0, _currentSize.width(), _currentSize.height());
-            glScissor(0, 0, _currentSize.width(), _currentSize.height());
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         }
     }
+
+    // The surface size, the handed-over texture and the input mapping are all in logical pixels, but Qt 6 lays
+    // the scene out in the render target's pixel size divided by the render window's device pixel ratio. With a
+    // proxy window on a scaled screen, a render target of the logical size would only hold the top left part of
+    // the scene, so render at the device pixel size instead.
+    QSize renderSize;
+    if (_currentSize != QSize()) {
+        renderSize = _currentSize * _shared->_quickWindow->effectiveDevicePixelRatio();
+    }
+    if (_renderSize == renderSize) {
+        return;
+    }
+    _renderSize = renderSize;
+
+    if (_depthStencil) {
+        glDeleteRenderbuffers(1, &_depthStencil);
+        _depthStencil = 0;
+    }
+    if (_renderTexture) {
+        glDeleteTextures(1, &_renderTexture);
+        _renderTexture = 0;
+    }
+    if (_renderSize == QSize()) {
+        return;
+    }
+
+    if (_renderSize != _currentSize) {
+        qCDebug(qmlLogging) << "Rendering offscreen QML at " << _renderSize.width() << " x " << _renderSize.height();
+        glGenTextures(1, &_renderTexture);
+        glBindTexture(GL_TEXTURE_2D, _renderTexture);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, _renderSize.width(), _renderSize.height());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        if (!_resolveFbo) {
+            glGenFramebuffers(1, &_resolveFbo);
+        }
+    }
+
+    glGenRenderbuffers(1, &_depthStencil);
+    glBindRenderbuffer(GL_RENDERBUFFER, _depthStencil);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, _renderSize.width(), _renderSize.height());
+    if (!_fbo) {
+        glGenFramebuffers(1, &_fbo);
+    }
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _fbo);
+    glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, _depthStencil);
+    glViewport(0, 0, _renderSize.width(), _renderSize.height());
+    glScissor(0, 0, _renderSize.width(), _renderSize.height());
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 }
 
 void RenderEventHandler::onRender() {
@@ -148,18 +181,29 @@ void RenderEventHandler::qmlRender(bool sceneGraphSync) {
     if (_currentSize != QSize()) {
         PROFILE_RANGE(render_qml_gl, "render");
         GLuint texture = SharedObject::getTextureCache().acquireTexture(_currentSize);
+        GLuint renderTarget = _renderTexture ? _renderTexture : texture;
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _fbo);
-        glFramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0);
+        glFramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, renderTarget, 0);
         if (nsightActive()) {
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT);
         } else {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            _shared->setRenderTarget(texture, _currentSize);
+            _shared->setRenderTarget(renderTarget, _renderSize);
             _shared->_renderControl->render();
         }
         _shared->_renderControl->endFrame();
         _shared->_lastRenderTime = usecTimestampNow();
+        if (_renderTexture) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, _fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _resolveFbo);
+            glFramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0);
+            // The scene graph leaves its scissor state behind, and the scissor test applies to blits.
+            glDisable(GL_SCISSOR_TEST);
+            glBlitFramebuffer(0, 0, _renderSize.width(), _renderSize.height(), 0, 0, _currentSize.width(),
+                              _currentSize.height(), GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        }
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
         if (!gl::isIOSurfaceTexture(texture)) {
             // IOSurface textures are GL_TEXTURE_RECTANGLE and have no mip chain.
@@ -190,6 +234,16 @@ void RenderEventHandler::onQuit() {
         if (_fbo) {
             glDeleteFramebuffers(1, &_fbo);
             _fbo = 0;
+        }
+
+        if (_renderTexture) {
+            glDeleteTextures(1, &_renderTexture);
+            _renderTexture = 0;
+        }
+
+        if (_resolveFbo) {
+            glDeleteFramebuffers(1, &_resolveFbo);
+            _resolveFbo = 0;
         }
 
         _shared->shutdownRendering(_currentSize);
