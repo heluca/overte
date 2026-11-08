@@ -100,6 +100,24 @@ Flickable {
         }
 
         SettingBoolean {
+            settingText: "Auto Exposure";
+            settingEnabledCondition: () => { return Render.autoExposureEnabled }
+
+            onSettingEnabledChanged: {
+                Render.autoExposureEnabled = settingEnabled;
+            }
+        }
+
+        SettingBoolean {
+            settingText: "HDR Output";
+            settingEnabledCondition: () => { return Render.hdrOutputEnabled }
+
+            onSettingEnabledChanged: {
+                Render.hdrOutputEnabled = settingEnabled;
+            }
+        }
+
+        SettingBoolean {
             settingText: "Custom Shaders";
             settingEnabledCondition: () => { return Render.proceduralMaterialsEnabled}
 

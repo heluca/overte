@@ -126,6 +126,10 @@ void Context::createInstance() {
         enableDebugMarkers = true;
         qDebug() << "Found debug marker extension";
     }
+    // Lets a surface offer colour spaces beyond sRGB, such as the extended linear sRGB that HDR output presents in
+    if (isExtensionPresent(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME)) {
+        requireExtensions({ VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME });
+    }
 
     // Vulkan instance
     VkApplicationInfo appInfo{};

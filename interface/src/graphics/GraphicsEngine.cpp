@@ -264,6 +264,10 @@ void GraphicsEngine::render_performFrame() {
         // Primary rendering pass
         auto framebufferCache = DependencyManager::get<FramebufferCache>();
         finalFramebufferSize = framebufferCache->getFrameBufferSize();
+        // HDR output: the display plugin says whether it presents with headroom above SDR white; then the final
+        // framebuffer is float and the tone mapper is told the peak
+        renderArgs._hdrPeak = displayPlugin->getHDRPeak();
+        framebufferCache->setHDR(renderArgs._hdrPeak > 0.0f);
         // Final framebuffer that will be handed to the display-plugin
         finalFramebuffer = framebufferCache->getFramebuffer();
     }

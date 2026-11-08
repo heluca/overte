@@ -29,6 +29,8 @@ gpu::PipelinePointer ToneMapAndResample::_mirrorPipeline;
 ToneMapAndResample::ToneMapAndResample() {
     Parameters parameters;
     _parametersBuffer = gpu::BufferView(std::make_shared<gpu::Buffer>(gpu::Buffer::UniformBuffer, sizeof(Parameters), (const gpu::Byte*) &parameters));
+    _noAdaptation = gpu::Texture::createRenderBuffer(gpu::Element(gpu::SCALAR, gpu::FLOAT, gpu::RED), 1, 1, gpu::Texture::SINGLE_MIP,
+                                                     Sampler(Sampler::FILTER_MIN_MAG_POINT, Sampler::WRAP_CLAMP));
 }
 
 void ToneMapAndResample::init() {
@@ -45,7 +47,31 @@ void ToneMapAndResample::init() {
 void ToneMapAndResample::setExposure(float exposure) {
     if (_exposure != exposure) {
         _exposure = exposure;
-        _parametersBuffer.edit<Parameters>()._twoPowExposure = pow(2.0, exposure);
+        _parametersBuffer.edit<Parameters>()._exposure = exposure;
+    }
+}
+
+void ToneMapAndResample::setAutoExposure(const AutoExposureResultPointer& autoExposure) {
+    const auto& params = _parametersBuffer.get<Parameters>();
+    const int enabled = autoExposure ? 1 : 0;
+    const float keyLog2 = autoExposure ? autoExposure->keyLog2 : 0.0f;
+    const float rangeUp = autoExposure ? autoExposure->rangeUp : 0.0f;
+    const float rangeDown = autoExposure ? autoExposure->rangeDown : 0.0f;
+    const int debug = (autoExposure && autoExposure->debug) ? 1 : 0;
+    if (params._autoEnabled != enabled || params._autoKeyLog2 != keyLog2 || params._autoRangeUp != rangeUp ||
+        params._autoRangeDown != rangeDown || params._autoDebug != debug) {
+        auto& edit = _parametersBuffer.edit<Parameters>();
+        edit._autoEnabled = enabled;
+        edit._autoKeyLog2 = keyLog2;
+        edit._autoRangeUp = rangeUp;
+        edit._autoRangeDown = rangeDown;
+        edit._autoDebug = debug;
+    }
+}
+
+void ToneMapAndResample::setHDRPeak(float peak) {
+    if (_parametersBuffer.get<Parameters>()._hdrPeak != peak) {
+        _parametersBuffer.edit<Parameters>()._hdrPeak = peak;
     }
 }
 
@@ -71,6 +97,7 @@ void ToneMapAndResample::run(const RenderContextPointer& renderContext, const In
     auto lightingBuffer = input.get0()->getRenderBuffer(0);
     auto destinationFramebuffer = input.get1();
     const auto tonemappingFrame = input.get2();
+    const auto autoExposure = input.get3();
 
     const auto& tonemappingStage = renderContext->_scene->getStage<TonemappingStage>();
     graphics::TonemappingPointer tonemapping;
@@ -81,12 +108,16 @@ void ToneMapAndResample::run(const RenderContextPointer& renderContext, const In
     if (args->_mirrorDepth > 0) {
         setCurve(TonemappingCurve::SRGB);
         setExposure(0.0f);
+        setAutoExposure(nullptr);
     } else if (_debug) {
         setCurve(_debugCurve);
         setExposure(_debugExposure);
     } else if (tonemapping) {
         setCurve(tonemapping->getCurve());
         setExposure(tonemapping->getExposure());
+    }
+    if (args->_mirrorDepth == 0) {
+        setAutoExposure(autoExposure);
     }
 
     if (!destinationFramebuffer) {
@@ -96,6 +127,12 @@ void ToneMapAndResample::run(const RenderContextPointer& renderContext, const In
     if (!lightingBuffer || !destinationFramebuffer) {
         return;
     }
+
+    // HDR output only into a float destination (the final framebuffer when the display presents with headroom);
+    // mirrors and the secondary camera render into 8-bit buffers and keep the curve ending at white
+    const auto& destinationColor = destinationFramebuffer->getRenderBuffer(0);
+    const bool floatDestination = destinationColor && destinationColor->getTexelFormat().getType() == gpu::HALF;
+    setHDRPeak((floatDestination && args->_mirrorDepth == 0) ? args->_hdrPeak : 0.0f);
 
     if (!_pipeline) {
         init();
@@ -120,7 +157,10 @@ void ToneMapAndResample::run(const RenderContextPointer& renderContext, const In
         batch.setModelTransform(gpu::Framebuffer::evalSubregionTexcoordTransform(srcBufferSize, args->_viewport));
         batch.setUniformBuffer(render_utils::slot::buffer::ToneMappingParams, _parametersBuffer);
         batch.setResourceTexture(render_utils::slot::texture::ToneMappingColor, lightingBuffer);
+        batch.setResourceTexture(render_utils::slot::texture::ToneMappingAdaptation,
+                                 (autoExposure && autoExposure->adaptation) ? autoExposure->adaptation : _noAdaptation);
         batch.draw(gpu::TRIANGLE_STRIP, 4);
+        batch.setResourceTexture(render_utils::slot::texture::ToneMappingAdaptation, nullptr);
     });
 
     // Set full final viewport

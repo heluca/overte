@@ -17,6 +17,7 @@
 #include <QtGui/qevent.h>
 #include <QtCore/QTimer>
 #include <QtCore/QDebug>
+#include <QtCore/QStringList>
 #include <QWidget>
 #include <QWindow>
 #include <QOpenGLContext>
@@ -69,6 +70,11 @@ void VKWindow::createSurface() {
     create();
     setVulkanInstance(_context.qtInstance);
     _swapchain.initSurface(QVulkanInstance::surfaceForWindow(this));
+    QStringList offered;
+    for (const auto& surfaceFormat : _swapchain.surfaceFormats) {
+        offered << VulkanSwapChain::describeFormat(surfaceFormat).c_str();
+    }
+    qDebug() << "VKWindow::createSurface surface formats:" << offered.join(", ");
     qDebug() << "VKWindow::createSurface platform:" << QGuiApplication::platformName()
              << "format:" << _swapchain.colorFormat << "color space:" << _swapchain.colorSpace;
 }
@@ -78,7 +84,8 @@ void VKWindow::createSwapchain() {
         auto qsize = size();
         _extent = VkExtent2D{(uint32_t)qsize.width(), (uint32_t)qsize.height()};
     }
-    _swapchain.create(&_extent.width, &_extent.height, SWAPCHAIN_VSYNC, false);
+    _swapchain.create(&_extent.width, &_extent.height, SWAPCHAIN_VSYNC, false, _hdrRequested);
+    qDebug() << "VKWindow::createSwapchain" << _swapchain.describeFormat().c_str() << (_hdrRequested ? "(HDR requested)" : "");
 
     createCommandBuffers();
     setupRenderPass();
@@ -374,8 +381,9 @@ bool VKWindow::event(QEvent* event) {
 }
 
 QString VKWindow::describeSurface() const {
-    QString description = QString("window %1x%2 dpr %3 swapchain %4x%5")
-        .arg(width()).arg(height()).arg(devicePixelRatio()).arg(_extent.width).arg(_extent.height);
+    QString description = QString("window %1x%2 dpr %3 swapchain %4x%5 %6")
+        .arg(width()).arg(height()).arg(devicePixelRatio()).arg(_extent.width).arg(_extent.height)
+        .arg(_swapchain.describeFormat().c_str());
 #ifdef Q_OS_MAC
     auto metrics = metalLayerMetrics(const_cast<VKWindow*>(this));
     description += QString(" layer scale %1 bounds %2x%3 drawable %4x%5")
@@ -396,10 +404,38 @@ void VKWindow::resizeFramebuffer() {
     }
     //vkQueueWaitIdle();
     VK_CHECK_RESULT(vkDeviceWaitIdle(_context.device->logicalDevice));
-    _swapchain.create(&_extent.width, &_extent.height, SWAPCHAIN_VSYNC, false);
+    const auto previousFormat = _swapchain.colorFormat;
+    _swapchain.create(&_extent.width, &_extent.height, SWAPCHAIN_VSYNC, false, _hdrRequested);
+    if (_swapchain.colorFormat != previousFormat) {
+        // The window's render pass names the attachment format, so it must follow the swapchain
+        qDebug() << "VKWindow::resizeFramebuffer swapchain is now" << _swapchain.describeFormat().c_str();
+        setupRenderPass();
+    }
+    if (_drawCommandBuffers.size() != _swapchain.imageCount) {
+        // present() indexes the command buffers by swapchain image, and a new format or colour space can change the count
+        auto& device = _context.device;
+        vkFreeCommandBuffers(device->logicalDevice, device->graphicsCommandPool, static_cast<uint32_t>(_drawCommandBuffers.size()), _drawCommandBuffers.data());
+        _drawCommandBuffers.resize(_swapchain.imageCount);
+        VkCommandBufferAllocateInfo cmdBufAllocateInfo = vks::initializers::commandBufferAllocateInfo(device->graphicsCommandPool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, static_cast<uint32_t>(_drawCommandBuffers.size()));
+        VK_CHECK_RESULT(vkAllocateCommandBuffers(device->logicalDevice, &cmdBufAllocateInfo, _drawCommandBuffers.data()));
+    }
     // TODO: add an assert here to see if width and height changed?
     setupDepthStencil();
     setupFramebuffers();
+}
+
+void VKWindow::requestDisplayHeadroom(std::function<void(float)> deliver) {
+#ifdef Q_OS_MAC
+    ::requestDisplayHeadroom(this, deliver);
+#else
+    deliver(1.0f);
+#endif
+}
+
+void VKWindow::setHDRRequested(bool hdr) {
+    if (_hdrRequested.exchange(hdr) != hdr) {
+        _needsResizing = true;
+    }
 }
 
 VKWindow::~VKWindow() {

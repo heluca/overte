@@ -42,6 +42,8 @@ public:
     VkExtent2D extent{0, 0};
     VkFormat colorFormat;
     VkColorSpaceKHR colorSpace;
+    // Every format and colour space the surface offers, read once when the surface is created
+    std::vector<VkSurfaceFormatKHR> surfaceFormats;
     VkSwapchainKHR swapChain = VK_NULL_HANDLE;    
     uint32_t imageCount;
     std::vector<VkImage> images;
@@ -62,7 +64,16 @@ public:
     * @param height Pointer to the height of the swapchain (may be adjusted to fit the requirements of the swapchain)
     * @param vsync (Optional, default = false) Can be used to force vsync-ed rendering (by using VK_PRESENT_MODE_FIFO_KHR as presentation mode)
     */
-    void create(uint32_t* width, uint32_t* height, bool vsync = false, bool fullscreen = false);
+    void create(uint32_t* width, uint32_t* height, bool vsync = false, bool fullscreen = false, bool hdr = false);
+    /** Picks colorFormat and colorSpace for the next create(): with hdr, a half-float image in the extended linear
+    * sRGB colour space when the surface offers one (values above 1.0 are then brighter than SDR white), otherwise
+    * the 8-bit sRGB image. Returns true when the HDR pair was chosen. */
+    bool selectFormat(bool hdr);
+    /* True when the swapchain presents linear values with headroom above SDR white */
+    bool isHDR() const { return colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT && colorFormat == VK_FORMAT_R16G16B16A16_SFLOAT; }
+    /* "format/colourspace" for logs */
+    std::string describeFormat() const;
+    static std::string describeFormat(const VkSurfaceFormatKHR& surfaceFormat);
     /**
     * Acquires the next image in the swap chain
     * 

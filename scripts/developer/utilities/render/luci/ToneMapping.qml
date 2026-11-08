@@ -42,4 +42,59 @@ Column {
         anchors.left: parent.left
         anchors.right: parent.right
     }
+    Prop.PropBool {
+        label: "Auto Exposure"
+        object: Render
+        property: "autoExposureEnabled"
+    }
+    Prop.PropBool {
+        label: "Auto Exposure Probe"
+        object: Render.getConfig("RenderMainView.AutoExposure")
+        property: "debug"
+    }
+    Prop.PropScalar {
+        label: "Key"
+        object: Render.getConfig("RenderMainView.AutoExposure")
+        property: "key"
+        min: 0.02
+        max: 1.0
+        anchors.left: parent.left
+        anchors.right: parent.right
+    }
+    Prop.PropScalar {
+        label: "Range Up (EV)"
+        object: Render.getConfig("RenderMainView.AutoExposure")
+        property: "rangeUp"
+        min: 0
+        max: 4
+        anchors.left: parent.left
+        anchors.right: parent.right
+    }
+    Prop.PropScalar {
+        label: "Range Down (EV)"
+        object: Render.getConfig("RenderMainView.AutoExposure")
+        property: "rangeDown"
+        min: 0
+        max: 4
+        anchors.left: parent.left
+        anchors.right: parent.right
+    }
+    Prop.PropScalar {
+        label: "Speed Up (/s)"
+        object: Render.getConfig("RenderMainView.AutoExposure")
+        property: "speedUp"
+        min: 0.1
+        max: 10
+        anchors.left: parent.left
+        anchors.right: parent.right
+    }
+    Prop.PropScalar {
+        label: "Speed Down (/s)"
+        object: Render.getConfig("RenderMainView.AutoExposure")
+        property: "speedDown"
+        min: 0.1
+        max: 10
+        anchors.left: parent.left
+        anchors.right: parent.right
+    }
 }

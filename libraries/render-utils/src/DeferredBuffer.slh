@@ -36,20 +36,29 @@ const int FRAG_MODE_LIGHTMAPPED = 2;
 const int FRAG_MODE_SCATTERING = 3;
 const int FRAG_MODE_MTOON = 4;
 
+// The modes are told apart at the midpoints between their packed ranges, not at the ranges' ends: the value is
+// stored in 8 bits, and a fully metallic shaded fragment packs to exactly 0.1 = 25.5 / 255, a rounding tie that
+// Metal (MoltenVK) resolves upwards to 0.102, which an `<= 0.1` test read as lightmapped and the lighting then
+// discarded, so every fully metallic surface was black on the Vulkan backend on macOS.
+const float FRAG_PACK_SHADED_END = 0.5 * (FRAG_PACK_SHADED_METALLIC + FRAG_PACK_LIGHTMAPPED_NON_METALLIC);
+const float FRAG_PACK_LIGHTMAPPED_END = 0.5 * (FRAG_PACK_LIGHTMAPPED_METALLIC + FRAG_PACK_SCATTERING_NON_METALLIC);
+const float FRAG_PACK_SCATTERING_END = 0.5 * (FRAG_PACK_SCATTERING_METALLIC + FRAG_PACK_UNLIT);
+const float FRAG_PACK_UNLIT_END = 0.5 * (FRAG_PACK_UNLIT + FRAG_PACK_MTOON);
+
 void unpackModeMetallic(float rawValue, out int mode, out float metallic) {
-    if (rawValue <= FRAG_PACK_SHADED_METALLIC) {
+    if (rawValue < FRAG_PACK_SHADED_END) {
         mode = FRAG_MODE_SHADED;
         metallic = clamp((rawValue - FRAG_PACK_SHADED_NON_METALLIC) * FRAG_PACK_SHADED_RANGE_INV, 0.0, 1.0);
-    } else if (rawValue <= FRAG_PACK_LIGHTMAPPED_METALLIC) {
+    } else if (rawValue < FRAG_PACK_LIGHTMAPPED_END) {
         mode = FRAG_MODE_LIGHTMAPPED;
         metallic = clamp((rawValue - FRAG_PACK_LIGHTMAPPED_NON_METALLIC) * FRAG_PACK_LIGHTMAPPED_RANGE_INV, 0.0, 1.0);
-    } else if (rawValue <= FRAG_PACK_SCATTERING_METALLIC) {
+    } else if (rawValue < FRAG_PACK_SCATTERING_END) {
         mode = FRAG_MODE_SCATTERING;
         metallic = clamp((rawValue - FRAG_PACK_SCATTERING_NON_METALLIC) * FRAG_PACK_SCATTERING_RANGE_INV, 0.0, 1.0);
-    } else if (rawValue <= FRAG_PACK_UNLIT) {
+    } else if (rawValue < FRAG_PACK_UNLIT_END) {
         mode = FRAG_MODE_UNLIT;
         metallic = 0.0;
-    } else if (rawValue >= FRAG_PACK_MTOON) {
+    } else {
         mode = FRAG_MODE_MTOON;
         metallic = DEFAULT_METALLIC; // TODO: mtoon currently assumes DEFAULT_METALLIC always because the spec doesn't define how metallic is used
     }

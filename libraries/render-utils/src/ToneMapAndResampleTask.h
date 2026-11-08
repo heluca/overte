@@ -21,6 +21,7 @@
 #include <render/DrawTask.h>
 
 #include "TonemappingStage.h"
+#include "AutoExposure.h"
 
 class ToneMappingConfig : public render::Job::Config {
     Q_OBJECT
@@ -50,9 +51,11 @@ public:
 
     void setCurve(TonemappingCurve curve);
     void setExposure(float exposure);
+    // HDR output: the brightest value the display shows as a multiple of SDR white; 0 ends the curve at white
+    void setHDRPeak(float peak);
 
-    // Inputs: lightingFramebuffer, destinationFramebuffer, tonemappingFrame
-    using Input = render::VaryingSet3<gpu::FramebufferPointer, gpu::FramebufferPointer, TonemappingStage::FramePointer>;
+    // Inputs: lightingFramebuffer, destinationFramebuffer, tonemappingFrame, autoExposure (null when off)
+    using Input = render::VaryingSet4<gpu::FramebufferPointer, gpu::FramebufferPointer, TonemappingStage::FramePointer, AutoExposureResultPointer>;
     using Output = gpu::FramebufferPointer;
     using Config = ToneMappingConfig;
     using JobModel = render::Job::ModelIO<ToneMapAndResample, Input, Output, Config>;
@@ -68,6 +71,8 @@ protected:
 
 private:
     float _exposure { 0.0f };
+    // Bound in place of the adaptation texture when auto exposure is off, so the shader always has a texture there
+    gpu::TexturePointer _noAdaptation;
 
     bool _debug { false };
     TonemappingCurve _debugCurve { TonemappingCurve::SRGB };
@@ -76,11 +81,19 @@ private:
     // Class describing the uniform buffer with all the parameters common to the tone mapping shaders
     class Parameters {
     public:
-        float _twoPowExposure = 1.0f;
+        float _exposure = 0.0f;
+        float _autoKeyLog2 = 0.0f;
+        float _autoRangeUp = 0.0f;
+        float _autoRangeDown = 0.0f;
         int _toneCurve = (int)TonemappingCurve::SRGB;
+        int _autoEnabled = 0;
+        int _autoDebug = 0;
+        float _hdrPeak = 0.0f;
 
         Parameters() {}
     };
+
+    void setAutoExposure(const AutoExposureResultPointer& autoExposure);
 
     typedef gpu::BufferView UniformBufferView;
     gpu::BufferView _parametersBuffer;

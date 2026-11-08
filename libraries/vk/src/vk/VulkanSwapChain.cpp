@@ -88,28 +88,57 @@ void VulkanSwapChain::initSurface(VkSurfaceKHR windowSurface)
     VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_context->physicalDevice, surface, &formatCount, NULL));
     assert(formatCount > 0);
 
-    std::vector<VkSurfaceFormatKHR> surfaceFormats(formatCount);
-    VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_context->physicalDevice, surface, &formatCount, surfaceFormats.data()));
+    std::vector<VkSurfaceFormatKHR> surfaceFormats_(formatCount);
+    VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_context->physicalDevice, surface, &formatCount, surfaceFormats_.data()));
 
-    // We want to get a format that best suits our needs, so we try to get one from a set of preferred formats
-    // Initialize the format to the first one returned by the implementation in case we can't find one of the preffered formats
-    VkSurfaceFormatKHR selectedFormat = surfaceFormats[0];
-    std::vector<VkFormat> preferredImageFormats = { 
-        VK_FORMAT_B8G8R8A8_SRGB
-        /*VK_FORMAT_B8G8R8A8_UNORM,
-        VK_FORMAT_R8G8B8A8_UNORM, 
-        VK_FORMAT_A8B8G8R8_UNORM_PACK32 */
+    surfaceFormats.swap(surfaceFormats_);
+    selectFormat(false);
+}
+
+bool VulkanSwapChain::selectFormat(bool hdr) {
+    assert(!surfaceFormats.empty());
+    auto find = [&](VkFormat format, VkColorSpaceKHR space) -> const VkSurfaceFormatKHR* {
+        for (auto& availableFormat : surfaceFormats) {
+            if (availableFormat.format == format && availableFormat.colorSpace == space) {
+                return &availableFormat;
+            }
+        }
+        return nullptr;
     };
-
-    for (auto& availableFormat : surfaceFormats) {
-        if (std::find(preferredImageFormats.begin(), preferredImageFormats.end(), availableFormat.format) != preferredImageFormats.end()) {
-            selectedFormat = availableFormat;
-            break;
+    const VkSurfaceFormatKHR* chosen = hdr ? find(VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT) : nullptr;
+    const bool selectedHDR = chosen != nullptr;
+    if (!chosen) {
+        chosen = find(VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+    }
+    if (!chosen) {
+        // With VK_EXT_swapchain_colorspace enabled the implementation's first entry can be a float or pass-through
+        // pair, so prefer any plain sRGB pair before falling back to it
+        for (auto& availableFormat : surfaceFormats) {
+            if (availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                chosen = &availableFormat;
+                break;
+            }
         }
     }
-
+    const VkSurfaceFormatKHR selectedFormat = chosen ? *chosen : surfaceFormats[0];
     colorFormat = selectedFormat.format;
     colorSpace = selectedFormat.colorSpace;
+    return selectedHDR;
+}
+
+std::string VulkanSwapChain::describeFormat() const {
+    return describeFormat({ colorFormat, colorSpace });
+}
+
+std::string VulkanSwapChain::describeFormat(const VkSurfaceFormatKHR& surfaceFormat) {
+    const auto f = surfaceFormat.format;
+    const auto cs = surfaceFormat.colorSpace;
+    std::string format = f == VK_FORMAT_B8G8R8A8_SRGB ? "B8G8R8A8_SRGB" :
+                         f == VK_FORMAT_R16G16B16A16_SFLOAT ? "R16G16B16A16_SFLOAT" : std::to_string((int)f);
+    std::string space = cs == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ? "sRGB" :
+                        cs == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT ? "extended linear sRGB" :
+                        cs == VK_COLOR_SPACE_PASS_THROUGH_EXT ? "pass-through" : std::to_string((int)cs);
+    return format + "/" + space;
 }
 
 void VulkanSwapChain::setContext(vks::Context *context)
@@ -117,8 +146,9 @@ void VulkanSwapChain::setContext(vks::Context *context)
     _context = context;
 }
 
-void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool fullscreen)
+void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool fullscreen, bool hdr)
 {
+    selectFormat(hdr);
     assert(_context);
     assert(_context->physicalDevice);
     assert(_context->device);
