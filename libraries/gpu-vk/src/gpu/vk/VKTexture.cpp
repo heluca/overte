@@ -24,6 +24,8 @@
 using namespace gpu;
 using namespace gpu::vk;
 
+static std::atomic<uint64_t> releasedTextureCount { 0 };
+
 
 /*const uint32_t VKTexture::CUBE_FACE_LAYOUT[VKTexture::TEXTURE_CUBE_NUM_FACES] = {
     GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
@@ -189,12 +191,35 @@ VKTexture::VKTexture(const std::weak_ptr<VKBackend>& backend, const Texture& tex
 
 VKTexture::~VKTexture() {
     qDebug() << "VKTexture destroyed: " << this;
+    ++releasedTextureCount;
     auto backend = _backend.lock();
     backend->getContext().recycler.textureDeleted(this);
     if (backend && _vkImage == VK_NULL_HANDLE) {
         // VKTODO
         // backend->releaseTexture(_id, 0);
     }
+}
+
+bool VKTexture::checkImageAllocation(VkResult result, VkFormat format, VkDeviceSize size) {
+    if (result == VK_SUCCESS) {
+        if (_allocationFailed) {
+            qCInfo(gpu_vk_logging) << "Texture" << _gpuObject.source().c_str() << "allocated after an earlier failure";
+            _allocationFailed = false;
+        }
+        return true;
+    }
+    if (!_allocationFailed) {
+        qCWarning(gpu_vk_logging) << "Could not allocate texture" << _gpuObject.source().c_str() << _gpuObject.getWidth()
+                                  << "x" << _gpuObject.getHeight() << "format" << format << "size" << size << "bytes:"
+                                  << vks::tools::errorString(result).c_str() << "- using the default texture until memory is freed";
+    }
+    _allocationFailed = true;
+    _releasedTexturesAtFailure = releasedTextureCount;
+    return false;
+}
+
+bool VKTexture::shouldRetryAllocation() const {
+    return _allocationFailed && releasedTextureCount != _releasedTexturesAtFailure;
 }
 
 VkImageViewType VKTexture::getVKTextureType(const Texture& texture) {
@@ -367,7 +392,21 @@ void VKStrictResourceTexture::createTexture(VKBackend &backend) {
     VmaAllocationCreateInfo allocationCI = {};
     allocationCI.usage = VMA_MEMORY_USAGE_GPU_ONLY;
     qDebug() << "storedSize: " << _gpuObject.getStoredSize();
-    VK_CHECK_RESULT(vmaCreateImage(vks::Allocation::getAllocator(), &imageCI, &allocationCI, &_vkImage, &_vmaAllocation, nullptr));
+    VkResult result = vmaCreateImage(vks::Allocation::getAllocator(), &imageCI, &allocationCI, &_vkImage, &_vmaAllocation, nullptr);
+    if (!checkImageAllocation(result, imageCI.format, _gpuObject.evalTotalSize())) {
+        // Release the stored mips; they are collected again when the allocation is retried.
+        _transferData.mips.clear();
+    }
+}
+
+void VKStrictResourceTexture::createAndTransfer(VKBackend &backend) {
+    createTexture(backend);
+    if (_allocationFailed) {
+        return;
+    }
+    // VKTODO: transfer on transfer tread
+    transfer(backend);
+    postTransfer(backend);
 }
 
 VkImageSubresourceRange VKStrictResourceTexture::wholeImageRange() const {
@@ -621,6 +660,12 @@ void VKStrictResourceTexture::postTransfer(VKBackend &backend) {
 // Uploads the mip levels that have been stored in the gpu::Texture since the last transfer, then lets the
 // sampler use them.
 void VKStrictResourceTexture::transferNewMips(VKBackend &backend) {
+    if (_allocationFailed) {
+        if (shouldRetryAllocation()) {
+            createAndTransfer(backend);
+        }
+        return;
+    }
     const uint16_t minAvailableMip = _gpuObject.minAvailableMipLevel();
     if (minAvailableMip >= _populatedMinMip) {
         return;
@@ -835,7 +880,10 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
     imageCI.pNext = &externalMemoryImageCI;
 #endif
 
-    VK_CHECK_RESULT(vkCreateImage(device->logicalDevice, &imageCI, nullptr, &_vkImage));
+    if (!checkImageAllocation(vkCreateImage(device->logicalDevice, &imageCI, nullptr, &_vkImage), imageCI.format, 0)) {
+        _vkImage = VK_NULL_HANDLE;
+        return;
+    }
 
     VkImageMemoryRequirementsInfo2 vkImageMemoryRequirementsInfo2 { };
     vkImageMemoryRequirementsInfo2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
@@ -878,7 +926,14 @@ void VKExternalTexture::createTexture(VKBackend &backend) {
     memoryAllocateInfo.pNext = &exportMemoryAllocateInfo;
 #endif
 
-    VK_CHECK_RESULT(vkAllocateMemory(device->logicalDevice, &memoryAllocateInfo, nullptr, &_sharedMemory));
+    VkResult result = vkAllocateMemory(device->logicalDevice, &memoryAllocateInfo, nullptr, &_sharedMemory);
+    if (!checkImageAllocation(result, imageCI.format, memoryAllocateInfo.allocationSize)) {
+        // Nothing has used the image yet, so it can go straight away.
+        vkDestroyImage(device->logicalDevice, _vkImage, nullptr);
+        _vkImage = VK_NULL_HANDLE;
+        _sharedMemory = VK_NULL_HANDLE;
+        return;
+    }
 #if defined(Q_OS_MAC)
     // Nothing to export.
 #elif defined(WIN32)
@@ -1202,6 +1257,9 @@ void VKExternalTexture::initGL(gpu::vk::VKBackend& backend) {
 }
 
 void VKExternalTexture::transferGL(VKBackend &backend) {
+    if (_allocationFailed) {
+        return;
+    }
     glCopyImageSubData(
         _openGLSourceId, GL_TEXTURE_2D
         , 0, 0, 0, 0
