@@ -1,0 +1,40 @@
+<@include gpu/Config.slh@>
+<$VERSION_HEADER$>
+//  Generated on <$_SCRIBE_DATE$>
+//
+//  DrawHUDTextureHDR.frag
+//
+//  DrawTexturePremultipliedSRGBToLinear for an HDR frame: the HUD's white is brought to the swapchain's SDR white
+//
+//  Copyright 2026 Overte e.V.
+//
+//  Distributed under the Apache License, Version 2.0.
+//  See the accompanying file LICENSE or http://www.apache.org/licenses/LICENSE-2.0.html
+//
+
+<@include gpu/Color.slh@>
+
+TEXTURE(0, sampler2D, colorMap);
+
+struct DrawHUDTextureHDRParams {
+    // x: the swapchain value of SDR white
+    vec4 white;
+};
+
+// binding=0 must match hudHDRParamsSlot in VulkanDisplayPlugin.cpp
+UNIFORM_BUFFER(0, drawHUDTextureHDRParams) {
+    DrawHUDTextureHDRParams params;
+};
+
+INPUT(0, vec2, varTexCoord0);
+OUTPUT(0, vec4, outFragColor);
+
+void main(void) {
+    vec4 color = texture(colorMap, varTexCoord0);
+
+    // Qt gives a premultiplied texture; un-premultiply or there are black halos around transparent parts
+    color.rgb /= max(0.004 /* 1.0 / 255.0 */, color.a);
+
+    color = color_sRGBAToLinear(color);
+    outFragColor = vec4(color.rgb * params.white.x, color.a);
+}

@@ -2698,11 +2698,11 @@ void VKBackend::downloadFramebuffer(const FramebufferPointer& srcFramebuffer, co
         qCWarning(gpu_vk_logging) << "VKBackend::downloadFramebuffer : srcFramebuffer is too small to provide the region queried";
         return;
     }
-    readbackFramebuffer(syncGPUObject(srcFramebuffer.get()), region, destImage);
+    readbackFramebuffer(syncGPUObject(srcFramebuffer.get()), region, destImage, 1.0f);
 }
 
-bool VKBackend::downloadOutputFramebuffer(const Vec4i& region, QImage& destImage) {
-    return readbackFramebuffer(_outputTexture, region, destImage);
+bool VKBackend::downloadOutputFramebuffer(const Vec4i& region, QImage& destImage, float hdrWhite) {
+    return readbackFramebuffer(_outputTexture, region, destImage, hdrWhite);
 }
 
 glm::uvec2 VKBackend::getOutputFramebufferSize() const {
@@ -2714,7 +2714,7 @@ glm::uvec2 VKBackend::getOutputFramebufferSize() const {
 
 // Copies a region of the first color attachment into destImage. The rows are written bottom-up, matching what
 // glReadPixels produces, so callers can treat the result exactly like the OpenGL backend's (they mirror it afterwards).
-bool VKBackend::readbackFramebuffer(VKFramebuffer* vkFramebuffer, const Vec4i& region, QImage& destImage) {
+bool VKBackend::readbackFramebuffer(VKFramebuffer* vkFramebuffer, const Vec4i& region, QImage& destImage, float hdrWhite) {
     if (!vkFramebuffer) {
         qCWarning(gpu_vk_logging) << "VKBackend::readbackFramebuffer : no framebuffer to read from";
         return false;
@@ -2830,7 +2830,7 @@ bool VKBackend::readbackFramebuffer(VKFramebuffer* vkFramebuffer, const Vec4i& r
             const uint16_t* halves = reinterpret_cast<const uint16_t*>(src);
             for (uint32_t x = 0; x < width; ++x) {
                 for (uint32_t c = 0; c < 3; ++c) {
-                    float linear = glm::clamp(glm::unpackHalf1x16(halves[4 * x + c]), 0.0f, 1.0f);
+                    float linear = glm::clamp(glm::unpackHalf1x16(halves[4 * x + c]) / hdrWhite, 0.0f, 1.0f);
                     float srgb = linear <= 0.0031308f ? linear * 12.92f : 1.055f * powf(linear, 1.0f / 2.4f) - 0.055f;
                     dst[4 * x + (2 - c)] = (uint8_t)(srgb * 255.0f + 0.5f);
                 }

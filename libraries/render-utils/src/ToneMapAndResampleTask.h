@@ -51,8 +51,9 @@ public:
 
     void setCurve(TonemappingCurve curve);
     void setExposure(float exposure);
-    // HDR output: the brightest value the display shows as a multiple of SDR white; 0 ends the curve at white
-    void setHDRPeak(float peak);
+    // HDR output: the brightest value the display shows as a multiple of SDR white; 0 ends the curve at white.
+    // white is the swapchain value of SDR white, which the output is scaled by while peak > 0.
+    void setHDRPeak(float peak, float white);
 
     // Inputs: lightingFramebuffer, destinationFramebuffer, tonemappingFrame, autoExposure (null when off)
     using Input = render::VaryingSet4<gpu::FramebufferPointer, gpu::FramebufferPointer, TonemappingStage::FramePointer, AutoExposureResultPointer>;
@@ -89,6 +90,7 @@ private:
         int _autoEnabled = 0;
         int _autoDebug = 0;
         float _hdrPeak = 0.0f;
+        float _hdrWhite = 1.0f;
 
         Parameters() {}
     };
