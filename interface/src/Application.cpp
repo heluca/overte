@@ -284,6 +284,11 @@ Application::Application(
     // request here, after construction. setGraphicsApi() alone does not clear it.
     QQuickWindow::setSceneGraphBackend(QString());
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+#elif defined(Q_OS_MACOS)
+    // Qt Quick picks its Metal RHI by default on macOS, but the offscreen QML surfaces hand it an OpenGL
+    // context and render into GL textures (SharedObject). With Metal it takes the GL texture name for an
+    // MTLTexture on the first frame and crashes in QRhiMetal::beginPass.
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
 #endif
 
 #if defined(Q_OS_MAC)
