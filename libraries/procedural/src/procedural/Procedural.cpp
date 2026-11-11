@@ -700,15 +700,17 @@ void Procedural::prepare(gpu::Batch& batch,
         gpu::ShaderPointer errorVertexShader = gpu::Shader::createVertex(vertexSource);
         gpu::ShaderPointer errorFragmentShader = gpu::Shader::createPixel(fragmentSource);
         gpu::ShaderPointer errorProgram = gpu::Shader::createProgram(errorVertexShader, errorFragmentShader);
-        _errorPipelines[key] = gpu::Pipeline::create(errorProgram, _opaqueState);
+        _errorPipelines[key] = gpu::Pipeline::create(errorProgram, key.isTransparent() ? _transparentState : _opaqueState);
 
-        // Disabled fallback: nothing
+        // Disabled fallback: the stub blocks, and PROCEDURAL_DISABLED tells the fragment shader to skip the
+        // procedural code entirely, since a stub cannot override the emissive output that PROCEDURAL_V1 hardcodes
         vertexSource.replacements.erase(PROCEDURAL_BLOCK);
         fragmentSource.replacements.erase(PROCEDURAL_BLOCK);
+        fragmentSource.replacements[PROCEDURAL_VERSION] = versionDefine + "\n#define PROCEDURAL_DISABLED";
         gpu::ShaderPointer disabledVertexShader = gpu::Shader::createVertex(vertexSource);
         gpu::ShaderPointer disabledFragmentShader = gpu::Shader::createPixel(fragmentSource);
         gpu::ShaderPointer disabledProgram = gpu::Shader::createProgram(disabledVertexShader, disabledFragmentShader);
-        _disabledPipelines[key] = gpu::Pipeline::create(disabledProgram, _opaqueState);
+        _disabledPipelines[key] = gpu::Pipeline::create(disabledProgram, key.isTransparent() ? _transparentState : _opaqueState);
 
         _lastCompile = usecTimestampNow();
         if (_firstCompile == 0) {
