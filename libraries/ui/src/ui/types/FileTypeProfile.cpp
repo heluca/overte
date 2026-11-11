@@ -19,8 +19,6 @@
 #include "NetworkingConstants.h"
 
 #if !defined(Q_OS_ANDROID)
-static const QString QML_WEB_ENGINE_STORAGE_NAME = "qmlWebEngine";
-
 static std::set<FileTypeProfile*> FileTypeProfile_instances;
 static std::mutex FileTypeProfile_mutex;
 
@@ -29,8 +27,8 @@ FileTypeProfile::FileTypeProfile(QQmlContext* parent) :
 {
     setHttpUserAgent(NetworkingConstants::WEB_ENGINE_USER_AGENT);
 
-    setStorageName(QML_WEB_ENGINE_STORAGE_NAME);
-    setOffTheRecord(false);
+    // Stays off the record: one of these exists per QML context, and persistent profiles that share a
+    // storage name fight over its on-disk storage (see ContextAwareProfile.h).
 
     auto requestInterceptor = new RequestInterceptor(this);
     setUrlRequestInterceptor(requestInterceptor);
