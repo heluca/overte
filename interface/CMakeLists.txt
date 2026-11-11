@@ -363,16 +363,33 @@ if (APPLE)
   # binary's @rpath libraries through that list. Keep the build tree locations of Overte's own shared
   # libraries (and of the Conan ones, via the link path) in it so macdeployqt can find and copy them;
   # @executable_path/../Frameworks is what the deployed bundle uses afterwards.
+  # Follow the link interface of those libraries too: the executable also links the ones they pass on (vk-mac,
+  # through vk), and macdeployqt mangles a reference it cannot resolve into a path that does not exist.
   set(INTERFACE_INSTALL_RPATH "@executable_path/../Frameworks")
   get_target_property(INTERFACE_LINK_LIBRARIES ${TARGET_NAME} LINK_LIBRARIES)
-  foreach(INTERFACE_LINK_LIBRARY ${INTERFACE_LINK_LIBRARIES})
-    if (TARGET ${INTERFACE_LINK_LIBRARY})
-      get_target_property(INTERFACE_LINK_LIBRARY_TYPE ${INTERFACE_LINK_LIBRARY} TYPE)
-      if (INTERFACE_LINK_LIBRARY_TYPE STREQUAL "SHARED_LIBRARY")
-        list(APPEND INTERFACE_INSTALL_RPATH "$<TARGET_FILE_DIR:${INTERFACE_LINK_LIBRARY}>")
-      endif()
+  set(INTERFACE_VISITED_LINK_LIBRARIES "")
+  list(LENGTH INTERFACE_LINK_LIBRARIES INTERFACE_LINK_LIBRARIES_LEFT)
+  while (INTERFACE_LINK_LIBRARIES_LEFT GREATER 0)
+    list(POP_FRONT INTERFACE_LINK_LIBRARIES INTERFACE_LINK_LIBRARY)
+    list(LENGTH INTERFACE_LINK_LIBRARIES INTERFACE_LINK_LIBRARIES_LEFT)
+    if (NOT TARGET ${INTERFACE_LINK_LIBRARY} OR INTERFACE_LINK_LIBRARY IN_LIST INTERFACE_VISITED_LINK_LIBRARIES)
+      continue()
     endif()
-  endforeach()
+    list(APPEND INTERFACE_VISITED_LINK_LIBRARIES ${INTERFACE_LINK_LIBRARY})
+    get_target_property(INTERFACE_LINK_LIBRARY_IMPORTED ${INTERFACE_LINK_LIBRARY} IMPORTED)
+    if (INTERFACE_LINK_LIBRARY_IMPORTED)
+      continue()
+    endif()
+    get_target_property(INTERFACE_LINK_LIBRARY_TYPE ${INTERFACE_LINK_LIBRARY} TYPE)
+    if (INTERFACE_LINK_LIBRARY_TYPE STREQUAL "SHARED_LIBRARY")
+      list(APPEND INTERFACE_INSTALL_RPATH "$<TARGET_FILE_DIR:${INTERFACE_LINK_LIBRARY}>")
+    endif()
+    get_target_property(INTERFACE_LINK_LIBRARY_DEPENDENCIES ${INTERFACE_LINK_LIBRARY} INTERFACE_LINK_LIBRARIES)
+    if (INTERFACE_LINK_LIBRARY_DEPENDENCIES)
+      list(APPEND INTERFACE_LINK_LIBRARIES ${INTERFACE_LINK_LIBRARY_DEPENDENCIES})
+      list(LENGTH INTERFACE_LINK_LIBRARIES INTERFACE_LINK_LIBRARIES_LEFT)
+    endif()
+  endwhile()
   set_target_properties(${TARGET_NAME} PROPERTIES
     INSTALL_RPATH "${INTERFACE_INSTALL_RPATH}"
     INSTALL_RPATH_USE_LINK_PATH TRUE
