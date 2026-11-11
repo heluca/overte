@@ -16,12 +16,11 @@ macro(fixup_nitpick)
         string(REPLACE " " "\\ " ESCAPED_INSTALL_PATH ${NITPICK_INSTALL_DIR})
         set(_NITPICK_INSTALL_PATH "${ESCAPED_INSTALL_PATH}/${ESCAPED_BUNDLE_NAME}.app")
 
-        find_program(MACDEPLOYQT_COMMAND macdeployqt PATHS "${QT_DIR}/bin" NO_DEFAULT_PATH)
+        find_macdeployqt()
 
         if (NOT MACDEPLOYQT_COMMAND AND (PRODUCTION_BUILD OR PR_BUILD))
-            message(FATAL_ERROR "Could not find macdeployqt at ${QT_DIR}/bin.\
+            message(FATAL_ERROR "Could not find Qt's macdeployqt.\
                 It is required to produce a relocatable nitpick application.\
-                Check that the variable QT_DIR points to your Qt installation.\
             ")
         endif ()
 
