@@ -86,7 +86,12 @@ void main(void) {
     float alpha = 1.0;
 <@endif@>
 
-#if defined(PROCEDURAL_V1)
+#if defined(PROCEDURAL_DISABLED)
+    // Procedural shaders are turned off: draw the surface lit in its vertex colour, or not at all if translucent
+<@if HIFI_USE_TRANSLUCENT@>
+    discard;
+<@endif@>
+#elif defined(PROCEDURAL_V1)
     diffuse = getProceduralColor().rgb;
     emissiveAmount = 1.0;
     emissive = vec3(1.0);
