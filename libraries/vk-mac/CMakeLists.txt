@@ -9,4 +9,6 @@
 if (APPLE)
     set(TARGET_NAME vk-mac)
     setup_hifi_library(Gui)
+    # layerForWindow.mm uses CAMetalLayer and NSView/NSScreen directly.
+    target_link_libraries(${TARGET_NAME} "-framework QuartzCore" "-framework AppKit")
 endif()
