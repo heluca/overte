@@ -17,21 +17,18 @@ Controls.WebView {
 
     userScripts.collection: [ {
             name: "createGlobalEventBridge",
-            id: createGlobalEventBridge,
             sourceCode: eventBridgeJavaScriptToInject,
             injectionPoint: WebEngineScript.DocumentCreation,
             worldId: WebEngineScript.MainWorld
         },
         {
             name: "raiseAndLowerKeyboardScript",
-            id: raiseAndLowerKeyboard,
             injectionPoint: WebEngineScript.Deferred,
             sourceUrl: resourceDirectoryUrl + "/html/raiseAndLowerKeyboard.js",
             worldId: WebEngineScript.MainWorld
         },
         {
             name: "userWebEngineScript",
-            id: userScript,
             sourceUrl: webview.userScriptUrl,
             injectionPoint: WebEngineScript.DocumentReady,  // DOM ready but page load may not be finished.
             worldId: WebEngineScript.MainWorld
