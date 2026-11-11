@@ -19,8 +19,6 @@ const float HORIZONTAL_OFFSET = 3.75;
 const float NORMAL_HORIZ_CUTOFF = 0.3;
 const float NORMAL_Y_CUTOFF = 0.25;
 
-uniform sampler2D shaderNotice;
-
 vec3 getSkyboxColor() {
     vec3 normal = normalize(_normal);
     vec2 horizontal = vec2(normal.x, normal.z);
@@ -45,13 +43,13 @@ vec3 getSkyboxColor() {
         if (normal.z > 0.0) {
             uv1.x = 1.0 - uv1.x;
         }
-        vec4 noticeColor = texture(shaderNotice, uv1);
+        vec4 noticeColor = texture(iChannel0, uv1);
         color = mix(color, noticeColor.rgb, noticeColor.a);
     } else if (uv2.x > 0.0 && uv2.x < 1.0 && uv2.y > 0.0 && uv2.y < 1.0) {
         if (normal.x < 0.0) {
             uv2.x = 1.0 - uv2.x;
         }
-        vec4 noticeColor = texture(shaderNotice, uv2);
+        vec4 noticeColor = texture(iChannel0, uv2);
         color = mix(color, noticeColor.rgb, noticeColor.a);
     }
     color = pow(color, vec3(0.4545));
