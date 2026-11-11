@@ -41,6 +41,9 @@ macro(fixup_interface)
         set(_WEBENGINE_DEPLOY_ARGS -DQT_LIBEXECS=${_QT_LIBEXECS} -DQT_DATA=${_QT_DATA} -DQT_TRANSLATIONS=${_QT_TRANSLATIONS})
         string(REPLACE ";" " " _WEBENGINE_DEPLOY_ARGS_STRING "${_WEBENGINE_DEPLOY_ARGS}")
         set(_WEBENGINE_DEPLOY_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/MacDeployQtWebEngine.cmake")
+        # macdeployqt leaves rpaths and some absolute library references that lead out of the bundle;
+        # cmake/MacFixupBundleReferences.cmake removes or redirects them into it.
+        set(_FIXUP_REFERENCES_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/MacFixupBundleReferences.cmake")
 
         if (OVERTE_RELEASE_TYPE STREQUAL "DEV")
             install(CODE "
@@ -52,6 +55,11 @@ macro(fixup_interface)
                     -DBUNDLE=\${CMAKE_INSTALL_PREFIX}/${_INTERFACE_INSTALL_PATH}\
                     ${_WEBENGINE_DEPLOY_ARGS_STRING}\
                     -P ${_WEBENGINE_DEPLOY_SCRIPT}\
+                )
+                execute_process(COMMAND ${CMAKE_COMMAND}\
+                    -DBUNDLE=\${CMAKE_INSTALL_PREFIX}/${_INTERFACE_INSTALL_PATH}\
+                    -P ${_FIXUP_REFERENCES_SCRIPT}\
+                    COMMAND_ERROR_IS_FATAL ANY\
                 )"
                 COMPONENT ${CLIENT_COMPONENT}
             )
@@ -59,6 +67,7 @@ macro(fixup_interface)
             add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
                 COMMAND ${MACDEPLOYQT_COMMAND} "$<TARGET_FILE_DIR:${TARGET_NAME}>/../.." -verbose=2 -qmldir=${CMAKE_SOURCE_DIR}/interface/resources/qml/
                 COMMAND ${CMAKE_COMMAND} -DBUNDLE="$<TARGET_FILE_DIR:${TARGET_NAME}>/../.." ${_WEBENGINE_DEPLOY_ARGS} -P ${_WEBENGINE_DEPLOY_SCRIPT}
+                COMMAND ${CMAKE_COMMAND} -DBUNDLE="$<TARGET_FILE_DIR:${TARGET_NAME}>/../.." -P ${_FIXUP_REFERENCES_SCRIPT}
             )
         endif()
     endif ()
