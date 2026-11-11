@@ -34,6 +34,9 @@ env:
 
 jobs:
   check_if_new_nightly_commit:
+    # The build job runs on third-party runners only the overte-org organisation has; elsewhere its jobs can never
+    # start. Forks get their compile check from hosted_build.yml.
+    if: ${{ github.repository_owner == 'overte-org' }}
     runs-on: ubuntu-latest
     name: Check if there is a new commit
     outputs:

@@ -6,9 +6,10 @@
 # 
 macro(TARGET_VULKAN)
     if(APPLE)
+        # Conan's MoltenVK package provides the moltenvk::moltenvk target, not MoltenVK_LIBRARY. Linking the target
+        # matters with a Qt that does not itself depend on Conan's MoltenVK (a system Qt).
         find_package(MoltenVK QUIET REQUIRED)
-        target_include_directories(${TARGET_NAME} PRIVATE ${MoltenVK_INCLUDE_DIR})
-        target_link_libraries(${TARGET_NAME} ${MoltenVK_LIBRARY})
+        target_link_libraries(${TARGET_NAME} moltenvk::moltenvk)
     else()
         find_package(Vulkan QUIET REQUIRED)
         target_include_directories(${TARGET_NAME} PRIVATE ${VULKAN_INCLUDE_DIR})

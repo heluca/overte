@@ -1110,13 +1110,14 @@ void ScriptMethodV8Proxy::call(const v8::FunctionCallbackInfo<v8::Value>& argume
                     // QGenericArgument doesn't copy them.
                     const char *staticTypeName = QMetaType(converted.userType()).name();
                     auto typeName = std::string(staticTypeName);
-                    if (typeName == "glm::vec<2,float,glm::packed_highp>") {
+                    // Clang leaves out the default glm::packed_highp qualifier: "glm::vec<3,float>", "glm::qua<float>".
+                    if (typeName == "glm::vec<2,float,glm::packed_highp>" || typeName == "glm::vec<2,float>") {
                         staticTypeName = "glm::vec2";
-                    } else if (typeName == "glm::vec<3,float,glm::packed_highp>") {
+                    } else if (typeName == "glm::vec<3,float,glm::packed_highp>" || typeName == "glm::vec<3,float>") {
                         staticTypeName = "glm::vec3";
-                    } else if (typeName == "glm::vec<4,float,glm::packed_highp>") {
+                    } else if (typeName == "glm::vec<4,float,glm::packed_highp>" || typeName == "glm::vec<4,float>") {
                         staticTypeName = "glm::vec4";
-                    } else if (typeName == "glm::qua<float,glm::packed_highp>") {
+                    } else if (typeName == "glm::qua<float,glm::packed_highp>" || typeName == "glm::qua<float>") {
                         staticTypeName = "glm::quat";
                     } else if (typeName == "glm::mat4") {
                         staticTypeName = "glm::mat<4,4,float,glm::packed_highp>";

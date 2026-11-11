@@ -542,15 +542,15 @@ QString defaultAudioDeviceName(QAudioDevice::Mode mode) {
     QString deviceName;
 
 #ifdef __APPLE__
-    QAudioDeviceInfo device;
+    QAudioDevice device;
     if (mode == QAudioDevice::Mode::Input) {
-        device = QAudioDeviceInfo::defaultInputDevice();
+        device = QMediaDevices::defaultAudioInput();
     } else {
-        device = QAudioDeviceInfo::defaultOutputDevice();
+        device = QMediaDevices::defaultAudioOutput();
     }
     if (!device.isNull()) {
-        if (!device.deviceName().isEmpty()) {
-            deviceName = device.deviceName();
+        if (!device.description().isEmpty()) {
+            deviceName = device.description();
         }
     } else {
         qDebug() << "QT's Default device is null, reverting to platoform code";

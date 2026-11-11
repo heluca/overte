@@ -21,6 +21,10 @@
 // After the Vulkan headers: qvulkaninstance.h defines VK_NO_PROTOTYPES before including vulkan.h.
 #include <QtGui/QVulkanInstance>
 
+#ifdef Q_OS_MACOS
+#include "linkedVulkanLibrary.h"
+#endif
+
 namespace gpu::vk {
 // Extension for sharing memory with OpenGL, needed by QML UI and Web entities.
 PFN_vkGetMemoryFdKHR vkGetMemoryFdKHR;
@@ -208,6 +212,10 @@ void Context::createInstance() {
     VkResult result = vkCreateInstance(&instanceCreateInfo, nullptr, &instance);
     Q_ASSERT(result == VK_SUCCESS);
 
+#ifdef Q_OS_MACOS
+    // Qt must resolve functions for this instance from the MoltenVK we linked, not from a copy of its own.
+    useLinkedVulkanLibraryForQt();
+#endif
     qtInstance = new QVulkanInstance();
     qtInstance->setVkInstance(instance);
     if (!qtInstance->create()) {

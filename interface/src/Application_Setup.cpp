@@ -20,6 +20,7 @@
 #include <QDesktopServices>
 #include <QFontDatabase>
 #include <QtCore/QCommandLineParser>
+#include <QtCore/QOperatingSystemVersion>
 #include <QtCore/QResource>
 #include <QtQml/QQmlContext>
 #include <QtQuick/QQuickWindow>
@@ -924,10 +925,8 @@ void Application::initialize(const QCommandLineParser &parser) {
             { "ideal_thread_count", QThread::idealThreadCount() }
         };
 #ifdef Q_OS_MAC
-        auto macVersion = QSysInfo::macVersion();
-        if (macVersion != QSysInfo::MV_None) {
-            properties["os_osx_version"] = QSysInfo::macVersion();
-        }
+        // Qt 6 dropped QSysInfo::macVersion() and its enum; report the version number instead.
+        properties["os_osx_version"] = QOperatingSystemVersion::current().version().toString();
 #elifdef Q_OS_WIN
         auto windowsVersion = QSysInfo::windowsVersion();
         if (windowsVersion != QSysInfo::WV_None) {

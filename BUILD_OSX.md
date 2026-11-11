@@ -7,12 +7,17 @@ SPDX-License-Identifier: Apache-2.0
 
 # Build macOS
 
-*Last Updated on 2026-05-26*
+*Last Updated on 2026-11-10*
 
 Please read the [general build guide](BUILD.md) for information on dependencies required for all platforms.
 This will include the necessary environment variables to customize your build. Only macOS specific instructions are found in this document.
 
 ## Prerequisites
+
+**Xcode** needs to be installed from the App Store, which requires an Apple account. Select it for the command line tools:
+```bash
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+```
 
 ### CMake, NPM and Conan
 
@@ -24,15 +29,16 @@ brew install cmake npm conan
 
 **Note:** You can also download alternative CMake versions from [Github](https://github.com/Kitware/CMake/releases) if needed.
 
-### Qt5
-#### system
-While Conan can build Qt from source, we use the Homebrew package instead:
+### Qt 6
+#### system (default)
+Overte uses Homebrew's Qt 6 unless told otherwise (Conan option `qt_source=system`). Install the modules it needs:
 ```bash
-brew install qt@5
+brew install qtbase qtdeclarative qtsvg qtwebchannel qtwebsockets qtmultimedia qt5compat qtimageformats qttools qtwebengine
 ```
+Homebrew's Qt is a framework build; CMake finds it through Homebrew's prefix, no `PATH` changes are needed.
 
 #### source
-If you have Conan build Qt from source, the following extra dependencies are required:
+Conan can also build Qt from source (`-o 'Overte/*:qt_source=source'` on the `conan install` command below; this is what CI does). That needs an extra Python module:
 ```bash
 pip3 install --user --break-system-packages html5lib
 ```
@@ -40,77 +46,61 @@ pip3 install --user --break-system-packages html5lib
 https://github.com/conan-io/conan-center-index/issues/27285
 https://github.com/conan-io/conan-center-index/pull/29181 -->
 
-**XCode** needs to be installed from the AppStore, which requires an Apple account.
+### Prepare Conan
 
-### Prepare conan
-
-The next step is setting up Conan.
-
-Add the Overte remote to Conan
+Add the Overte remote to Conan:
 ```bash
 conan remote add overte https://artifactory.overte.org/artifactory/api/conan/overte -f
 ```
 
 ## Compiling
 
-If you installed the Qt5 **system** package as instructed above, you need to add its path to the environment as instructed by Homebrew:
-```bash
-export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"
-```
-If you *only* need Qt5 on your machine (for example if you only develop Overte), you can make this change permanent as well:
-```bash
-echo 'export PATH="/opt/homebrew/opt/qt@5/bin:$PATH"' >> ~/.zshrc
-```
-
-Install the dependencies with conan
+Install the dependencies with Conan:
 ```bash
 cd overte
-conan install . -s build_type=Release -b missing -pr:a="tools/conan-profiles/macos"
+conan install . -s build_type=Release -b missing -pr:a="tools/conan-profiles/macos" -of build
 ```
 
-## Generate and Build
-
-You can choose to use either Unix Makefiles, Ninja or Xcode.
-
-### make or Ninja
-
-Prepare makefiles:
+Configure and build with Ninja (`-G Ninja` is required, see Troubleshooting):
 ```bash
-cmake --preset conan-release
+cmake --preset conan-release -G Ninja -DOVERTE_RENDERING_BACKEND=Vulkan
+cmake --build --preset conan-release --target Overte
 ```
-To use Ninja instead, append a `-G Ninja`. E.g.:
-```bash
-cmake --preset conan-release -G Ninja
-```
+The Interface target is called `Overte` on macOS. Leave out `--target` to build everything (server, tools, tests).
 
-Build:
-```bash
-cmake --build --preset conan-release
-```
-Keep in mind that the `interface` target is called `overte` on macOS.
+### Vulkan
 
-To package the installation, you can simply run `cmake --build --preset conan-release --target package` afterwards.
+On macOS the Vulkan backend runs on Metal through [MoltenVK](https://github.com/KhronosGroup/MoltenVK), which comes from Conan and is
+linked into the application; no Vulkan SDK is needed. Qt's Vulkan support is pointed at that same MoltenVK at run time, so only one
+copy is ever loaded.
+
+### Running and installing
+
+The build tree's `interface/Overte.app` runs as is, but uses Qt and the Conan libraries from where they were built.
+To get a self-contained, relocatable `Overte.app`, install the `client` component:
+```bash
+rm -rf <prefix>/Overte.app
+cmake --install build --prefix <prefix> --component client
+```
+This runs `macdeployqt`, which copies Qt (including QtWebEngine), the Conan libraries, MoltenVK and Overte's plugins into the bundle and
+rewrites their references. It skips libraries that are already in the destination, so always remove an old `Overte.app` first.
+Installing everything (no `--component`) also deploys the server components and needs a full build.
+
+A bundle made from Homebrew's Qt runs on the macOS versions Homebrew built that Qt for, usually only the installed one,
+whatever `os.version` the Conan profile sets.
+
+Run the bundle from a terminal with `<prefix>/Overte.app/Contents/MacOS/Overte`. To keep macOS privacy permissions (microphone, ...)
+across rebuilds, sign the bundle with a stable identity, e.g. `codesign --force --deep --sign <identity> <prefix>/Overte.app`.
+
+To package the installation, you can run `cmake --build --preset conan-release --target package` afterwards.
 
 ### Xcode
 
-You can ask CMake to generate Xcode project files instead of Unix Makefiles using the `-G Xcode` parameter after CMake.
-You will need to select the Xcode installation in the terminal first if you have not done so already.
-
-```bash
-sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-cmake --preset conan-release -G Xcode
-```
-
-After running CMake, you will have the Xcode project file necessary to build all of the components.
-**To be able to build, you need to turn off Xcode's `Use Shell Script Sandboxing`, as it results in commands too long for macOS.**
-Open the `overte.xcodeproj` file, choose `ALL_BUILD` from the Product > Scheme menu (or target drop down), and click Run.
-
-If the build completes successfully, you will have built targets for all components located in the `build/${target_name}/Debug` directories.
+Xcode projects (`-G Xcode`) are not supported: Xcode sandboxes user scripts by putting all environment variables into the command,
+which then exceeds macOS's maximum command length. Use Ninja, and open the source directory in an IDE that understands CMake presets
+(see [BUILD_IDE.md](BUILD_IDE.md)).
 
 ## Troubleshooting
 - `error: unable to spawn process '/bin/sh' (Argument list too long)`
-  Xcode sandboxes user scripts by putting all environment variables into the command, which then exceeds
-  macOS's maximum command length.. As far as I can tell,
-  there is no way to disable that through CMake (only inside the Xcode IDE).
-  *Make sure you are using Ninja instead, by appending `-G Ninja` to the CMake configuration step.*
+  You are using the Xcode generator. *Use Ninja instead, by appending `-G Ninja` to the CMake configuration step.*
 - Try updating CMake via `brew upgrade cmake`. Apple breaks things often and fast, so CMake requires updates pretty often.
