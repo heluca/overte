@@ -13,7 +13,10 @@
 #ifdef Q_OS_WIN
 #include <Windows.h>
 #endif  //Q_OS_WIN
+// Nothing here uses GL; macOS has no GL/gl.h (its header is OpenGL/gl.h).
+#ifndef Q_OS_MACOS
 #include <GL/gl.h>
+#endif
 
 #include <QtCore/QThread>
 #include <QtQml/QtQml>

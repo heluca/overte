@@ -2806,7 +2806,13 @@ void MyAvatar::nextAttitude(glm::vec3 position, glm::quat orientation) {
 void MyAvatar::harvestResultsFromPhysicsSimulation(float deltaTime) {
     glm::vec3 position;
     glm::quat orientation;
-    if (_characterController.isEnabledAndReady() && !(_characterController.needsSafeLandingSupport() || _goToPending)) {
+    // A seated avatar with a parent keeps its place in the parent's frame. The character controller's
+    // body is given the parent's velocity so that it keeps up with a parent the physics step moves, but
+    // a parent moved outside the step (a collisionless entity with a velocity) has already carried the
+    // avatar this frame, and taking the body's position as well would move it twice.
+    bool seatedOnParent = _characterController.getSeated() && !getParentID().isNull();
+    if (_characterController.isEnabledAndReady() && !seatedOnParent &&
+            !(_characterController.needsSafeLandingSupport() || _goToPending)) {
         _characterController.getPositionAndOrientation(position, orientation);
         setWorldVelocity(_characterController.getLinearVelocity() + _characterController.getFollowVelocity());
     } else {

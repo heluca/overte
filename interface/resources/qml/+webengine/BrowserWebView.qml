@@ -25,11 +25,11 @@ WebView {
         }
     ]
 
-    onLoadingChanged: {
-        if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
-            addressBar.text = loadRequest.url
+    onLoadingChanged: function(loadingInfo) {
+        if (loadingInfo.status === WebEngineView.LoadSucceededStatus) {
+            addressBar.text = loadingInfo.url
         }
-        parentRoot.loadingChanged(loadRequest.status);
+        parentRoot.loadingChanged(loadingInfo.status);
     }
 
     onWindowCloseRequested: {

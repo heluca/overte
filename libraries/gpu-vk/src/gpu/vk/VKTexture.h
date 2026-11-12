@@ -244,6 +244,15 @@ protected:
 protected:
     void setSize(size_t size) const;
 
+    // Image allocations fail with VK_ERROR_OUT_OF_DEVICE_MEMORY when VRAM is exhausted. The texture is then left
+    // without an image, reports VK_IMAGE_LAYOUT_UNDEFINED, and the backend binds its default texture in its place.
+    // Returns false on failure; only the first failure of each texture is logged.
+    bool checkImageAllocation(VkResult result, VkFormat format, VkDeviceSize size);
+    // True once another texture has been destroyed since the allocation failed, so that memory may have been freed.
+    bool shouldRetryAllocation() const;
+    bool _allocationFailed { false };
+    uint64_t _releasedTexturesAtFailure { 0 };
+
 private:
 
     VKTexture(const std::weak_ptr<VKBackend>& backend, const gpu::Texture& gpuTexture, VkImage image, VKTexture* originalTexture, bool transferrable);
@@ -314,12 +323,9 @@ protected:
     // VKTODO: how to handle mipmaps?
     VKStrictResourceTexture(const std::weak_ptr<VKBackend>& backend, const Texture& texture) :
         VKFixedAllocationTexture(backend, texture, true) {
-        VKBackend& vkBackend = *backend.lock();
-        VKStrictResourceTexture::createTexture(vkBackend);
-        // VKTODO: transfer on transfer tread
-        VKStrictResourceTexture::transfer(vkBackend);
-        VKStrictResourceTexture::postTransfer(vkBackend);
+        createAndTransfer(*backend.lock());
     };
+    void createAndTransfer(VKBackend &backend);
     ~VKStrictResourceTexture() override; // VKTODO: delete image and image view, release memory
     void createTexture(VKBackend &backend) override;
     void transfer(VKBackend &backend) override;
@@ -408,8 +414,10 @@ public:
             VKTexture(backend, texture, false) {
             VKBackend& vkBackend = *backend.lock();
             VKExternalTexture::createTexture(vkBackend);
-            // VKTODO: maybe this needs to be done on OpenGL thread?
-            VKExternalTexture::initGL(vkBackend);
+            if (!_allocationFailed) {
+                // VKTODO: maybe this needs to be done on OpenGL thread?
+                VKExternalTexture::initGL(vkBackend);
+            }
             //VKExternalTexture::transferGL(vkBackend);
             VKExternalTexture::postTransfer(vkBackend);
         }; // VKTODO
@@ -420,6 +428,8 @@ public:
     // The Vulkan image is sized when the object is created; the gpu::Texture can be resized afterwards
     // (the QML UI texture is, whenever the window changes size), in which case the backend replaces the object.
     bool matchesGpuObjectSize() const { return _imageWidth == _gpuObject.getWidth() && _imageHeight == _gpuObject.getHeight(); }
+    // An object whose image could not be allocated is replaced, like a resized one, once memory may have been freed.
+    bool needsReplacing() const { return !matchesGpuObjectSize() || shouldRetryAllocation(); }
 
 protected:
     Size size() const override { return _size; }

@@ -26,10 +26,10 @@ WebEngineView {
         permissionPopupBackground.visible = false;
     }
 
-    onLoadingChanged: {
+    onLoadingChanged: function(loadingInfo) {
         // Required to support clicking on "hifi://" links
-        if (WebEngineView.LoadStartedStatus == loadRequest.status) {
-            var url = loadRequest.url.toString();
+        if (WebEngineView.LoadStartedStatus == loadingInfo.status) {
+            var url = loadingInfo.url.toString();
             if (urlHandler.canHandleUrl(url)) {
                 if (urlHandler.handleUrl(url)) {
                     root.stop();

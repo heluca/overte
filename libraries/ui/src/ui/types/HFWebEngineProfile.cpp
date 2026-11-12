@@ -19,15 +19,13 @@
 
 #if !defined(Q_OS_ANDROID)
 
-static const QString QML_WEB_ENGINE_STORAGE_NAME = "qmlWebEngine";
-
 static std::set<HFWebEngineProfile*> HFWebEngineProfile_instances;
 static std::mutex HFWebEngineProfile_mutex;
 
 HFWebEngineProfile::HFWebEngineProfile(QQmlContext* parent) : Parent(parent)
 {
-    setStorageName(QML_WEB_ENGINE_STORAGE_NAME);
-    setOffTheRecord(false);
+    // Stays off the record: one of these exists per QML context, and persistent profiles that share a
+    // storage name fight over its on-disk storage (see ContextAwareProfile.h).
 
     // we use the HFWebEngineRequestInterceptor to make sure that web requests are authenticated for the interface user
     setUrlRequestInterceptor(new RequestInterceptor(this));

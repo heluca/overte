@@ -39,9 +39,10 @@
 #include "Application.h"
 
 GraphicsEngine::GraphicsEngine() {
-    const QString SPLASH_SKYBOX { "{\"ProceduralEntity\":{ \"version\":2, \"shaderUrl\":\"qrc:///shaders/splashSkybox.frag\" } }" };
-    _splashScreen->parse(SPLASH_SKYBOX);
     const QUrl SPLASH_IMAGE { PathUtils::resourcesUrl("images/splashShaders.png") };
+    const QString SPLASH_SKYBOX { "{\"ProceduralEntity\":{ \"version\":2, \"shaderUrl\":\"qrc:///shaders/splashSkybox.frag\", "
+        "\"channels\":[\"" + SPLASH_IMAGE.toString() + "\"] } }" };
+    _splashScreen->parse(SPLASH_SKYBOX);
     _texture = DependencyManager::get<TextureCache>()->getTexture(SPLASH_IMAGE);
 }
 
@@ -282,7 +283,6 @@ void GraphicsEngine::render_performFrame() {
                 batch.enableStereo(isStereo);
                 batch.clearDepthStencilFramebuffer(1.0, 0);
                 batch.setViewportTransform({ 0, 0, finalFramebuffer->getSize() });
-                batch.setResourceTexture(0, _texture->getGPUTexture());
                 _splashScreen->render(batch, viewFrustum, renderArgs._renderMethod == RenderArgs::RenderMethod::FORWARD, render::RenderEngine::TS_BACKGROUND_VIEW);
             });
         }

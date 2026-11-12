@@ -1,0 +1,152 @@
+# Copyright 2026 Overte e.V.
+# SPDX-License-Identifier: Apache-2.0
+
+# Compile check of the Qt 6 Vulkan Interface on GitHub-hosted runners, for repositories that have no access to the
+# third-party runners build.yml uses. It builds against a prebuilt Qt (`qt_source=system`), since a Qt source build
+# does not fit a hosted runner's six hours: KDE neon's Qt 6 on Ubuntu 24.04, Homebrew's on macOS.
+# It produces no installers or artifacts; build.yml stays the release build.
+#
+# To run it on a branch without opening a pull request, push the branch as `ci/<anything>`.
+
+name: Hosted runner build
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - vulkan
+      - "ci/**"
+  workflow_dispatch:
+
+concurrency:
+  group: hosted-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: "${{ matrix.os }}, Vulkan, ${{ matrix.arch }}, system Qt"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: ubuntu
+            os: Ubuntu 24.04
+            runner: ubuntu-24.04
+            arch: amd64
+            conan_profile: ./tools/conan-profiles/linux
+            targets: interface domain-server assignment-client
+            # The generated shader sources take several GiB each to compile; the runner has 16 GiB.
+            build_jobs: 4
+          - id: macos
+            os: macOS 15
+            runner: macos-15
+            arch: arm64
+            conan_profile: ./tools/conan-profiles/macos
+            targets: Overte
+            build_jobs: 3
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+
+      - name: Free disk space
+        if: matrix.id == 'ubuntu'
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - name: Install Qt 6 and build tools (Ubuntu)
+        if: matrix.id == 'ubuntu'
+        shell: bash
+        run: |
+          # Ubuntu 24.04's own Qt 6 is 6.4; KDE neon's user archive carries a current one for the same release.
+          sudo mkdir -p /etc/apt/keyrings
+          sudo curl -fsSL https://archive.neon.kde.org/public.key -o /etc/apt/keyrings/neon-archive-keyring.asc
+          printf '%s\n' 'Types: deb' 'URIs: http://archive.neon.kde.org/user' 'Suites: noble' 'Components: main' \
+            'Signed-By: /etc/apt/keyrings/neon-archive-keyring.asc' | sudo tee /etc/apt/sources.list.d/neon.sources
+          sudo apt-get update
+          # The Qt packages are the ones the qt/6.x@overte/system Conan recipe asks for; the rest is from BUILD_LINUX.md.
+          sudo apt-get install -y ninja-build g++ python3-distro python3-html5lib \
+            mesa-common-dev libgl1-mesa-dev libgbm-dev libpulse-dev libasound2-dev libjack-dev \
+            libxmu-dev libxi-dev libxrandr-dev libudev-dev libssl-dev zlib1g-dev \
+            qt6-base-dev qt6-base-private-dev qt6-webengine-dev qt6-webengine-dev-tools qt6-multimedia-dev \
+            libqt6opengl6-dev qt6-webchannel-dev qt6-websockets-dev qt6-tools-dev qt6-svg-dev qt6-5compat-dev
+          curl -fsSL --output /tmp/conan.deb https://github.com/conan-io/conan/releases/download/2.27.1/conan-2.27.1-amd64.deb
+          sudo apt-get install -y /tmp/conan.deb
+          qmake6 -query QT_VERSION
+
+      - name: Install Qt 6 and build tools (macOS)
+        if: matrix.id == 'macos'
+        shell: bash
+        run: |
+          # See BUILD_OSX.md. Bash, because macOS ships Bash 3.
+          brew install bash conan ninja \
+            qtbase qtdeclarative qtsvg qtwebchannel qtwebsockets qtmultimedia qt5compat qtimageformats qttools qtwebengine
+          "$(brew --prefix qtbase)/bin/qmake" -query QT_VERSION
+
+      - name: Set up Conan
+        shell: bash
+        run: |
+          export CONAN_HOME="$HOME/.conan2"
+          echo "CONAN_HOME=$CONAN_HOME" >> "$GITHUB_ENV"
+          conan profile detect -e
+          conan remote add overte https://artifactory.overte.org/artifactory/api/conan/overte -f
+          {
+            echo "tools.system.package_manager:mode = install"
+            echo "tools.system.package_manager:sudo = True"
+            echo "tools.cmake.cmaketoolchain:generator = Ninja"
+            echo "tools.build:jobs = ${{ matrix.build_jobs }}"
+          } > "$CONAN_HOME/global.conf"
+          cat "$CONAN_HOME/profiles/default" "$CONAN_HOME/global.conf"
+
+      - name: Restore Conan cache
+        id: conan-cache
+        uses: actions/cache/restore@v5
+        with:
+          key: hosted-conan-${{ matrix.id }}-${{ hashFiles('conanfile.py', 'tools/conan-profiles/*') }}
+          path: |
+            ${{ env.CONAN_HOME }}/sources
+            ${{ env.CONAN_HOME }}/p
+
+      - name: Install Conan dependencies
+        id: conan-install
+        shell: bash
+        run: |
+          # Twice, as build.yml does, to work around OpenSSL not being found on the first pass.
+          for pass in 1 2; do
+            conan install . -s build_type=Release -o 'Overte/*:qt_source=system' -b missing \
+              -pr:a=${{ matrix.conan_profile }} -of build
+          done
+
+      - name: Clean up Conan build folders
+        if: always() && steps.conan-install.outcome == 'success' && steps.conan-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: conan cache clean "*" -sbdt
+
+      - name: Save Conan cache
+        # Only a complete set: a partial one saved under this key would be restored as a hit and never completed.
+        if: always() && steps.conan-install.outcome == 'success' && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          key: hosted-conan-${{ matrix.id }}-${{ hashFiles('conanfile.py', 'tools/conan-profiles/*') }}
+          path: |
+            ${{ env.CONAN_HOME }}/sources
+            ${{ env.CONAN_HOME }}/p
+
+      - name: Configure CMake
+        shell: bash
+        run: cmake --preset conan-release -DOVERTE_RENDERING_BACKEND=Vulkan -DOVERTE_RELEASE_TYPE=DEV -DOVERTE_GIT_COMMIT_SHORT=${GITHUB_SHA::7}
+
+      - name: Build
+        shell: bash
+        run: cmake --build --preset conan-release --parallel ${{ matrix.build_jobs }} --target ${{ matrix.targets }}
+
+      - name: Output disk usage
+        if: always()
+        shell: bash
+        run: df -h

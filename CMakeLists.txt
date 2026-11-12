@@ -162,6 +162,26 @@ foreach(PLATFORM_QT_COMPONENT ${PLATFORM_QT_COMPONENTS})
   list(APPEND PLATFORM_QT_LIBRARIES "Qt6::${PLATFORM_QT_COMPONENT}")
 endforeach()
 
+if (APPLE)
+  # A framework Qt installed into a shared prefix (Homebrew's, with qt_source=system) searches that prefix's include
+  # directory last (Qt6::Platform adds it with -idirafter), but Qt6::GlobalConfig and the header-only Qt6::QmlIntegration
+  # also add it as an ordinary system include directory. The headers of unrelated libraries there (abseil, OpenSSL, ...)
+  # then shadow the Conan dependencies. Drop it from those two; the -idirafter entry still finds Qt's headers in it.
+  # The targets are imported here, in the top directory, so that every subdirectory sees the corrected ones.
+  find_package(Qt6 COMPONENTS Core Qml QUIET REQUIRED)
+  if (QT_FEATURE_framework)
+    foreach(_QT_TARGET Qt6::GlobalConfig Qt6::QmlIntegration)
+      if (TARGET ${_QT_TARGET})
+        get_target_property(_QT_INCLUDES ${_QT_TARGET} INTERFACE_INCLUDE_DIRECTORIES)
+        list(REMOVE_ITEM _QT_INCLUDES "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_HEADERS}")
+        set_target_properties(${_QT_TARGET} PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_QT_INCLUDES}")
+      endif()
+    endforeach()
+    unset(_QT_TARGET)
+    unset(_QT_INCLUDES)
+  endif()
+endif()
+
 message(STATUS "Use optimized IK:      " ${OVERTE_USE_OPTIMIZED_IK})
 message(STATUS "Build server:          " ${OVERTE_BUILD_SERVER})
 message(STATUS "Build client:          " ${OVERTE_BUILD_CLIENT})

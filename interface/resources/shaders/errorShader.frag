@@ -19,12 +19,14 @@ float getProceduralColors(inout vec3 diffuse, inout vec3 specular, inout float s
 
 // version 3
 float getProceduralFragment(inout ProceduralFragment data) {
-    data.emissive = getErrorColor();
+    data.diffuse = getErrorColor();
+    data.emissive = data.diffuse;
     return 1.0;
 }
 
 // version 4
 float getProceduralFragmentWithPosition(inout ProceduralFragmentWithPosition data) {
-    data.emissive = getErrorColor();
+    data.diffuse = getErrorColor();
+    data.emissive = data.diffuse;
     return 1.0;
 }

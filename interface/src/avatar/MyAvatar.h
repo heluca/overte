@@ -1061,7 +1061,7 @@ public:
      * @param {DriveKey} key - The drive key.
      * @returns {number} The value of the drive key.
      */
-    Q_INVOKABLE float getRawDriveKey(DriveKeys key) const;
+    Q_INVOKABLE float getRawDriveKey(MyAvatar::DriveKeys key) const;
 
     void relayDriveKeysToCharacterController();
 
@@ -1077,7 +1077,7 @@ public:
      *     MyAvatar.enableDriveKey(YAW);
      * }, 5000);
      */
-    Q_INVOKABLE void disableDriveKey(DriveKeys key);
+    Q_INVOKABLE void disableDriveKey(MyAvatar::DriveKeys key);
 
     /*@jsdoc
      * Enables the action associated with a drive key. The action may have been disabled with
@@ -1085,7 +1085,7 @@ public:
      * @function MyAvatar.enableDriveKey
      * @param {DriveKey} key - The drive key to enable.
      */
-    Q_INVOKABLE void enableDriveKey(DriveKeys key);
+    Q_INVOKABLE void enableDriveKey(MyAvatar::DriveKeys key);
 
     /*@jsdoc
      * Checks whether a drive key is disabled.
@@ -1093,7 +1093,7 @@ public:
      * @param {DriveKey} key - The drive key to check.
      * @returns {boolean} <code>true</code> if the drive key is disabled, <code>false</code> if it isn't.
      */
-    Q_INVOKABLE bool isDriveKeyDisabled(DriveKeys key) const;
+    Q_INVOKABLE bool isDriveKeyDisabled(MyAvatar::DriveKeys key) const;
 
 
     /*@jsdoc
