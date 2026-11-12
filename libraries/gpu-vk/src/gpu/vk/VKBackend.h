@@ -374,7 +374,8 @@ private:
     VKQuery* syncGPUObject(const Query *query);
 
     void blitToFramebuffer(VKAttachmentTexture &input, const Vec4i& srcViewport, VKAttachmentTexture &output, const Vec4i& dstViewport);
-    bool readbackFramebuffer(VKFramebuffer* vkFramebuffer, const Vec4i& region, QImage& destImage);
+    // A half-float (HDR output) framebuffer is divided by hdrWhite, its value of SDR white, before the sRGB encode
+    bool readbackFramebuffer(VKFramebuffer* vkFramebuffer, const Vec4i& region, QImage& destImage, float hdrWhite);
 
 public:
     VKBackend();
@@ -394,7 +395,7 @@ public:
     void downloadFramebuffer(const FramebufferPointer& srcFramebuffer, const Vec4i& region, QImage& destImage) final;
     // Reads back the framebuffer that the display plugin presents (the last one written by the resample or
     // HUD composite pass). Used for screenshots until the Vulkan display plugin composites into its own framebuffer.
-    bool downloadOutputFramebuffer(const Vec4i& region, QImage& destImage);
+    bool downloadOutputFramebuffer(const Vec4i& region, QImage& destImage, float hdrWhite);
     glm::uvec2 getOutputFramebufferSize() const;
     void setDrawCommandBuffer(VkCommandBuffer commandBuffer);
     size_t getNumInputBuffers() const { return _input._invalidBuffers.size(); }

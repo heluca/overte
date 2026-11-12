@@ -59,7 +59,7 @@ Overte is a free and open source 3D social virtual worlds software.
 The Vulkan Interface presents through the Qt platform plugin, so the plugin decides what the swapchain can offer:
 
 - `QT_QPA_PLATFORM=wayland` is required for HDR output. Under the default `xcb` plugin the swapchain is always SDR (`B8G8R8A8_SRGB`), whatever the display supports. HDR also needs a Wayland compositor with HDR enabled for the display and a Vulkan driver that offers `VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT` (NVIDIA 595 or later; the 580 series does not).
-- `OVERTE_HDR_HEADROOM` states the display's HDR headroom, peak luminance divided by the compositor's SDR white level (for example 910 nits / 500 nits = `1.82`). Linux has no API that reports it yet, so without this variable the Interface keeps an SDR swapchain even when HDR output is turned on. Values above `1.01` enable the HDR path.
+- `OVERTE_HDR_HEADROOM` states the display's HDR headroom, peak luminance divided by the compositor's SDR white level (for example 910 nits / 500 nits = `1.82`). Linux has no API that reports it yet, so without this variable the Interface keeps an SDR swapchain even when HDR output is turned on. Values above `1.01` enable the HDR path. SDR white is mapped to the compositor's reference white (203 cd/m² in the scRGB colour space on Wayland), so the Interface's white matches the desktop's.
 - *Developer > Render > HDR Output* toggles HDR live once those two are set; the choice persists in the settings.
 
 The log confirms which path is active: `VKWindow::createSwapchain R16G16B16A16_SFLOAT/extended linear sRGB (HDR requested)` for HDR, `B8G8R8A8_SRGB/sRGB` for SDR. Set `OVERTE_LOG_OPTIONS=nojournald QT_FORCE_STDERR_LOGGING=1` to see the log in the terminal instead of journald.

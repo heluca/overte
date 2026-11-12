@@ -93,6 +93,7 @@ public:
     virtual void pluginUpdate() override {};
 
     float getHDRPeak() const override { return _hdrPeak; }
+    float getHDRWhite() const override;
     void setHDROutputEnabled(bool enabled) override;
 
 protected:
@@ -162,6 +163,9 @@ protected:
     mat4 _prevRenderView;
     gpu::FramebufferPointer _compositeFramebuffer;
     gpu::PipelinePointer _hudPipeline;
+    // The HUD composite into an HDR frame, scaled to the swapchain's SDR white
+    gpu::PipelinePointer _hudHDRPipeline;
+    gpu::BufferView _hudHDRParams;
     gpu::PipelinePointer _mirrorHUDPipeline;
     gpu::ShaderPointer _mirrorHUDPS;
     gpu::PipelinePointer _drawTexturePipeline;
