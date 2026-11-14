@@ -3859,7 +3859,7 @@ void DomainServer::handleDomainContentReplacementFromURLRequest(QSharedPointer<R
 }
 
 void DomainServer::handleOctreeFileReplacementRequest(QSharedPointer<ReceivedMessage> message) {
-    auto node = DependencyManager::get<NodeList>()->nodeWithLocalID(message->getSourceID());
+    auto node = DependencyManager::get<LimitedNodeList>()->findNodeWithAddr(message->getSenderSockAddr());
     if (node && node->getCanReplaceContent()) {
         QString username;
         DomainServerNodeData* nodeData = static_cast<DomainServerNodeData*>(node->getLinkedData());
