@@ -1947,8 +1947,6 @@ void VKBackend::updateInput() {
 
         for (size_t buffer_index = 0; buffer_index < _input._buffers.size(); buffer_index++) {
             if (_input._invalidBuffers.test(buffer_index)) {
-                _cache.pipelineState._bufferStrides[buffer_index] = _input._bufferStrides[buffer_index];
-                _cache.pipelineState._bufferStrideSet.set(buffer_index, true);
                 auto backendBuffer = syncGPUObject(_input._buffers[buffer_index]);
                 VkBuffer vkBuffer = VK_NULL_HANDLE;
                 if (backendBuffer) {
@@ -3358,6 +3356,8 @@ void VKBackend::do_setInputBuffer(const Batch& batch, size_t paramOffset) {
             _input._bufferStrides[channel] = stride;
             isModified = true;
         }
+        // The pipeline is built with, and keyed by, the stride of what is bound now
+        _cache.pipelineState._bufferStrides[channel] = stride;
 
         if (isModified) {
             _input._invalidBuffers.set(channel);
