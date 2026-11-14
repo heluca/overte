@@ -3456,7 +3456,12 @@ void VKBackend::do_setProjectionTransform(const Batch& batch, size_t paramOffset
     memcpy(glm::value_ptr(projection), batch.readData(batch._params[paramOffset]._uint), sizeof(Mat4));
     //VKTODO: ortho views for shadow maps break when inverted here, I'm not sure why. They also seem to shift linearly.
     if (batch.getName() != "RenderShadowMap::run") {
-        projection = glm::scale(projection, glm::vec3(1.0f, -1.0f, 1.0f));
+        // Flip clip space y, which is the projection's second row. Scaling the matrix itself negates its second
+        // column instead: the same thing for a symmetric perspective, but it also turned over the y of an oblique
+        // near plane (a mirror's), so a mirror showed what lies behind it whenever the camera pitched.
+        for (int column = 0; column < 4; column++) {
+            projection[column][1] = -projection[column][1];
+        }
     }
     _transform._invalidProj = true;
     // The current view / proj doesn't correspond to a saved camera slot
