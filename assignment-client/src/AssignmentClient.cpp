@@ -232,6 +232,13 @@ void AssignmentClient::sendAssignmentRequest() {
 }
 
 void AssignmentClient::handleCreateAssignmentPacket(QSharedPointer<ReceivedMessage> message) {
+    // CreateAssignment is unsourced, and its sender becomes our domain server.
+    if (message->getSenderSockAddr() != _assignmentServerSocket) {
+        HIFI_FCDEBUG(assignment_client(), "Ignoring a PacketType::CreateAssignment from" << message->getSenderSockAddr()
+            << "which is not the assignment server at" << _assignmentServerSocket);
+        return;
+    }
+
     qCDebug(assignment_client) << "Received a PacketType::CreateAssignment - attempting to unpack.";
 
     if (_currentAssignment) {
