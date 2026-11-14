@@ -1900,7 +1900,35 @@ void DomainServer::nodePingMonitor() {
     });
 }
 
+// The octree data packets are unsourced, so the sending socket is the only thing that identifies the entity server.
+// Match all of its sockets rather than the active one: an entity server on this host connects from loopback, which
+// matches neither socket it reports and so is recorded as its symmetric socket, and a later change in its reported
+// sockets clears the active one.
+static bool isFromEntityServer(ReceivedMessage& message) {
+    const SockAddr& senderSockAddr = message.getSenderSockAddr();
+    bool fromEntityServer = false;
+    DependencyManager::get<LimitedNodeList>()->eachNodeBreakable([&](const SharedNodePointer& node) {
+        if (node->getType() == NodeType::EntityServer
+            && (node->getPublicSocket() == senderSockAddr || node->getLocalSocket() == senderSockAddr
+                || node->getSymmetricSocket() == senderSockAddr)) {
+            fromEntityServer = true;
+            return false;
+        }
+        return true;
+    });
+
+    if (!fromEntityServer) {
+        HIFI_FCDEBUG(domain_server(), "Ignoring" << message.getType() << "from" << senderSockAddr
+            << "- not an entity server");
+    }
+    return fromEntityServer;
+}
+
 void DomainServer::processOctreeDataPersistMessage(QSharedPointer<ReceivedMessage> message) {
+    if (!isFromEntityServer(*message)) {
+        return;
+    }
+
     auto data = message->readAll();
     qDebug() << "Received octree data persist message" << (data.size() / 1000) << "kbytes.";
     auto filePath = getEntitiesFilePath();
@@ -1946,6 +1974,10 @@ QString DomainServer::getEntitiesReplacementFilePath() {
 }
 
 void DomainServer::processOctreeDataRequestMessage(QSharedPointer<ReceivedMessage> message) {
+    if (!isFromEntityServer(*message)) {
+        return;
+    }
+
     qDebug() << "Got request for octree data from " << message->getSenderSockAddr();
 
     maybeHandleReplacementEntityFile();
