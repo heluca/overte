@@ -789,7 +789,8 @@ void Agent::aboutToFinish() {
     DependencyManager::destroy<AnimationCache>();
     DependencyManager::destroy<ScriptCredentials>();
 
-    DependencyManager::destroy<recording::Deck>();
+    // The Deck plays back on the main thread, where a queued processFrames may still be about to run
+    QMetaObject::invokeMethod(qApp, [] { DependencyManager::destroy<recording::Deck>(); }, Qt::BlockingQueuedConnection);
     DependencyManager::destroy<recording::Recorder>();
     DependencyManager::destroy<recording::ClipCache>();
 
