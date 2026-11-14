@@ -11,6 +11,7 @@
 
 #include "AudioStreamTests.h"
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 
@@ -62,6 +63,16 @@ Plan planFor(const QByteArray& path) {
     } else if (path == "/forever") {
         plan.steps << Step::audio(tenth) << Step::wait(100);
         plan.repeat = true;
+    } else if (path == "/bursts" || path == "/gap") {
+        // A real-time producer behind a proxy that coalesces its response into bursts of 240 ms, one of them 50 ms late.
+        // In /gap the producer also stops for half a second after the second burst.
+        const int BURST_FRAMES = 24;
+        const QVector<int> waits = path == "/bursts" ? QVector<int>({ 240, 240, 240, 240, 290, 190, 240, 240, 240 })
+                                                     : QVector<int>({ 240, 760, 240, 290, 190 });
+        for (int wait : waits) {
+            plan.steps << Step::audio(BURST_FRAMES * FRAME_SAMPLES) << Step::wait(wait);
+        }
+        plan.steps << Step::audio(BURST_FRAMES * FRAME_SAMPLES) << Step::end();
     } else if (path == "/lone") {
         // One frame, then three more after a second
         plan.steps << Step::audio(FRAME_SAMPLES) << Step::wait(1000) << Step::audio(3 * FRAME_SAMPLES) << Step::wait(300)
@@ -78,14 +89,15 @@ struct Pulled {
 };
 
 // Reads a frame every 10 ms, as the injector's frame timer does, until the stream ends or the timeout passes
-Pulled pullFrames(AudioStreamSource& source, int timeoutMs) {
+Pulled pullFrames(AudioStreamSource& source, int timeoutMs,
+                  AudioStreamSource::Consumer consumer = AudioStreamSource::Local) {
     Pulled pulled;
     QByteArray frame(source.getFrameBytes(), '\0');
     QElapsedTimer clock;
     clock.start();
     while (clock.elapsed() < timeoutMs) {
         while (pulled.frames.size() <= clock.elapsed() / 10) {
-            const Frame kind = source.readFrame(AudioStreamSource::Local, frame.data());
+            const Frame kind = source.readFrame(consumer, frame.data());
             pulled.frames.append(kind);
             if (kind == Frame::Ended) {
                 return pulled;
@@ -128,16 +140,34 @@ bool isSequenceFrom(const QVector<int16_t>& samples, int firstIndex) {
     return true;
 }
 
-int longestSilenceBetweenAudio(const QVector<Frame>& frames) {
+QVector<int> silenceRunsBetweenAudio(const QVector<Frame>& frames) {
     const int first = frames.indexOf(Frame::Audio);
     const int last = frames.lastIndexOf(Frame::Audio);
-    int longest = 0;
+    QVector<int> runs;
     int run = 0;
     for (int i = first; i >= 0 && i <= last; i++) {
-        run = (frames[i] == Frame::Silence) ? run + 1 : 0;
-        longest = std::max(longest, run);
+        if (frames[i] == Frame::Silence) {
+            run++;
+        } else if (run > 0) {
+            runs.append(run);
+            run = 0;
+        }
     }
-    return longest;
+    return runs;
+}
+
+int longestSilenceBetweenAudio(const QVector<Frame>& frames) {
+    const QVector<int> runs = silenceRunsBetweenAudio(frames);
+    return runs.isEmpty() ? 0 : *std::max_element(runs.begin(), runs.end());
+}
+
+// As Audio.playStream sets up its source by default
+AudioStreamSourcePointer playStreamSource(const QString& path) {
+    auto source = AudioStreamSource::create(server->url(path), AudioConstants::MONO);
+    source->setNetworkBufferFrames(50);
+    source->setPrebufferFrames(10);
+    source->start(false, true);
+    return source;
 }
 
 AudioInjectorOptions positionedOptions() {
@@ -207,6 +237,7 @@ void AudioStreamTests::testOverrunKeepsNewest() {
     QVERIFY(isSequenceFrom(pulled.samples, SAMPLES_PER_SECOND - 20 * FRAME_SAMPLES));
     QVERIFY(pulled.frames.count(Frame::Silence) > 0);
     QCOMPARE(pulled.frames.last(), Frame::Ended);
+    QCOMPARE(source->getBufferStats(AudioStreamSource::Local).droppedFrames, 80);
 }
 
 void AudioStreamTests::testStereoFrames() {
@@ -354,4 +385,53 @@ void AudioStreamTests::testPrebufferDefaultsToZero() {
     QVERIFY(isSequenceFrom(pulled.samples, 0));
     QCOMPARE(pulled.frames.last(), Frame::Ended);
     QCOMPARE(source->getEndReason(), QString("ended"));
+}
+
+void AudioStreamTests::testPrebufferRidesOutLateBurst() {
+    // Without a prebuffer, and with a ring smaller than a burst, as Audio.playStream had: the late burst is heard as
+    // silence and every burst loses its oldest audio
+    auto source = AudioStreamSource::create(server->url("/bursts"), AudioConstants::MONO);
+    source->start(false, true);
+    Pulled pulled = pullFrames(*source, 5000, AudioStreamSource::Network);
+    auto stats = source->getBufferStats(AudioStreamSource::Network);
+    qDebug() << "no prebuffer: underruns" << stats.underruns << "silent frames" << stats.silentFrames << "dropped frames"
+             << stats.droppedFrames;
+    QVERIFY(stats.underruns >= 1);
+    QVERIFY(stats.droppedFrames > 0);
+
+    // With the prebuffer held back from each burst's arrival, the late burst comes while 50 ms are still in hand
+    source = playStreamSource("/bursts");
+    pulled = pullFrames(*source, 5000, AudioStreamSource::Network);
+    stats = source->getBufferStats(AudioStreamSource::Network);
+    const int firstAudio = pulled.frames.indexOf(Frame::Audio);
+    qDebug() << "prebuffer 10: first audio at frame" << firstAudio << "silence runs"
+             << silenceRunsBetweenAudio(pulled.frames) << "underruns" << stats.underruns << "dropped frames"
+             << stats.droppedFrames;
+    QCOMPARE(pulled.frames.last(), Frame::Ended);
+    QCOMPARE(pulled.frames.count(Frame::Audio), 240);
+    QVERIFY(isSequenceFrom(pulled.samples, 0));
+    QCOMPARE(longestSilenceBetweenAudio(pulled.frames), 0);
+    QVERIFY2(firstAudio >= 10, qPrintable(QString::number(firstAudio)));
+    QCOMPARE(stats.underruns, 0);
+    QCOMPARE(stats.silentFrames, 0);
+    QCOMPARE(stats.droppedFrames, 0);
+}
+
+void AudioStreamTests::testUnderrunPrimesAgain() {
+    auto source = playStreamSource("/gap");
+    const Pulled pulled = pullFrames(*source, 5000, AudioStreamSource::Network);
+    const auto stats = source->getBufferStats(AudioStreamSource::Network);
+    const QVector<int> runs = silenceRunsBetweenAudio(pulled.frames);
+    qDebug() << "silence runs" << runs << "underruns" << stats.underruns << "silent frames" << stats.silentFrames;
+
+    // The pause underruns once. The audio after it is held back for the prebuffer again, so the late burst that follows
+    // plays without a gap.
+    QCOMPARE(pulled.frames.last(), Frame::Ended);
+    QCOMPARE(pulled.frames.count(Frame::Audio), 144);
+    QVERIFY(isSequenceFrom(pulled.samples, 0));
+    QCOMPARE(runs.size(), 1);
+    QVERIFY2(runs[0] >= 10, qPrintable(QString::number(runs[0])));
+    QCOMPARE(stats.underruns, 1);
+    QCOMPARE(stats.silentFrames, runs[0]);
+    QCOMPARE(stats.droppedFrames, 0);
 }

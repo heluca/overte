@@ -207,11 +207,13 @@ protected:
      * 24000 Hz, with no header or container: mono, or interleaved stereo when <code>injectorOptions.stereo</code> is
      * <code>true</code>. The producer does any resampling and downmixing. As with {@link Audio.playSound}, the audio is sent
      * to the audio mixer so that everyone hears it, unless <code>injectorOptions.localOnly</code> is <code>true</code>.
-     * <p>The injector plays the audio 10 ms at a time. When the stream falls behind, the injector plays silence and keeps
-     * going; when it runs ahead, the oldest audio beyond about 200 ms is dropped, so the delay never grows. The injector
-     * finishes, triggering {@link AudioInjector.finished}, when the response ends or fails, or when it is stopped, which closes
-     * the connection. Reconnecting is up to the script: call <code>Audio.playStream</code> again from the
-     * <code>finished</code> handler.</p>
+     * <p>The injector plays the audio 10 ms at a time. It holds back <code>injectorOptions.prebufferMs</code> of audio,
+     * 100 ms by default, after the stream starts and after every underrun, so a delivery that comes late or in a burst
+     * plays without a gap; that is the delay the stream adds. When the stream falls behind anyway, the injector plays
+     * silence and keeps going; when it runs ahead, the oldest audio beyond about 500 ms is dropped (200 ms for the local
+     * playback in Interface), so the delay never grows past that. The injector finishes, triggering
+     * {@link AudioInjector.finished}, when the response ends or fails, or when it is stopped, which closes the connection.
+     * Reconnecting is up to the script: call <code>Audio.playStream</code> again from the <code>finished</code> handler.</p>
      * <p>Only <code>http://</code> and <code>https://</code> URLs are played; any other URL returns <code>null</code>.</p>
      * <p>In server entity scripts and Agent scripts, the stream request gets the domain's script credential for the URL, if
      * there is one: the domain settings hold bearer tokens, each for requests under a URL prefix made by scripts under a

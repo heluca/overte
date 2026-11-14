@@ -34,6 +34,7 @@ public:
     bool localOnly;
     float secondOffset;
     float pitch;    // multiplier, where 2.0f shifts up one octave
+    float prebufferMs;  // only Audio.playStream reads it
 };
 
 Q_DECLARE_METATYPE(AudioInjectorOptions);
