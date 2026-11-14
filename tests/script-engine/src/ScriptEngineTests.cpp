@@ -625,11 +625,13 @@ void ScriptEngineTests::testPromiseSettleAfterStop() {
         standalone.resolveFromWorker("queued", "q");
         afterDestroy = standalone.resolver("afterDestroy");
         afterDestroyOnWorker = standalone.resolver("afterDestroyOnWorker");
-        // Delivered by the event processing in ~ScriptEngineV8, after it closed the bridge but before releasing it
-        QMetaObject::invokeMethod(&standalone, [&standalone, &destroyedEngine] {
+        // Deleted by the deferred deletes ~ScriptEngineV8 sends, after it closed the bridge but before releasing it
+        auto deletedDuringDestroy = new QObject();
+        QObject::connect(deletedDuringDestroy, &QObject::destroyed, [&standalone, &destroyedEngine] {
             standalone.note(QString("duringDestroy:") + (destroyedEngine.expired() ? "destroying" : "alive"));
             standalone.resolver("duringDestroy")->resolve(QVariant(5));
-        }, Qt::QueuedConnection);
+        });
+        deletedDuringDestroy->deleteLater();
     }
     QVERIFY(destroyedEngine.expired());
     QCOMPARE(standalone.log, QStringList({ "joined", "duringDestroy:destroying" }));
