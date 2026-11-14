@@ -2772,6 +2772,16 @@ void MyAvatar::prepareForPhysicsSimulation() {
         qDebug() << "Warning: getParentVelocity failed" << getID();
         parentVelocity = glm::vec3();
     }
+    // The character controller is given the parent's velocity so that its body keeps up with a parent
+    // the physics step moves. An entity with no physics body (a collisionless one with a velocity) is
+    // moved outside the step, by EntitySimulation::moveSimpleKinematics, and has already carried the
+    // avatar when this runs: giving the controller its velocity too would carry the avatar twice.
+    bool parentFound;
+    SpatiallyNestablePointer parent = getParentPointer(parentFound);
+    if (parentFound && parent && parent->getNestableType() == NestableType::Entity &&
+            !std::static_pointer_cast<EntityItem>(parent)->getPhysicsInfo()) {
+        parentVelocity = glm::vec3();
+    }
     _characterController.handleChangedCollisionMask();
     _characterController.setParentVelocity(parentVelocity);
     _characterController.setScaleFactor(getSensorToWorldScale());
