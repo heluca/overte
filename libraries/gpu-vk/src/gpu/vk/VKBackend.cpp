@@ -825,13 +825,7 @@ void VKBackend::updateVkDescriptorWriteSetsUniform(const Cache::PipelineLayout &
         return;
     }
 
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = _currentFrame->_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &layout.uniformLayout;
-    VkDescriptorSet descriptorSet;
-    VK_CHECK_RESULT(vkAllocateDescriptorSets(_context.device->logicalDevice, &allocInfo, &descriptorSet));
+    VkDescriptorSet descriptorSet = _currentFrame->allocateDescriptorSet(layout.uniformLayout);
     for (auto &descriptorWriteSet : sets) {
         descriptorWriteSet.dstSet = descriptorSet;
     }
@@ -959,13 +953,7 @@ void VKBackend::updateVkDescriptorWriteSetsTexture(const Cache::PipelineLayout &
         return;
     }
 
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = _currentFrame->_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &layout.textureLayout;
-    VkDescriptorSet descriptorSet;
-    VK_CHECK_RESULT(vkAllocateDescriptorSets(_context.device->logicalDevice, &allocInfo, &descriptorSet));
+    VkDescriptorSet descriptorSet = _currentFrame->allocateDescriptorSet(layout.textureLayout);
 
     for (auto &descriptorWriteSet : sets) {
         descriptorWriteSet.dstSet = descriptorSet;
@@ -1024,13 +1012,7 @@ void VKBackend::updateVkDescriptorWriteSetsStorage(const Cache::PipelineLayout &
         return;
     }
 
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = _currentFrame->_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &layout.storageLayout;
-    VkDescriptorSet descriptorSet;
-    VK_CHECK_RESULT(vkAllocateDescriptorSets(_context.device->logicalDevice, &allocInfo, &descriptorSet));
+    VkDescriptorSet descriptorSet = _currentFrame->allocateDescriptorSet(layout.storageLayout);
 
     for (auto &descriptorWriteSet : sets) {
         descriptorWriteSet.dstSet = descriptorSet;
@@ -2003,7 +1985,33 @@ void VKBackend::FrameData::createDescriptorPool() {
     descriptorPoolCI.poolSizeCount = (uint32_t)poolSizes.size();
     descriptorPoolCI.pPoolSizes = poolSizes.data();
 
-    VK_CHECK_RESULT(vkCreateDescriptorPool(_backend->_context.device->logicalDevice, &descriptorPoolCI, nullptr, &_descriptorPool));
+    VkDescriptorPool descriptorPool { VK_NULL_HANDLE };
+    VK_CHECK_RESULT(vkCreateDescriptorPool(_backend->_context.device->logicalDevice, &descriptorPoolCI, nullptr, &descriptorPool));
+    _descriptorPools.push_back(descriptorPool);
+}
+
+VkDescriptorSet VKBackend::FrameData::allocateDescriptorSet(const VkDescriptorSetLayout& layout) {
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &layout;
+    VkDescriptorSet descriptorSet { VK_NULL_HANDLE };
+
+    allocInfo.descriptorPool = _descriptorPools[_currentDescriptorPool];
+    VkResult result = vkAllocateDescriptorSets(_backend->_context.device->logicalDevice, &allocInfo, &descriptorSet);
+    if (result == VK_ERROR_OUT_OF_POOL_MEMORY || result == VK_ERROR_FRAGMENTED_POOL) {
+        // A frame that draws more than one pool holds (a scene seen again in mirrors, for one) moves on to the
+        // next pool, made on first need and kept for the frames after; all of them are reset with the frame.
+        _currentDescriptorPool++;
+        if (_currentDescriptorPool == _descriptorPools.size()) {
+            createDescriptorPool();
+            qCDebug(gpu_vk_logging) << "Frame descriptor pools:" << _descriptorPools.size();
+        }
+        allocInfo.descriptorPool = _descriptorPools[_currentDescriptorPool];
+        result = vkAllocateDescriptorSets(_backend->_context.device->logicalDevice, &allocInfo, &descriptorSet);
+    }
+    VK_CHECK_RESULT(result);
+    return descriptorSet;
 }
 
 void VKBackend::FrameData::addBufferBarrier(const VkBufferMemoryBarrier &barrier) {
@@ -2029,7 +2037,9 @@ VKBackend::FrameData::FrameData(VKBackend *backend) : _backend(backend) {
 
 VKBackend::FrameData::~FrameData() {
     cleanup();
-    vkDestroyDescriptorPool(_backend->_context.device->logicalDevice, _descriptorPool, nullptr);
+    for (auto descriptorPool : _descriptorPools) {
+        vkDestroyDescriptorPool(_backend->_context.device->logicalDevice, descriptorPool, nullptr);
+    }
     if (_objectBuffer) {
         _objectBuffer.reset();
     }
@@ -2066,7 +2076,10 @@ void VKBackend::FrameData::cleanup() {
     textureDescriptorSets.resize(0);
     storageDescriptorSets.resize(0);
     // Should descriptor pool be cleared every frame?
-    vkResetDescriptorPool(_backend->_context.device->logicalDevice, _descriptorPool, 0);
+    for (auto descriptorPool : _descriptorPools) {
+        vkResetDescriptorPool(_backend->_context.device->logicalDevice, descriptorPool, 0);
+    }
+    _currentDescriptorPool = 0;
 
     _bufferTransferCounterTransferPass = 0;
     _bufferTransferCounterRenderPass = 0;
@@ -3160,9 +3173,11 @@ void VKBackend::do_clearFramebuffer(const Batch& batch, size_t paramOffset) {
             continue;
         }
         auto gpuTexture = syncGPUObject(texture);
-        Q_ASSERT(gpuTexture);
         auto *attachmentTexture = dynamic_cast<VKAttachmentTexture*>(gpuTexture);
-        Q_ASSERT(attachmentTexture);
+        if (!attachmentTexture) {
+            // Nothing was created for this render buffer, so there is no image whose layout needs recording.
+            continue;
+        }
         if (masks & Framebuffer::BUFFER_COLORS) {
             if (attachmentTexture->_gpuObject.isDepthStencilRenderTarget()) {
                 // VKTODO: Check if the same depth render target is used as one of the inputs, if so then don't update it here
@@ -3203,14 +3218,12 @@ void VKBackend::do_clearFramebuffer(const Batch& batch, size_t paramOffset) {
 
     if (masks & Framebuffer::BUFFER_STENCIL || masks & Framebuffer::BUFFER_DEPTH) {
         auto texture = framebuffer->getDepthStencilBuffer();
-        Q_ASSERT(texture);
         auto gpuTexture = syncGPUObject(texture);
-        Q_ASSERT(gpuTexture);
         auto *attachmentTexture = dynamic_cast<VKAttachmentTexture*>(gpuTexture);
-        Q_ASSERT(attachmentTexture);
-
-        if ( attachmentTexture->_vkImage == (VkImage)(0x260000000026UL)) {
-            printf("0x260000000026UL");
+        if (!attachmentTexture) {
+            // A framebuffer with no depth stencil buffer has nothing here to clear, as with OpenGL. The mirror
+            // framebuffers are colour only and DrawLayered3D clears the depth of whatever it draws into.
+            return;
         }
 
         VkImageSubresourceRange mipSubRange = {};
@@ -3443,7 +3456,12 @@ void VKBackend::do_setProjectionTransform(const Batch& batch, size_t paramOffset
     memcpy(glm::value_ptr(projection), batch.readData(batch._params[paramOffset]._uint), sizeof(Mat4));
     //VKTODO: ortho views for shadow maps break when inverted here, I'm not sure why. They also seem to shift linearly.
     if (batch.getName() != "RenderShadowMap::run") {
-        projection = glm::scale(projection, glm::vec3(1.0f, -1.0f, 1.0f));
+        // Flip clip space y, which is the projection's second row. Scaling the matrix itself negates its second
+        // column instead: the same thing for a symmetric perspective, but it also turned over the y of an oblique
+        // near plane (a mirror's), so a mirror showed what lies behind it whenever the camera pitched.
+        for (int column = 0; column < 4; column++) {
+            projection[column][1] = -projection[column][1];
+        }
     }
     _transform._invalidProj = true;
     // The current view / proj doesn't correspond to a saved camera slot

@@ -318,7 +318,10 @@ protected:
         std::vector<VkDescriptorSet> uniformDescriptorSets;
         std::vector<VkDescriptorSet> textureDescriptorSets;
         std::vector<VkDescriptorSet> storageDescriptorSets;
-        VkDescriptorPool _descriptorPool;
+        // One pool serves an ordinary frame; a frame that needs more sets takes further pools, which are kept.
+        std::vector<VkDescriptorPool> _descriptorPools;
+        size_t _currentDescriptorPool { 0 };
+        VkDescriptorSet allocateDescriptorSet(const VkDescriptorSetLayout& layout);
         std::vector<std::shared_ptr<gpu::Buffer>> _buffers;
         std::vector<VkRenderPass> _renderPasses;  // VKTODO: add a lock? It depends on how we do transfer thread
 
