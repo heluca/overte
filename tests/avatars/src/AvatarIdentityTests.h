@@ -22,6 +22,8 @@ private slots:
     void testRenamesReachMixerAfterSessionName();
     void testOwnIdentityNotListed();
     void testOtherIdentityListed();
+    void testOtherSessionDisplayNameListed();
+    void testMixerIgnoresClientSessionDisplayName();
 };
 
 #endif // overte_AvatarIdentityTests_h

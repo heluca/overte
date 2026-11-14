@@ -25,6 +25,22 @@
 
 static const QString VERIFY_FAIL_MODEL { "/meshes/verifyFailed.fst" };
 
+namespace {
+
+// AvatarData ignores the transported session display name so the avatar mixer keeps the one it assigns. Avatars listed
+// here come from the mixer, so they keep the name it sent, as Interface's Avatar does.
+class ListedAvatarData : public AvatarData {
+protected:
+    void maybeUpdateSessionDisplayNameFromTransport(const QString& sessionDisplayName) override {
+        if (sessionDisplayName != _sessionDisplayName) {
+            _sessionDisplayName = sessionDisplayName;
+            emit sessionDisplayNameChanged();
+        }
+    }
+};
+
+}  // namespace
+
 void AvatarReplicas::addReplica(const QUuid& parentID, AvatarSharedPointer replica) {
     if (parentID == QUuid()) {
         return;
@@ -202,7 +218,7 @@ int AvatarHashMap::numberOfAvatarsInRange(const glm::vec3& position, float range
 }
 
 AvatarSharedPointer AvatarHashMap::newSharedAvatar(const QUuid& sessionUUID) {
-    auto avatarData = std::make_shared<AvatarData>();
+    auto avatarData = std::make_shared<ListedAvatarData>();
     avatarData->setSessionUUID(sessionUUID);
     return avatarData;
 }
