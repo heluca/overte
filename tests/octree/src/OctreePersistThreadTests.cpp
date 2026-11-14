@@ -42,8 +42,15 @@ static QList<SockAddr> forgedSenders() {
         SockAddr(SocketType::WebRTC, QHostAddress::LocalHost, 50102) };
 }
 
+static EntityTreePointer entityTree() {
+    EntityTreePointer tree = std::make_shared<EntityTree>(true);
+    tree->createRootElement();
+    return tree;
+}
+
+// No Entities key: OctreeEntitiesFileParser rejects an empty Entities array.
 static QByteArray entityData() {
-    QByteArray json = QString("{ \"DataVersion\": 1, \"Entities\": [], \"Id\": \"%1\", \"Version\": 1 }")
+    QByteArray json = QString("{ \"DataVersion\": 1, \"Id\": \"%1\", \"Version\": 1 }")
         .arg(QUuid::createUuid().toString()).toUtf8();
     QByteArray gzipped;
     gzip(json, gzipped);
@@ -70,7 +77,7 @@ void OctreePersistThreadTests::initTestCase() {
 void OctreePersistThreadTests::testDataFileReplyFromDomainServer() {
     QTemporaryDir dataDirectory;
     QString filename = dataDirectory.filePath("models.json.gz");
-    TestPersistThread persistThread(std::make_shared<EntityTree>(), filename);
+    TestPersistThread persistThread(entityTree(), filename);
     QSignalSpy loaded(&persistThread, &OctreePersistThread::loadCompleted);
     QByteArray newData = entityData();
 
@@ -86,7 +93,7 @@ void OctreePersistThreadTests::testDataFileReplyFromDomainServer() {
 void OctreePersistThreadTests::testDataFileReplyFromOtherSocket() {
     QTemporaryDir dataDirectory;
     QString filename = dataDirectory.filePath("models.json.gz");
-    TestPersistThread persistThread(std::make_shared<EntityTree>(), filename);
+    TestPersistThread persistThread(entityTree(), filename);
     QSignalSpy loaded(&persistThread, &OctreePersistThread::loadCompleted);
 
     for (const SockAddr& sender : forgedSenders()) {
