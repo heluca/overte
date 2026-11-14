@@ -73,7 +73,8 @@ Agent::Agent(ReceivedMessage& message) :
     ThreadedAssignment(message),
     _receivedAudioStream(RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES, RECEIVED_AUDIO_STREAM_CAPACITY_FRAMES),
     _scriptRequestTimeout(this),
-    _scriptRetryTimer(this)
+    _scriptRetryTimer(this),
+    _scriptCredentialsTimeout(this)
 {
     DependencyManager::set<ScriptableAvatar>();
 
@@ -140,6 +141,15 @@ Agent::Agent(ReceivedMessage& message) :
 
     _scriptRetryTimer.setSingleShot(true);
     connect(&_scriptRetryTimer, &QTimer::timeout, this, &Agent::requestScript);
+
+    // Backstop for settings that never arrive and never fail, as when a domain reset cancels the request's timeout
+    static const int SCRIPT_CREDENTIALS_TIMEOUT_MS = 10000;
+    _scriptCredentialsTimeout.setSingleShot(true);
+    _scriptCredentialsTimeout.setInterval(SCRIPT_CREDENTIALS_TIMEOUT_MS);
+    connect(&_scriptCredentialsTimeout, &QTimer::timeout, this, [this] {
+        qWarning() << "Domain settings not received - running the script without script credentials loaded.";
+        settleScriptCredentials();
+    });
 }
 
 void Agent::playAvatarSound(SharedSoundPointer sound) {
@@ -301,6 +311,7 @@ void Agent::run() {
 
     connect(&nodeList->getDomainHandler(), &DomainHandler::connectedToDomain, this, &Agent::requestScript);
     connect(&nodeList->getDomainHandler(), &DomainHandler::settingsReceived, this, &Agent::handleSettings);
+    connect(&nodeList->getDomainHandler(), &DomainHandler::settingsReceiveFail, this, &Agent::handleSettingsFailed);
 
     ThreadedAssignment::commonInit(AGENT_LOGGING_NAME, NodeType::Agent);
 
@@ -322,6 +333,25 @@ void Agent::run() {
 
 void Agent::handleSettings(const QJsonObject& settingsObject) {
     ScriptCredentials::loadDomainSettings(settingsObject);
+    settleScriptCredentials();
+}
+
+void Agent::handleSettingsFailed() {
+    // a later request failing leaves the table already loaded in place
+    if (!_haveScriptCredentialsSettled) {
+        qWarning() << "Domain settings request failed - running the script without script credentials loaded.";
+    }
+    settleScriptCredentials();
+}
+
+void Agent::settleScriptCredentials() {
+    _haveScriptCredentialsSettled = true;
+    _scriptCredentialsTimeout.stop();
+
+    if (_isScriptHeld) {
+        _isScriptHeld = false;
+        QMetaObject::invokeMethod(this, "executeScript", Qt::QueuedConnection);
+    }
 }
 
 void Agent::requestScript() {
@@ -440,9 +470,17 @@ void Agent::scriptRequestFinished() {
         _scriptContents = request->getData();
         qInfo() << "Downloaded script:" << _scriptContents;
 
-        // we could just call executeScript directly - we use a QueuedConnection to allow scriptRequestFinished
-        // to return before calling executeScript
-        QMetaObject::invokeMethod(this, "executeScript", Qt::QueuedConnection);
+        // The settings are requested just before the script, so the script can win the race and its first credentialed
+        // requests would go out without their bearer token
+        if (_haveScriptCredentialsSettled) {
+            // we could just call executeScript directly - we use a QueuedConnection to allow scriptRequestFinished
+            // to return before calling executeScript
+            QMetaObject::invokeMethod(this, "executeScript", Qt::QueuedConnection);
+        } else {
+            qInfo() << "Holding the script until the domain settings with the script credentials arrive.";
+            _isScriptHeld = true;
+            _scriptCredentialsTimeout.start();
+        }
     } else {
         qWarning() << "Failed to download script at" << request->getUrl().toString()
             << "- ResourceRequest error was" << request->getResult();
@@ -745,6 +783,8 @@ void Agent::queryAvatars() {
 void Agent::aboutToFinish() {
     _scriptRetryTimer.stop();
     _scriptRequestTimeout.stop();
+    _scriptCredentialsTimeout.stop();
+    _isScriptHeld = false;
     // before ResourceManager::cleanup stops the thread the request lives on, so the deferred delete still runs
     abandonScriptRequest();
 
