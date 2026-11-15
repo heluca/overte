@@ -8,7 +8,12 @@
 
 #include "Frame.h"
 
+#include <algorithm>
+#include <condition_variable>
 #include <mutex>
+#include <thread>
+#include <utility>
+#include <vector>
 
 #include <QtCore/QMap>
 
@@ -75,6 +80,9 @@ using Mutex = std::mutex;
 using Locker = std::unique_lock<Mutex>;
 static Mutex mutex;
 static std::once_flag once;
+// The handler calls in progress, by frame type and calling thread, so that clearFrameHandler can wait for them
+static std::vector<std::pair<FrameType, std::thread::id>> runningHandlers;
+static std::condition_variable handlerReturned;
 
 float FrameHeader::frameTimeToSeconds(Frame::Time frameTime) {
     float result = frameTime;
@@ -142,6 +150,13 @@ void Frame::clearFrameHandler(FrameType type) {
     if (iterator != handlerMap.end()) {
         handlerMap.erase(iterator);
     }
+    // A handler that clears its own type cannot wait for itself
+    const auto thisThread = std::this_thread::get_id();
+    handlerReturned.wait(lock, [&] {
+        return std::none_of(runningHandlers.begin(), runningHandlers.end(), [&](const auto& running) {
+            return running.first == type && running.second != thisThread;
+        });
+    });
 }
 
 void Frame::clearFrameHandler(const QString& frameTypeName) {
@@ -151,6 +166,7 @@ void Frame::clearFrameHandler(const QString& frameTypeName) {
 
 
 void Frame::handleFrame(const Frame::ConstPointer& frame) {
+    const std::pair<FrameType, std::thread::id> call { frame->type, std::this_thread::get_id() };
     Handler handler; 
     {
         Locker lock(mutex);
@@ -159,6 +175,15 @@ void Frame::handleFrame(const Frame::ConstPointer& frame) {
             return;
         }
         handler = *iterator;
+        runningHandlers.push_back(call);
     }
+    // Called outside the lock so that a handler may register or clear handlers
     handler(frame);
+    // The copy goes before clearFrameHandler returns, as it may hold the last reference to what the handler captured
+    handler = nullptr;
+    {
+        Locker lock(mutex);
+        runningHandlers.erase(std::find(runningHandlers.begin(), runningHandlers.end(), call));
+    }
+    handlerReturned.notify_all();
 }

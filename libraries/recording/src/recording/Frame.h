@@ -68,6 +68,7 @@ public:
     static FrameType registerFrameType(const QString& frameTypeName);
     static Handler registerFrameHandler(FrameType type, Handler handler);
     static Handler registerFrameHandler(const QString& frameTypeName, Handler handler);
+    // Returns once no other thread is still running the cleared handler, so what it captured may then be destroyed
     static void clearFrameHandler(FrameType type);
     static void clearFrameHandler(const QString& frameTypeName);
     static QMap<QString, FrameType> getFrameTypes();
