@@ -2659,6 +2659,9 @@ private:
     glm::quat _lookAtPitch;
     glm::quat _lookAtYaw;
     float _lookAtYawSpeed { 0.0f };
+    // The parent whose turning the look-at yaw follows, and its yaw at the last update
+    QUuid _lookAtParentID;
+    float _lookAtParentYaw { 0.0f };
     glm::vec3 _lookAtCameraTarget;
     glm::vec3 _lookAtScriptTarget;
     bool _headLookAtActive { false };
