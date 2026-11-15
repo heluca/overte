@@ -198,10 +198,11 @@ public slots:
      * 200 ms waits in a buffer and the oldest audio is dropped beyond that, so the server should send in real time. A
      * frame of zeros is silence, and costs the mixer next to nothing.</p>
      * <p>After the start and after every underrun the stream waits until <code>prebuffer</code> seconds of audio have
-     * arrived before it plays again. During an underrun nothing is sent unless <code>isListeningToAudioStream</code> is
-     * <code>true</code>, in which case the agent sends silence as it always does while listening. A server with nothing to
-     * say should send zeros rather than nothing, so the stream neither underruns nor goes idle: after
-     * <code>idleTimeout</code> seconds of underruns in a row the stream ends with <code>"idle"</code>. The count starts
+     * arrived, and holds the audio back for at least that long, before it plays again. During an underrun nothing is sent
+     * unless <code>isListeningToAudioStream</code> is <code>true</code>, in which case the agent sends silence as it always
+     * does while listening. A server with nothing to say should send zeros rather than nothing, so the stream neither
+     * underruns nor goes idle: after <code>idleTimeout</code> seconds of underruns in a row the stream ends with
+     * <code>"idle"</code>. The count starts
      * with the stream and includes connecting and the first prebuffer, so a server that takes longer than
      * <code>idleTimeout</code> to send its first audio ends the stream too.</p>
      * <p>The agent must be an avatar: <code>playVoiceStream</code> returns <code>false</code> while
