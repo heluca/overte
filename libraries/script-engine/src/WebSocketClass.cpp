@@ -90,6 +90,13 @@ void WebSocketClass::close(QWebSocketProtocol::CloseCode closeCode, QString reas
     _webSocket->close(closeCode, reason);
 }
 
+bool WebSocketClass::scriptHasFinished() const {
+    // Socket events are still delivered on the script's thread after ScriptManager::run() returned and released the
+    // isolate lock, e.g. by an Agent's event loop while it tears down. Entering V8 then aborts the process (#141).
+    auto manager = _engine->manager();
+    return manager && manager->isDoneRunning();
+}
+
 void WebSocketClass::setOnClose(const ScriptValue& eventFunction) {
     _onCloseEvent = eventFunction;
     _onCloseEnvironment = _engine->currentEnvironment();
@@ -123,6 +130,9 @@ void WebSocketClass::setOnOpen(const ScriptValue& eventFunction) {
  * @property {boolean} wasClean - <code>true</code> if the connection closed cleanly, <code>false</code> if it didn't.
  */
 void WebSocketClass::handleOnClose() {
+    if (scriptHasFinished()) {
+        return;
+    }
     bool hasError = (_webSocket->error() != QAbstractSocket::UnknownSocketError);
     if (_onCloseEvent.isFunction()) {
         ScriptValueList args;
@@ -188,6 +198,9 @@ void WebSocketClass::handleOnClose() {
  * @typedef {number} WebSocket.SocketError
  */
 void WebSocketClass::handleOnError(QAbstractSocket::SocketError error) {
+    if (scriptHasFinished()) {
+        return;
+    }
     if (_onErrorEvent.isFunction()) {
         ScriptEnvironmentScope environmentScope(_engine, _onErrorEnvironment);
         _onErrorEvent.call();
@@ -205,6 +218,9 @@ void WebSocketClass::handleOnError(QAbstractSocket::SocketError error) {
  * @property {string} data - The message content.
  */
 void WebSocketClass::handleOnMessage(const QString& message) {
+    if (scriptHasFinished()) {
+        return;
+    }
     if (_onMessageEvent.isFunction()) {
         ScriptValueList args;
         ScriptValue arg = _engine->newObject();
@@ -216,6 +232,9 @@ void WebSocketClass::handleOnMessage(const QString& message) {
 }
 
 void WebSocketClass::handleOnBinaryMessage(const QByteArray& message) {
+    if (scriptHasFinished()) {
+        return;
+    }
     if (_onMessageEvent.isFunction()) {
         ScriptValueList args;
         ScriptValue arg = _engine->newObject();
@@ -235,6 +254,9 @@ void WebSocketClass::handleOnBinaryMessage(const QByteArray& message) {
  * @callback WebSocket~onOpenCallback
  */
 void WebSocketClass::handleOnOpen() {
+    if (scriptHasFinished()) {
+        return;
+    }
     if (_onOpenEvent.isFunction()) {
         ScriptEnvironmentScope environmentScope(_engine, _onOpenEnvironment);
         _onOpenEvent.call();
