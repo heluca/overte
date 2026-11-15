@@ -27,6 +27,7 @@ private slots:
     void testConnectionToken();
     void testUsernameFromIDReply();
     void testConnectionDenied();
+    void testRequireDTLS();
 };
 
 #endif // overte_DomainHandlerTests_h
