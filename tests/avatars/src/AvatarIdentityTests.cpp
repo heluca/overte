@@ -29,6 +29,7 @@ namespace {
 
 const QUuid OWN_SESSION { "{6f1c2a9e-3b4d-4e5f-8a7b-1c2d3e4f5a6b}" };
 const QUuid OTHER_SESSION { "{0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d}" };
+const QUuid NAMED_SESSION { "{5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a}" };
 
 class TestAvatarHashMap : public AvatarHashMap {
 public:
@@ -125,4 +126,45 @@ void AvatarIdentityTests::testOtherIdentityListed() {
     auto listed = avatarHashMap->getAvatarBySessionID(OTHER_SESSION);
     QVERIFY(listed);
     QCOMPARE(listed->getDisplayName(), QString("Bea"));
+}
+
+void AvatarIdentityTests::testOtherSessionDisplayNameListed() {
+    makeOwnAvatar();
+    // Stands in for the mixer's copy of another avatar, whose session display name it assigned.
+    AvatarData otherAvatar;
+    otherAvatar.setSessionUUID(NAMED_SESSION);
+    otherAvatar.setDisplayName("Cy");
+    otherAvatar.setSessionDisplayName("Cy_2");
+    deliver(sendIdentity(otherAvatar));
+
+    auto listed = avatarHashMap->getAvatarBySessionID(NAMED_SESSION);
+    QVERIFY(listed);
+    QCOMPARE(listed->getSessionDisplayName(), QString("Cy_2"));
+
+    QSignalSpy changed(listed.get(), &AvatarData::sessionDisplayNameChanged);
+    otherAvatar.setSessionDisplayName("Cy_3");
+    deliver(sendIdentity(otherAvatar));
+    QCOMPARE(listed->getSessionDisplayName(), QString("Cy_3"));
+    QCOMPARE(changed.count(), 1);
+
+    deliver(sendIdentity(otherAvatar));
+    QCOMPARE(changed.count(), 1);
+}
+
+void AvatarIdentityTests::testMixerIgnoresClientSessionDisplayName() {
+    AvatarData clientAvatar;
+    clientAvatar.setSessionUUID(OWN_SESSION);
+    clientAvatar.setDisplayName("Dee");
+    clientAvatar.setSessionDisplayName("Admin");
+
+    AvatarData mixerAvatar;
+    mixerAvatar.setSessionUUID(OWN_SESSION);
+    const QByteArray identity = sendIdentity(clientAvatar);
+    QDataStream identityStream(identity);
+    bool identityChanged = false;
+    bool displayNameChanged = false;
+    mixerAvatar.processAvatarIdentity(identityStream, identityChanged, displayNameChanged);
+
+    QCOMPARE(mixerAvatar.getDisplayName(), QString("Dee"));
+    QVERIFY(mixerAvatar.getSessionDisplayName().isEmpty());
 }
