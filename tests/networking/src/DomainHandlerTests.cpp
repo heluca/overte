@@ -18,7 +18,9 @@
 #include <AddressManager.h>
 #include <DependencyManager.h>
 #include <DomainAccountManager.h>
+#include <NLPacket.h>
 #include <NodeList.h>
+#include <PacketReceiver.h>
 #include <ReceivedMessage.h>
 
 QTEST_MAIN(DomainHandlerTests)
@@ -235,4 +237,23 @@ void DomainHandlerTests::testConnectionDenied() {
         message(PacketType::DomainConnectionDenied, connectionDeniedPayload(reason, "real"), domainServer()));
     QCOMPARE(refused.count(), 1);
     QCOMPARE(domainHandler.getLastDomainConnectionError(), static_cast<int>(reason));
+}
+
+// Issue #174: DomainServerRequireDTLS moved the domain server's port for any sender. No domain server sends it and
+// DTLS was never finished, so it has no listener; delivered through the packet receiver, it must change nothing.
+void DomainHandlerTests::testRequireDTLS() {
+    auto nodeList = DependencyManager::get<NodeList>();
+    QList<SockAddr> senders = forgedSenders();
+    senders.append(domainServer());
+
+    for (const SockAddr& sender : senders) {
+        auto packet = NLPacket::create(PacketType::DomainServerRequireDTLS);
+        packet->writePrimitive(quint16(40105));
+        auto data = std::unique_ptr<char[]>(new char[packet->getDataSize()]);
+        memcpy(data.get(), packet->getData(), packet->getDataSize());
+        nodeList->getPacketReceiver().handleVerifiedPacket(
+            udt::Packet::fromReceivedPacket(std::move(data), packet->getDataSize(), sender));
+    }
+
+    QCOMPARE(nodeList->getDomainHandler().getSockAddr(), domainServer());
 }

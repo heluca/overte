@@ -29,6 +29,8 @@ private slots:
     void testRejectsNonHttpUrls();
     void testLocalBufferReadsWholeFrames();
     void testPrebufferDefaultsToZero();
+    void testPrebufferRidesOutLateBurst();
+    void testUnderrunPrimesAgain();
 };
 
 #endif // overte_AudioStreamTests_h

@@ -132,19 +132,14 @@ void EntityScriptServer::handleEntityScriptGetStatusPacket(QSharedPointer<Receiv
         auto replyPacketList = NLPacketList::create(PacketType::EntityScriptGetStatusReply, QByteArray(), true, true);
         replyPacketList->writePrimitive(messageID);
 
+        // The tree holds only entities with server scripts, so any other entity is answered as not known rather than
+        // left for the client to time out
         EntityTreePointer tree = _entityViewer.getTree();
-        if (!tree) {
-            return;
-        }
-
-        EntityItemPointer entity = tree->findEntityByEntityItemID(entityID);
-        if (!entity) {
-            return;
-        }
+        EntityItemPointer entity = tree ? tree->findEntityByEntityItemID(entityID) : nullptr;
 
         EntityScriptStatus status { EntityScriptStatus::PENDING };
         QString errorInfo;
-        if (_entitiesScriptManager->getEntityScriptStatus(entityID, entity->getServerScripts(), status, errorInfo)) {
+        if (entity && _entitiesScriptManager->getEntityScriptStatus(entityID, entity->getServerScripts(), status, errorInfo)) {
             replyPacketList->writePrimitive(true);
             replyPacketList->writePrimitive(status);
             replyPacketList->writeString(errorInfo);

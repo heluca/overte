@@ -102,7 +102,12 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     //   With ignore: App will wait until you accept or dismiss the dialog and log "Normal exit".
     //   Without ignore: App will close immediately, and nothing will log about quitting or exit.
     event->ignore();
-    qApp->quit();
+    // Leave the event loop directly instead of calling quit(). On Qt 6 quit() goes through the platform integration,
+    // which delivers a Quit event that closes all windows, which is often how we got here. Asking the platform to quit
+    // again from inside that is not safe: on macOS the nested [NSApp terminate:] makes AppKit call exit() on the spot,
+    // with every thread still running and none of the shutdown in Application done, so the process crashes on the way
+    // out. exit() ends exec() and the shutdown runs from main(), which is what quit() did on Qt 5.
+    QCoreApplication::exit(0);
 }
 
 void MainWindow::moveEvent(QMoveEvent* event) {

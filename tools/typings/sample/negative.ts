@@ -69,3 +69,6 @@ Audio.playStream(new URL("http://127.0.0.1:8000/pcm"));
 
 // @ts-expect-error stereo is a boolean, not a channel count.
 Audio.playStream("http://127.0.0.1:8000/pcm", { stereo: 2 });
+
+// @ts-expect-error prebufferMs is a number of milliseconds, not a duration string.
+Audio.playStream("http://127.0.0.1:8000/pcm", { prebufferMs: "100ms" });
