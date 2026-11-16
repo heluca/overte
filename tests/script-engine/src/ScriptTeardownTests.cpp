@@ -83,6 +83,77 @@ void ScriptTeardownTests::testTeardownWithScriptOwnedObjects() {
     QVERIFY(engineDestroyed);
 }
 
+void ScriptTeardownTests::testWebSocketMessageDuringEngineTeardown() {
+    // Like an Agent body whose bridge sends a message as its finished script is deleted (#53): the message is first read
+    // while the engine is destroyed, when no shared pointer owns the engine any more.
+    static const QString SCRIPT =
+        "var socket = new WebSocket(url);\n"
+        "socket.onopen = function () {\n"
+        "    print('open');\n"
+        "    Script.stop(true);\n"
+        "};\n"
+        "socket.onmessage = function (event) { print('message ' + event.data); };\n";
+
+    QWebSocketServer server(QStringLiteral("ScriptTeardownTests"), QWebSocketServer::NonSecureMode);
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    QWebSocket* serverSide = nullptr;
+    connect(&server, &QWebSocketServer::newConnection, [&server, &serverSide] {
+        serverSide = server.nextPendingConnection();
+    });
+    const QString url = QString("ws://127.0.0.1:%1").arg(server.serverPort());
+
+    QStringList printed;
+    bool engineDestroyed = false;
+    std::atomic<bool> scriptFinished { false };
+    std::atomic<bool> messageSent { false };
+    QThread* thread = QThread::create([&printed, &engineDestroyed, &scriptFinished, &messageSent, &url] {
+        auto manager = newScriptManager(ScriptManager::NETWORKLESS_TEST_SCRIPT, SCRIPT, "testWebSocketMessage.js");
+        QObject::connect(manager.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString&) {
+            printed.append(message);
+        });
+        QObject::connect(manager->engine().get(), &QObject::destroyed, [&engineDestroyed] { engineDestroyed = true; });
+        {
+            auto engine = manager->engine();
+            auto scopeGuard = engine->getScopeGuard();
+            // The test context does not register the constructor
+            engine->globalObject().setProperty("WebSocket", engine->newFunction(WebSocketClass::constructor));
+            engine->globalObject().setProperty("url", engine->newValue(url));
+            manager->run();
+        }
+        scriptFinished = true;
+        // No events are processed until the manager is deleted, so the message waits on the socket for the teardown
+        QElapsedTimer waited;
+        waited.start();
+        while (!messageSent && waited.elapsed() < (qint64)TEARDOWN_TIMEOUT_MS / 2) {
+            QThread::msleep(1);
+        }
+        manager.reset();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    });
+    thread->start();
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!thread->wait(10)) {
+        QCoreApplication::processEvents();
+        if (!messageSent && scriptFinished && serverSide) {
+            serverSide->sendTextMessage(QStringLiteral("late"));
+            serverSide->flush();
+            // Lets the loopback deliver it before the teardown starts
+            QThread::msleep(50);
+            messageSent = true;
+        }
+        if (elapsed.elapsed() > (qint64)TEARDOWN_TIMEOUT_MS) {
+            QFAIL("script engine teardown did not finish");
+        }
+    }
+    delete thread;
+
+    QVERIFY(messageSent);
+    QVERIFY(engineDestroyed);
+    // A script that has finished gets no more callbacks
+    QCOMPARE(printed, QStringList({ "open" }));
+}
+
 void ScriptTeardownTests::testMethodProxiesCollectedAfterScriptFinished() {
     // Like an Agent body script (#50): a socket, a timer and an update handler, and wrapped native objects it drops, whose
     // method proxies the garbage collector releases. They are made in a callback, as the ones made by top-level code stay

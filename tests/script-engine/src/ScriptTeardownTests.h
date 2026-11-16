@@ -42,6 +42,7 @@ class ScriptTeardownTests : public QObject {
 private slots:
     void initTestCase();
     void testTeardownWithScriptOwnedObjects();
+    void testWebSocketMessageDuringEngineTeardown();
     void testMethodProxiesCollectedAfterScriptFinished();
     void testScriptOwnedObjectsFreedWhileRunning_data();
     void testScriptOwnedObjectsFreedWhileRunning();
