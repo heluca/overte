@@ -35,8 +35,8 @@ signals:
 };
 
 // Destroying a script engine that still holds objects its script created (#45), proxies collected after its script
-// finished (#50), script-owned objects freed while it runs (#83), and a signal proxy collected between a disconnect and a
-// reconnect (#84)
+// finished (#50), script-owned objects freed while it runs (#83), a signal proxy collected between a disconnect and a
+// reconnect (#84), and a socket that closes after its script finished (#141)
 class ScriptTeardownTests : public QObject {
     Q_OBJECT
 private slots:
@@ -46,6 +46,7 @@ private slots:
     void testScriptOwnedObjectsFreedWhileRunning_data();
     void testScriptOwnedObjectsFreedWhileRunning();
     void testSignalReconnectAfterCollection();
+    void testWebSocketClosedAfterScriptFinished();
 };
 
 #endif // overte_ScriptTeardownTests_h

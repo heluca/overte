@@ -67,6 +67,11 @@ int AudioStreamSource::getFrameBytes() const {
     return AudioConstants::NETWORK_FRAME_BYTES_PER_CHANNEL * _numChannels;
 }
 
+void AudioStreamSource::setNetworkBufferFrames(int frames) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _networkBufferFrames = std::max(1, frames);
+}
+
 void AudioStreamSource::start(bool local, bool network) {
     {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -75,7 +80,7 @@ void AudioStreamSource::start(bool local, bool network) {
             _rings[Local] = std::make_unique<AudioRingBuffer>(frameSamples, MAX_BUFFERED_FRAMES);
         }
         if (network) {
-            _rings[Network] = std::make_unique<AudioRingBuffer>(frameSamples, MAX_BUFFERED_FRAMES);
+            _rings[Network] = std::make_unique<AudioRingBuffer>(frameSamples, _networkBufferFrames);
         }
     }
     if (local || network) {
@@ -166,10 +171,13 @@ void AudioStreamSource::onReadyRead() {
     qFromLittleEndian<qint16>(bytes.constData(), usableBytes / AudioConstants::SAMPLE_SIZE, samples.data());
 
     std::lock_guard<std::mutex> lock(_mutex);
-    for (auto& ring : _rings) {
+    for (int consumer = 0; consumer < NumConsumers; consumer++) {
+        auto& ring = _rings[consumer];
         if (!ring) {
             continue;
         }
+        _droppedSamples[consumer] +=
+            std::max(0, ring->samplesAvailable() + usableBytes / AudioConstants::SAMPLE_SIZE - ring->getSampleCapacity());
         // A write longer than the ring keeps its own oldest samples, so hand over only the newest ring's worth
         const int capacityBytes = ring->getSampleCapacity() * AudioConstants::SAMPLE_SIZE;
         const int offset = std::max(0, usableBytes - capacityBytes);
@@ -213,7 +221,7 @@ void AudioStreamSource::onFinished() {
 
 void AudioStreamSource::setPrebufferFrames(int frames) {
     std::lock_guard<std::mutex> lock(_mutex);
-    _prebufferFrames = std::max(0, std::min(frames, MAX_BUFFERED_FRAMES));
+    _prebufferFrames = std::max(0, frames);
 }
 
 AudioStreamSource::Frame AudioStreamSource::readFrame(Consumer consumer, char* destination) {
@@ -226,8 +234,12 @@ AudioStreamSource::Frame AudioStreamSource::readFrame(Consumer consumer, char* d
     }
 
     const int availableBytes = ring->samplesAvailable() * AudioConstants::SAMPLE_SIZE;
-    // The rest of an ended stream plays whatever its length
-    const bool primed = !_priming[consumer] || _ended || availableBytes >= _prebufferFrames * frameBytes;
+    const int prebufferFrames = std::min(_prebufferFrames, ring->getFrameCapacity());
+    // A burst fills the ring past the prebuffer at once, and played from there it runs dry just as the next burst is
+    // due. Waiting out the prebuffer after the audio arrives keeps that much in hand when a burst comes late.
+    // The rest of an ended stream plays whatever its length.
+    const bool primed = !_priming[consumer] || _ended ||
+        (availableBytes >= prebufferFrames * frameBytes && _primingWaitFrames[consumer] >= prebufferFrames);
     if (primed && (availableBytes >= frameBytes || (_ended && availableBytes > 0))) {
         _priming[consumer] = false;
         const int readBytes = ring->readData(destination, frameBytes);
@@ -237,7 +249,18 @@ AudioStreamSource::Frame AudioStreamSource::readFrame(Consumer consumer, char* d
     if (_ended) {
         return Frame::Ended;
     }
-    _priming[consumer] = true;
+    auto& stats = _stats[consumer];
+    if (!_priming[consumer]) {
+        _priming[consumer] = true;
+        _primingWaitFrames[consumer] = 0;
+        stats.underruns++;
+    }
+    if (availableBytes >= frameBytes) {
+        _primingWaitFrames[consumer]++;
+    }
+    if (stats.underruns > 0) {
+        stats.silentFrames++;
+    }
     memset(destination, 0, frameBytes);
     return Frame::Silence;
 }
@@ -246,6 +269,13 @@ int AudioStreamSource::getBufferedFrames(Consumer consumer) {
     std::lock_guard<std::mutex> lock(_mutex);
     const auto& ring = _rings[consumer];
     return ring ? ring->samplesAvailable() / (AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL * _numChannels) : 0;
+}
+
+AudioStreamSource::BufferStats AudioStreamSource::getBufferStats(Consumer consumer) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    BufferStats stats = _stats[consumer];
+    stats.droppedFrames = _droppedSamples[consumer] / (AudioConstants::NETWORK_FRAME_SAMPLES_PER_CHANNEL * _numChannels);
+    return stats;
 }
 
 QString AudioStreamSource::getEndReason() {

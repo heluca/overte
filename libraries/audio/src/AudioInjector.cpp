@@ -110,11 +110,13 @@ void AudioInjector::finishLocalInjection() {
 void AudioInjector::finish() {
     // AudioClient finishes the local injection again once it sees the cleared local buffer; finished must fire once
     bool alreadyFinished = false;
+    bool localOnly = false;
     withWriteLock([&] {
         alreadyFinished = (_state & AudioInjectorState::Finished) == AudioInjectorState::Finished;
         _state |= AudioInjectorState::LocalInjectionFinished;
         _state |= AudioInjectorState::NetworkInjectionFinished;
         _state |= AudioInjectorState::Finished;
+        localOnly = _options.localOnly;
     });
     if (alreadyFinished) {
         return;
@@ -123,6 +125,20 @@ void AudioInjector::finish() {
     _localBuffer = nullptr;
     if (_stream) {
         _stream->stop();
+        const QString url = _stream->getURL().toDisplayString(QUrl::RemoveUserInfo | QUrl::RemoveQuery);
+        const QString reason = _stream->getEndReason();
+        auto logStats = [&](AudioStreamSource::Consumer consumer, const char* name) {
+            const auto stats = _stream->getBufferStats(consumer);
+            qCDebug(audio) << "Audio stream" << url << "finished:" << reason << "-" << name << "underruns" << stats.underruns
+                           << "silent frames" << stats.silentFrames << "dropped frames" << stats.droppedFrames;
+        };
+        // The consumers inject() started
+        if (!localOnly) {
+            logStats(AudioStreamSource::Network, "network");
+        }
+        if (_localAudioInterface) {
+            logStats(AudioStreamSource::Local, "local");
+        }
     }
 }
 

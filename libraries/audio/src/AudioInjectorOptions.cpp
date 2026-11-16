@@ -30,7 +30,8 @@ AudioInjectorOptions::AudioInjectorOptions() :
     ignorePenumbra(false),
     localOnly(false),
     secondOffset(0.0f),
-    pitch(1.0f)
+    pitch(1.0f),
+    prebufferMs(100.0f)
 {
 }
 
@@ -47,6 +48,7 @@ ScriptValue injectorOptionsToScriptValue(ScriptEngine* engine, const AudioInject
     obj.setProperty("stereo", injectorOptions.stereo);
     obj.setProperty("secondOffset", injectorOptions.secondOffset);
     obj.setProperty("pitch", injectorOptions.pitch);
+    obj.setProperty("prebufferMs", injectorOptions.prebufferMs);
     return obj;
 }
 
@@ -68,6 +70,9 @@ ScriptValue injectorOptionsToScriptValue(ScriptEngine* engine, const AudioInject
  *     others via the audio mixer.
  * @property {boolean} stereo=false - <code>true</code> if the audio is interleaved stereo, <code>false</code> if it is mono.
  *     Only {@link Audio.playStream} reads this; {@link Audio.playSound} takes it from the sound.
+ * @property {number} prebufferMs=100 - The milliseconds of audio a stream holds back after it starts and after every
+ *     underrun, rounded to whole 10 ms frames; more than <code>500</code> is read as <code>500</code>. Only
+ *     {@link Audio.playStream} reads this, when the stream starts. <code>0</code> plays each frame as soon as it arrives.
  * @property {boolean} ignorePenumbra=false - <p class="important">Deprecated: This property is deprecated and will be
  *     removed.</p>
  */
@@ -132,6 +137,13 @@ bool injectorOptionsFromScriptValue(const ScriptValue& object, AudioInjectorOpti
                 injectorOptions.pitch = it->value().toNumber();
             } else {
                 qCWarning(audio) << "Audio injector options: pitch is not a number";
+            }
+        } else if (it->name() == "prebufferMs") {
+            const double prebufferMs = it->value().toNumber();
+            if (it->value().isNumber() && prebufferMs >= 0.0) {
+                injectorOptions.prebufferMs = prebufferMs;
+            } else {
+                qCWarning(audio) << "Audio injector options: prebufferMs is not a number of milliseconds >= 0";
             }
         } else {
             qCWarning(audio) << "Unknown audio injector option:" << it->name();

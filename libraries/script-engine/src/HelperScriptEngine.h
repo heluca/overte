@@ -41,6 +41,7 @@ public:
     template <typename F>
     inline void run(F&& f) {
         std::lock_guard<std::mutex> guard(_scriptEngineLock);
+        createEngineIfNeeded();
         auto scopeGuard = _scriptEngine->getScopeGuard();
         f();
         _scriptEngine->perManagerLoopIterationCleanup();
@@ -51,6 +52,7 @@ public:
         T result;
         {
             std::lock_guard<std::mutex> guard(_scriptEngineLock);
+            createEngineIfNeeded();
             auto scopeGuard = _scriptEngine->getScopeGuard();
             result = f();
             _scriptEngine->perManagerLoopIterationCleanup();
@@ -64,8 +66,11 @@ public:
      * This function should be used only inside HelperScriptEngine::run() or HelperScriptEngine::runWithResult()
      */
     ScriptEngine* get() { return _scriptEngine.get(); };
-    ScriptEnginePointer getShared() { return _scriptEngine; };
 private:
+    // A V8 isolate is never freed (overte-org/overte#687), and most owners never convert anything, so the engine
+    // is created on first use rather than costing every owner an isolate: an Agent assignment builds two owners.
+    void createEngineIfNeeded();
+
     std::mutex _scriptEngineLock;
     ScriptEnginePointer _scriptEngine { nullptr };
     std::shared_ptr<QThread> _scriptEngineThread { nullptr };

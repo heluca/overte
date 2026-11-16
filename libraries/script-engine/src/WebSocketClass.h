@@ -245,6 +245,7 @@ private:
     QString _binaryType;
 
     void initialize();
+    bool scriptHasFinished() const;
 
 private slots:
     void handleOnClose();
