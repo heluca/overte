@@ -374,7 +374,11 @@ void AudioMixer::run() {
 
     // wait until we have the domain-server settings, otherwise we bail
     DomainHandler& domainHandler = DependencyManager::get<NodeList>()->getDomainHandler();
-    connect(&domainHandler, &DomainHandler::settingsReceived, this, &AudioMixer::start);
+    // settingsReceived fires again after a NodeList reset for a session ID change, and would arrive inside start()'s own
+    // processEvents(). Each delivery refreshes the settings; start() never returns, so it runs once. Slots run in
+    // connection order, so the first settings are parsed before start().
+    connect(&domainHandler, &DomainHandler::settingsReceived, this, &AudioMixer::parseSettingsObject);
+    connect(&domainHandler, &DomainHandler::settingsReceived, this, &AudioMixer::start, Qt::SingleShotConnection);
     connect(&domainHandler, &DomainHandler::settingsReceiveFail, this, &AudioMixer::domainSettingsRequestFailed);
 
     ThreadedAssignment::commonInit(AUDIO_MIXER_LOGGING_TARGET_NAME, NodeType::AudioMixer);
@@ -401,13 +405,6 @@ void AudioMixer::start() {
         NodeType::UpstreamAudioMixer, NodeType::DownstreamAudioMixer
     });
     nodeList->linkedDataCreateCallback = [&](Node* node) { getOrCreateClientData(node); };
-
-    // parse out any AudioMixer settings
-    {
-        DomainHandler& domainHandler = nodeList->getDomainHandler();
-        const QJsonObject& settingsObject = domainHandler.getSettingsObject();
-        parseSettingsObject(settingsObject);
-    }
 
     setupEntityQuery();
 
@@ -657,6 +654,12 @@ void AudioMixer::parseSettingsObject(const QJsonObject& settingsObject) {
         }
     }
 
+    // Entity zones share _audioZones, so only the zones a previous settings object added are dropped before the rebuild.
+    for (const auto& zoneName : _settingsZoneNames) {
+        _audioZones.erase(zoneName);
+    }
+    _settingsZoneNames.clear();
+
     if (settingsObject.contains(AUDIO_ENV_GROUP_KEY)) {
         QJsonObject audioEnvGroupObject = settingsObject[AUDIO_ENV_GROUP_KEY].toObject();
 
@@ -730,6 +733,7 @@ void AudioMixer::parseSettingsObject(const QJsonObject& settingsObject) {
                         t.setScale(dimensions);
                         _audioZones[zoneName].inverseTransform = t.getInverseMatrix();
                         _audioZones[zoneName].volume = dimensions.x * dimensions.y * dimensions.z;
+                        _settingsZoneNames.push_back(zoneName);
 
                         qCDebug(audio) << "Added zone:" << zoneName << "(corner:" << corner << ", dimensions:" << dimensions << ")";
                     }
