@@ -173,7 +173,8 @@ void EntityServerCallTests::testClientDestroyedBeforeQueuedStart() {
 }
 
 void EntityServerCallTests::testStatusWithoutReplyFails() {
-    // An entity script server that never replies, as the real one does for an entity without serverScripts (#42)
+    // An entity script server that never replies, as one that predates answering for an entity without serverScripts
+    // does (#42), or one whose reply is lost
     QUdpSocket silentServer;
     QVERIFY(silentServer.bind(QHostAddress(QHostAddress::LocalHost), 0));
     SockAddr address(SocketType::UDP, QHostAddress::LocalHost, silentServer.localPort());

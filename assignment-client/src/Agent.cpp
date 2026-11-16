@@ -539,8 +539,11 @@ void Agent::executeScript() {
         scriptEngine->registerGlobalObject(sgp, "Users", DependencyManager::get<UsersScriptingInterface>().data());
 
         auto player = DependencyManager::get<recording::Deck>();
-        connect(player.data(), &recording::Deck::playbackStateChanged, [&player, &scriptedAvatar] {
-            if (player->isPlaying()) {
+        // Emitted on the main thread when a clip ends, possibly while this function returns, so nothing local is
+        // captured by reference. A raw Deck pointer is safe in a slot of the Deck's own signal; a shared one is a cycle.
+        auto playbackStateConnection = connect(player.data(), &recording::Deck::playbackStateChanged,
+                                               [deck = player.data(), scriptedAvatar] {
+            if (deck->isPlaying()) {
                 auto recordingInterface = DependencyManager::get<RecordingScriptingInterface>();
                 if (recordingInterface->getPlayFromCurrentLocation()) {
                     scriptedAvatar->setRecordingBasis();
@@ -582,7 +585,7 @@ void Agent::executeScript() {
 
         using namespace recording;
         static const FrameType AUDIO_FRAME_TYPE = Frame::registerFrameType(AudioConstants::getAudioFrameName());
-        Frame::registerFrameHandler(AUDIO_FRAME_TYPE, [this, &player, &scriptedAvatar](Frame::ConstPointer frame) {
+        Frame::registerFrameHandler(AUDIO_FRAME_TYPE, [this, player, scriptedAvatar](Frame::ConstPointer frame) {
             _avatarAudio->handleRecordingAudioFrame(frame->data, player->getVolume(), scriptedAvatar);
         });
 
@@ -631,6 +634,7 @@ void Agent::executeScript() {
         if (recordingInterface->isRecording()) {
             recordingInterface->stopRecording();
         }
+        disconnect(playbackStateConnection);
 
         setIsAvatar(false); // will stop timers for sending identity packets
     }
@@ -825,7 +829,8 @@ void Agent::aboutToFinish() {
     DependencyManager::destroy<AnimationCache>();
     DependencyManager::destroy<ScriptCredentials>();
 
-    DependencyManager::destroy<recording::Deck>();
+    // The Deck plays back on the main thread, where a queued processFrames may still be about to run
+    QMetaObject::invokeMethod(qApp, [] { DependencyManager::destroy<recording::Deck>(); }, Qt::BlockingQueuedConnection);
     DependencyManager::destroy<recording::Recorder>();
     DependencyManager::destroy<recording::ClipCache>();
 

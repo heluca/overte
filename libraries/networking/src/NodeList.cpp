@@ -164,8 +164,6 @@ NodeList::NodeList(char newOwnerType, int socketListenPort, int dtlsListenPort) 
         PacketReceiver::makeUnsourcedListenerReference<DomainHandler>(&_domainHandler, &DomainHandler::processSettingsPacketList));
     packetReceiver.registerListener(PacketType::ICEServerPeerInformation,
         PacketReceiver::makeUnsourcedListenerReference<DomainHandler>(&_domainHandler, &DomainHandler::processICEResponsePacket));
-    packetReceiver.registerListener(PacketType::DomainServerRequireDTLS,
-        PacketReceiver::makeUnsourcedListenerReference<DomainHandler>(&_domainHandler, &DomainHandler::processDTLSRequirementPacket));
     packetReceiver.registerListener(PacketType::ICEPingReply,
         PacketReceiver::makeUnsourcedListenerReference<DomainHandler>(&_domainHandler, &DomainHandler::processICEPingReplyPacket));
     packetReceiver.registerListener(PacketType::DomainServerPathResponse,

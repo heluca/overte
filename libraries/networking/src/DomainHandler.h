@@ -251,7 +251,6 @@ public slots:
 
     void processSettingsPacketList(QSharedPointer<ReceivedMessage> packetList);
     void processICEPingReplyPacket(QSharedPointer<ReceivedMessage> message);
-    void processDTLSRequirementPacket(QSharedPointer<ReceivedMessage> dtlsRequirementPacket);
     void processICEResponsePacket(QSharedPointer<ReceivedMessage> icePacket);
     void processDomainServerConnectionDeniedPacket(QSharedPointer<ReceivedMessage> message);
 

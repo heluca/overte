@@ -32,14 +32,12 @@ void Cache::Pipeline::setPipeline(const gpu::PipelinePointer& pipeline) {
         if (pipeline) {
             program = pipeline->getProgram();
         }
-        clearStrides(); // VKTODO: this doesn't fix the issue with strides for basic shapes being corrupted, sometimes strides are still cleared wile they shouldn't be so more investigation is needed
     }
 }
 
 void Cache::Pipeline::setVertexFormat(const gpu::Stream::FormatPointer& format) {
     if (!gpu::compare(this->format, format)) {
         gpu::assign(this->format, format);
-        clearStrides();
     }
 }
 
@@ -338,27 +336,19 @@ std::string Cache::Pipeline::getRenderpassKeyString(const RenderpassKey& renderp
 
 }
 
+// The strides the pipeline is built with: those of the buffers bound to the channels the vertex format reads.
+// Two meshes can share a format and differ in stride, so every channel's stride is part of the key.
 std::string Cache::Pipeline::getStridesKey() const {
-    char key_buffer[(sizeof(Offset) + 1) * MAX_NUM_INPUT_BUFFERS * 2 + 2];
-    int key_pos = 0;
-    key_buffer[key_pos++] = 's';
-    for (int i = 0; i < MAX_NUM_INPUT_BUFFERS; i++) {
-        if (_bufferStrideSet[i]) {
-            union OffsetBytes {
-                Offset offset;
-                char bytes[sizeof(Offset)];
-            } offsetBytes;
-            offsetBytes.offset = _bufferStrides[i];
-            key_buffer[key_pos++] = '_';
-            for (char byte : offsetBytes.bytes) {
-                key_buffer[key_pos++] = (byte >> 4) + 'A';
-                key_buffer[key_pos++] = (byte & 0x0f) + 'A';
-            }
-            //key += "_" + hex(i) + "s" + hex(_bufferStrides[i]);
-        }
+    std::string key = "s";
+    if (!format) {
+        return key;
     }
-    key_buffer[key_pos] = 0;
-    return { key_buffer };
+    for (const auto& entry : format->getChannels()) {
+        const auto slot = entry.first;
+        const Offset stride = slot < MAX_NUM_INPUT_BUFFERS ? _bufferStrides[slot] : 0;
+        key += "_" + std::to_string(slot) + ":" + std::to_string(stride);
+    }
+    return key;
 }
 
 // VKTODO: use binary key if performance with text key is not good enough
