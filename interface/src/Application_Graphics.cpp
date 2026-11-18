@@ -153,6 +153,11 @@ void Application::initializeGL() {
 
     // Ensure all Qt webengine processes launched from us have the appropriate command line flags
     if (!chromiumFlags.empty()) {
+        // Keep flags the user set, such as --disable-gpu, instead of replacing them.
+        const QByteArray userFlags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
+        if (!userFlags.isEmpty()) {
+            chromiumFlags.prepend(QString::fromLocal8Bit(userFlags));
+        }
         qputenv("QTWEBENGINE_CHROMIUM_FLAGS", chromiumFlags.join(' ').toLocal8Bit());
     }
 #endif
