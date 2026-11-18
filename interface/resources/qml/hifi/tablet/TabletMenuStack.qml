@@ -141,11 +141,6 @@ Item {
             }
         }
 
-        property Component exclusiveGroupMaker: Component {
-            ExclusiveGroup {
-            }
-        }
-
         function buildMenu(items) {
             // Menus must be childed to desktop for Z-ordering
             var newMenu = menuViewMaker.createObject(tabletMenu);
