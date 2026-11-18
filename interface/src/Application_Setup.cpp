@@ -924,14 +924,11 @@ void Application::initialize(const QCommandLineParser &parser) {
             { "gl_renderer", glContextData.renderer.c_str() },
             { "ideal_thread_count", QThread::idealThreadCount() }
         };
+        // Qt 6 dropped QSysInfo::macVersion(), QSysInfo::windowsVersion() and their enums; report the version number instead.
 #ifdef Q_OS_MAC
-        // Qt 6 dropped QSysInfo::macVersion() and its enum; report the version number instead.
         properties["os_osx_version"] = QOperatingSystemVersion::current().version().toString();
 #elifdef Q_OS_WIN
-        auto windowsVersion = QSysInfo::windowsVersion();
-        if (windowsVersion != QSysInfo::WV_None) {
-            properties["os_win_version"] = QSysInfo::windowsVersion();
-        }
+        properties["os_win_version"] = QOperatingSystemVersion::current().version().toString();
 #endif
 
         ProcessorInfo procInfo;
