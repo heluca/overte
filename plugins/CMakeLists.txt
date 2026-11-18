@@ -56,6 +56,9 @@ if (OVERTE_BUILD_CLIENT AND NOT ANDROID)
     add_subdirectory(${DIR})
   endif()
 
+  set(DIR "fitshowRower")
+  add_subdirectory(${DIR})
+
 endif()
 
 # server-side plugins

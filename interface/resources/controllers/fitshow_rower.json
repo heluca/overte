@@ -1,0 +1,6 @@
+{
+    "name": "FitShow Rower to Actions",
+    "channels": [
+        { "from": "FitShowRower.Throttle", "filters": [ "invert" ], "to": "Actions.TranslateZ" }
+    ]
+}
