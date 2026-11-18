@@ -642,7 +642,13 @@ protected:
     void clearSpine2SplineRatioCache();
     virtual const QString& getSessionDisplayNameForTransport() const override { return _empty; } // Save a tiny bit of bandwidth. Mixer won't look at what we send.
     QString _empty{};
-    virtual void maybeUpdateSessionDisplayNameFromTransport(const QString& sessionDisplayName) override { _sessionDisplayName = sessionDisplayName; } // don't use no-op setter!
+    // don't use no-op setter!
+    virtual void maybeUpdateSessionDisplayNameFromTransport(const QString& sessionDisplayName) override {
+        if (sessionDisplayName != _sessionDisplayName) {
+            _sessionDisplayName = sessionDisplayName;
+            emit sessionDisplayNameChanged();
+        }
+    }
     void computeMultiSphereShapes();
     void updateFitBoundingBox();
 
