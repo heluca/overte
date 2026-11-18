@@ -34,7 +34,7 @@ ProceduralSkybox::ProceduralSkybox(uint64_t created) : graphics::Skybox(), _crea
 }
 
 bool ProceduralSkybox::empty() {
-    return !_procedural.isEnabled() && Skybox::empty();
+    return !(_procedural.isEnabled() && Procedural::enableProceduralShaders) && Skybox::empty();
 }
 
 void ProceduralSkybox::clear() {
@@ -45,7 +45,8 @@ void ProceduralSkybox::clear() {
 }
 
 void ProceduralSkybox::render(gpu::Batch& batch, const ViewFrustum& frustum, bool forward, uint transformSlot) const {
-    if (_procedural.isReady()) {
+    // With procedural shaders turned off, the zone's own texture or colour stands in for its sky shader
+    if (_procedural.isReady() && Procedural::enableProceduralShaders) {
         ProceduralSkybox::render(batch, frustum, (*this), forward, transformSlot);
     } else {
         Skybox::render(batch, frustum, forward, transformSlot);
