@@ -20,6 +20,7 @@
 #include <TextureCache.h>
 #include <FramebufferCache.h>
 #include <UpdateSceneTask.h>
+#include <ToneMapAndResampleTask.h>
 #include <RenderViewTask.h>
 #include <SecondaryCamera.h>
 
@@ -286,8 +287,9 @@ void GraphicsEngine::render_performFrame() {
                 _splashScreen->render(batch, viewFrustum, renderArgs._renderMethod == RenderArgs::RenderMethod::FORWARD, render::RenderEngine::TS_BACKGROUND_VIEW);
                 // The skybox writes SDR white as 1.0 straight into the final framebuffer, without the tone mapper
                 if (renderArgs._hdrPeak > 0.0f) {
+                    static ScaleFramebufferColor splashScreenHDRWhite;
                     batch.enableStereo(false);
-                    _splashScreenHDRWhite.render(batch, renderArgs._hdrWhite);
+                    splashScreenHDRWhite.render(batch, renderArgs._hdrWhite);
                 }
             });
         }

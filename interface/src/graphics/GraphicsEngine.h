@@ -20,7 +20,6 @@
 
 #include <render/Engine.h>
 #include <procedural/ProceduralSkybox.h>
-#include <ToneMapAndResampleTask.h>
 
 #include <OctreeConstants.h>
 #include <shared/RateCounter.h>
@@ -210,11 +209,6 @@ protected:
      * Splash screen texture. Shown as a skybox before the shaders load and compile.
      */
     NetworkTexturePointer _texture;
-
-    /**
-     * Brings the splash screen to the swapchain's SDR white on an HDR frame.
-     */
-    ScaleFramebufferColor _splashScreenHDRWhite;
 #ifndef Q_OS_ANDROID
     /**
      * Changes to true when the shaders are loaded and compiled.
