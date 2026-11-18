@@ -104,6 +104,7 @@ signals:
 
 private slots:
     void handleSettings(const QJsonObject& settingsObject);
+    void handleSettingsFailed();
     void requestScript();
     void scriptRequestFinished();
     void executeScript();
@@ -117,6 +118,7 @@ private slots:
 private:
     void retryScriptRequest();
     void abandonScriptRequest();
+    void settleScriptCredentials();
 
     ScriptManagerPointer _scriptManager;
     EntityEditPacketSender _entityEditSender;
@@ -133,6 +135,10 @@ private:
     QTimer _scriptRequestTimeout;
     QTimer _scriptRetryTimer;
     int _scriptRequestFailures { 0 };
+    // the downloaded script waits for the domain settings that carry its script credentials, but not forever
+    QTimer _scriptCredentialsTimeout;
+    bool _haveScriptCredentialsSettled { false };
+    bool _isScriptHeld { false };
     ResourceRequest* _scriptRequest { nullptr };
     ResourceRequest* _pendingScriptRequest { nullptr };
     bool _isListeningToAudioStream = false;

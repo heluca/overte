@@ -12,9 +12,12 @@
 #include "ScriptTeardownTests.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QEventLoop>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
+#include <QtWebSockets/QWebSocket>
+#include <QtWebSockets/QWebSocketServer>
 
 #include "DependencyManager.h"
 #include "ScriptCache.h"
@@ -78,6 +81,77 @@ void ScriptTeardownTests::testTeardownWithScriptOwnedObjects() {
 
     QCOMPARE(printed, QStringList({ "function function" }));
     QVERIFY(engineDestroyed);
+}
+
+void ScriptTeardownTests::testWebSocketMessageDuringEngineTeardown() {
+    // Like an Agent body whose bridge sends a message as its finished script is deleted (#53): the message is first read
+    // while the engine is destroyed, when no shared pointer owns the engine any more.
+    static const QString SCRIPT =
+        "var socket = new WebSocket(url);\n"
+        "socket.onopen = function () {\n"
+        "    print('open');\n"
+        "    Script.stop(true);\n"
+        "};\n"
+        "socket.onmessage = function (event) { print('message ' + event.data); };\n";
+
+    QWebSocketServer server(QStringLiteral("ScriptTeardownTests"), QWebSocketServer::NonSecureMode);
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    QWebSocket* serverSide = nullptr;
+    connect(&server, &QWebSocketServer::newConnection, [&server, &serverSide] {
+        serverSide = server.nextPendingConnection();
+    });
+    const QString url = QString("ws://127.0.0.1:%1").arg(server.serverPort());
+
+    QStringList printed;
+    bool engineDestroyed = false;
+    std::atomic<bool> scriptFinished { false };
+    std::atomic<bool> messageSent { false };
+    QThread* thread = QThread::create([&printed, &engineDestroyed, &scriptFinished, &messageSent, &url] {
+        auto manager = newScriptManager(ScriptManager::NETWORKLESS_TEST_SCRIPT, SCRIPT, "testWebSocketMessage.js");
+        QObject::connect(manager.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString&) {
+            printed.append(message);
+        });
+        QObject::connect(manager->engine().get(), &QObject::destroyed, [&engineDestroyed] { engineDestroyed = true; });
+        {
+            auto engine = manager->engine();
+            auto scopeGuard = engine->getScopeGuard();
+            // The test context does not register the constructor
+            engine->globalObject().setProperty("WebSocket", engine->newFunction(WebSocketClass::constructor));
+            engine->globalObject().setProperty("url", engine->newValue(url));
+            manager->run();
+        }
+        scriptFinished = true;
+        // No events are processed until the manager is deleted, so the message waits on the socket for the teardown
+        QElapsedTimer waited;
+        waited.start();
+        while (!messageSent && waited.elapsed() < (qint64)TEARDOWN_TIMEOUT_MS / 2) {
+            QThread::msleep(1);
+        }
+        manager.reset();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    });
+    thread->start();
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!thread->wait(10)) {
+        QCoreApplication::processEvents();
+        if (!messageSent && scriptFinished && serverSide) {
+            serverSide->sendTextMessage(QStringLiteral("late"));
+            serverSide->flush();
+            // Lets the loopback deliver it before the teardown starts
+            QThread::msleep(50);
+            messageSent = true;
+        }
+        if (elapsed.elapsed() > (qint64)TEARDOWN_TIMEOUT_MS) {
+            QFAIL("script engine teardown did not finish");
+        }
+    }
+    delete thread;
+
+    QVERIFY(messageSent);
+    QVERIFY(engineDestroyed);
+    // A script that has finished gets no more callbacks
+    QCOMPARE(printed, QStringList({ "open" }));
 }
 
 void ScriptTeardownTests::testMethodProxiesCollectedAfterScriptFinished() {
@@ -257,4 +331,78 @@ void ScriptTeardownTests::testSignalReconnectAfterCollection() {
     delete thread;
 
     QCOMPARE(printed, QStringList({ "0 1 2 3 4 5" }));
+}
+
+void ScriptTeardownTests::testWebSocketClosedAfterScriptFinished() {
+    // Like an Agent body whose socket closes once its script has finished (#141): run() has released the isolate lock, and
+    // the Agent's thread still delivers socket events, e.g. while destroying the avatar's helper script engine. Here the
+    // server closes the connection only after run() returned.
+    static const QString SCRIPT =
+        "var socket = new WebSocket(url);\n"
+        "socket.onopen = function () {\n"
+        "    print('open');\n"
+        "    Script.stop(true);\n"
+        "};\n"
+        "socket.onclose = function () { print('closed'); };\n";
+
+    QWebSocketServer server(QStringLiteral("ScriptTeardownTests"), QWebSocketServer::NonSecureMode);
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    QWebSocket* serverSide = nullptr;
+    connect(&server, &QWebSocketServer::newConnection, [&server, &serverSide] {
+        serverSide = server.nextPendingConnection();
+    });
+    const QString url = QString("ws://127.0.0.1:%1").arg(server.serverPort());
+
+    QStringList printed;
+    std::atomic<bool> scriptFinished { false };
+    bool clientClosed = false;
+    QThread* thread = QThread::create([&printed, &scriptFinished, &clientClosed, &url] {
+        auto manager = newScriptManager(ScriptManager::NETWORKLESS_TEST_SCRIPT, SCRIPT, "testWebSocketClosed.js");
+        QObject::connect(manager.get(), &ScriptManager::printedMessage, [&printed](const QString& message, const QString&) {
+            printed.append(message);
+        });
+        QWebSocket* clientSide = nullptr;
+        {
+            auto engine = manager->engine();
+            auto scopeGuard = engine->getScopeGuard();
+            // The test context does not register the constructor
+            engine->globalObject().setProperty("WebSocket", engine->newFunction(WebSocketClass::constructor));
+            engine->globalObject().setProperty("url", engine->newValue(url));
+            manager->run();
+            auto socket = qobject_cast<WebSocketClass*>(engine->globalObject().property("socket").toQObject());
+            clientSide = socket ? socket->getWebSocket() : nullptr;
+        }
+        if (!clientSide) {
+            return;
+        }
+        // The thread's event loop runs without the isolate lock until the manager goes, as an Agent's does
+        QEventLoop loop;
+        QObject::connect(clientSide, &QWebSocket::disconnected, &loop, &QEventLoop::quit);
+        QTimer::singleShot(TEARDOWN_TIMEOUT_MS / 2, &loop, &QEventLoop::quit);
+        scriptFinished = true;
+        loop.exec();
+        clientClosed = clientSide->state() == QAbstractSocket::UnconnectedState;
+        manager.reset();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    });
+    thread->start();
+    bool closing = false;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!thread->wait(10)) {
+        QCoreApplication::processEvents();
+        if (!closing && scriptFinished && serverSide) {
+            serverSide->close();
+            closing = true;
+        }
+        if (elapsed.elapsed() > (qint64)TEARDOWN_TIMEOUT_MS) {
+            QFAIL("script did not finish");
+        }
+    }
+    delete thread;
+
+    QVERIFY(closing);
+    QVERIFY(clientClosed);
+    // A script that has finished gets no more callbacks
+    QCOMPARE(printed, QStringList({ "open" }));
 }

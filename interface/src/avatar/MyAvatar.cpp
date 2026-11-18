@@ -2772,6 +2772,16 @@ void MyAvatar::prepareForPhysicsSimulation() {
         qDebug() << "Warning: getParentVelocity failed" << getID();
         parentVelocity = glm::vec3();
     }
+    // The character controller is given the parent's velocity so that its body keeps up with a parent
+    // the physics step moves. An entity with no physics body (a collisionless one with a velocity) is
+    // moved outside the step, by EntitySimulation::moveSimpleKinematics, and has already carried the
+    // avatar when this runs: giving the controller its velocity too would carry the avatar twice.
+    bool parentFound;
+    SpatiallyNestablePointer parent = getParentPointer(parentFound);
+    if (parentFound && parent && parent->getNestableType() == NestableType::Entity &&
+            !std::static_pointer_cast<EntityItem>(parent)->getPhysicsInfo()) {
+        parentVelocity = glm::vec3();
+    }
     _characterController.handleChangedCollisionMask();
     _characterController.setParentVelocity(parentVelocity);
     _characterController.setScaleFactor(getSensorToWorldScale());
@@ -3339,6 +3349,22 @@ void MyAvatar::updateOrientation(float deltaTime) {
     bool isCameraYawing = getDriveKey(DELTA_YAW) + getDriveKey(STEP_YAW) + getDriveKey(YAW) != 0.0f;
     bool isRotatingWhileSeated = !isCameraYawing && isMovingSideways && _characterController.getSeated();
     glm::quat previousOrientation = getWorldOrientation();
+    // The look-at yaw is a rotation in the world, so a parent that turns has to turn it too: left alone,
+    // the camera keeps its heading while the avatar is carried round under it, and the avatar then turns
+    // back to face the camera.
+    QUuid parentID = getParentID();
+    bool hasParent = false;
+    float parentYaw = 0.0f;
+    if (!parentID.isNull()) {
+        glm::vec3 parentFront = getParentTransform(hasParent).getRotation() * Vectors::FRONT;
+        parentYaw = atan2f(-parentFront.x, -parentFront.z);
+    }
+    if (computeLookAt && hasParent && parentID == _lookAtParentID) {
+        _lookAtYaw = glm::angleAxis(parentYaw - _lookAtParentYaw, Vectors::UP) * _lookAtYaw;
+    }
+    _lookAtParentID = hasParent ? parentID : QUuid();
+    _lookAtParentYaw = parentYaw;
+
     glm::quat previousYaw = _lookAtYaw;
     if (!computeLookAt) {
         setWorldOrientation(getWorldOrientation() * glm::quat(glm::radians(glm::vec3(0.0f, totalBodyYaw, 0.0f))));

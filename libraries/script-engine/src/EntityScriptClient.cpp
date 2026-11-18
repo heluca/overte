@@ -17,8 +17,8 @@
 
 MessageID EntityScriptClient::_currentID = 0;
 
-// The entity script server does not reply for an entity it does not hold, which is any entity without serverScripts, so a
-// status request fails after this long without a reply
+// A status request fails after this long without a reply: the reply was lost, or the entity script server predates
+// answering for entities it does not hold, which is any entity without serverScripts
 static const int SCRIPT_STATUS_REPLY_TIMEOUT_MS = 5000;
 
 GetScriptStatusRequest::GetScriptStatusRequest(QUuid entityID) : _entityID(entityID) {

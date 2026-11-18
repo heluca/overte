@@ -20,7 +20,6 @@
 #include <utility>
 
 #include <QtCore/QCoreApplication>
-#include <QtCore/QEventLoop>
 #include <QtCore/QFileInfo>
 #include <QtCore/QTimer>
 #include <QtCore/QThread>
@@ -270,13 +269,12 @@ ScriptEngineV8::ScriptEngineV8(ScriptManager *manager) : ScriptEngine(manager), 
 
 ScriptEngineV8::~ScriptEngineV8() {
     auto scopeGuard = getScopeGuard();
-    // First, so that settlements delivered by the event processing below are dropped
+    // First, so that settlements made during the teardown below are dropped
     _promiseBridge->close();
-    // Process remaining events to avoid problems with `deleteLater` calling destructor of script proxies after script engine has been deleted:
-    {
-        QEventLoop loop;
-        loop.processEvents();
-    }
+    // Process remaining `deleteLater` calls to avoid script proxies being destroyed after the script engine has been deleted.
+    // Only those: no shared pointer owns this engine any more, and any other event, such as a message to a script-owned
+    // WebSocket, could call back into the script, whose ScriptValue::engine() then throws std::bad_weak_ptr (#53).
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     // This is necessary for script engines that don't run in ScriptManager::run(), for example entity scripts:
     disconnectSignalProxies();
     deleteUnusedValueWrappers();
@@ -300,11 +298,8 @@ ScriptEngineV8::~ScriptEngineV8() {
             wrappers.swap(_qobjectWrapperMapV8);
         }
     }
-    // Events need to be processed one more time for processing any remaining deleteLater calls:
-    {
-        QEventLoop loop;
-        loop.processEvents();
-    }
+    // One more time, for what the script-owned objects deleted with their wrappers above deleted later
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 #ifdef OVERTE_SCRIPT_USE_AFTER_DELETE_GUARD
     _wasDestroyed = true;
 #endif

@@ -11,8 +11,12 @@
 
 #include "HelperScriptEngine.h"
 
-HelperScriptEngine::HelperScriptEngine() {
-    std::lock_guard<std::mutex> lock(_scriptEngineLock);
+HelperScriptEngine::HelperScriptEngine() = default;
+
+void HelperScriptEngine::createEngineIfNeeded() {
+    if (_scriptEngine) {
+        return;
+    }
     _scriptEngine = newScriptEngine();
     _scriptEngineThread.reset(new QThread());
     _scriptEngine->setThread(_scriptEngineThread.get());

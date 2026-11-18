@@ -148,6 +148,7 @@ private:
     static QStringList _codecPreferenceOrder;
 
     static std::unordered_map<QString, ZoneSettings> _audioZones;
+    std::vector<QString> _settingsZoneNames;
 
     float _throttleStartTarget = 0.9f;
     float _throttleBackoffTarget = 0.44f;

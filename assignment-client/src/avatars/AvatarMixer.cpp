@@ -937,7 +937,12 @@ void AvatarMixer::run() {
 
     // wait until we have the domain-server settings, otherwise we bail
     DomainHandler& domainHandler = DependencyManager::get<NodeList>()->getDomainHandler();
-    connect(&domainHandler, &DomainHandler::settingsReceived, this, &AvatarMixer::domainSettingsRequestComplete);
+    // settingsReceived fires again after a NodeList reset for a session ID change, and would arrive inside start()'s own
+    // processEvents(). Each delivery refreshes the settings; start() never returns, so the setup runs once. Slots run in
+    // connection order, so the first settings are parsed before the setup.
+    connect(&domainHandler, &DomainHandler::settingsReceived, this, &AvatarMixer::parseDomainServerSettings);
+    connect(&domainHandler, &DomainHandler::settingsReceived, this, &AvatarMixer::domainSettingsRequestComplete,
+            Qt::SingleShotConnection);
     connect(&domainHandler, &DomainHandler::settingsReceiveFail, this, &AvatarMixer::domainSettingsRequestFailed);
 
     ThreadedAssignment::commonInit(AVATAR_MIXER_LOGGING_NAME, NodeType::AvatarMixer);
@@ -963,9 +968,6 @@ void AvatarMixer::domainSettingsRequestComplete() {
         NodeType::Agent, NodeType::EntityScriptServer, NodeType::EntityServer,
         NodeType::UpstreamAvatarMixer, NodeType::DownstreamAvatarMixer
     });
-
-    // parse the settings to pull out the values we need
-    parseDomainServerSettings(nodeList->getDomainHandler().getSettingsObject());
 
     setupEntityQuery();
 

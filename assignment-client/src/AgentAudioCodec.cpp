@@ -61,7 +61,7 @@ AgentAudioCodec::AgentAudioCodec(QObject* parent, Agent& agent, MixedAudioStream
 }
 
 // Runs from ~AgentAvatarAudio, after its send timer has stopped. No timer may tick and no packet may arrive once the
-// encoder is released (#50, #51, #53); a recording frame already encoding on the main thread holds the lock (#81).
+// encoder is released (#50, #51, #53); no recording frame is still encoding, as clearing its handler waits (#81).
 AgentAudioCodec::~AgentAudioCodec() {
     _negotiateAudioFormatRetryTimer.stop();
     disconnect(&_receivedAudioStream, nullptr, this, nullptr);

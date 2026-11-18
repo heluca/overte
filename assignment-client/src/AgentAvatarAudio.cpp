@@ -40,10 +40,9 @@ AgentAvatarAudio::AgentAvatarAudio(Agent& agent, MixedAudioStream& receivedAudio
     _avatarAudioTimer.setTimerType(Qt::PreciseTimer);
 }
 
-// Runs in Agent::aboutToFinish on the Agent's thread, after the recording frame handlers are unregistered: no new
-// recording frame call starts, but Frame::handleFrame calls a copied handler outside its lock, so a call already running
-// on the main thread is not waited for (#81). No timer may tick and no packet may arrive once the encoder is
-// released (#50, #51, #53). ~AgentAudioCodec, which runs next, releases it.
+// Runs in Agent::aboutToFinish on the Agent's thread, after the recording frame handlers are unregistered: clearing
+// them waits for a call already running on the main thread, so none is left (#81). No timer may tick and no packet may
+// arrive once the encoder is released (#50, #51, #53). ~AgentAudioCodec, which runs next, releases it.
 AgentAvatarAudio::~AgentAvatarAudio() {
     _avatarAudioTimer.stop();
 }

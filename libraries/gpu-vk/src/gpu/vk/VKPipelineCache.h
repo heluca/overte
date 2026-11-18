@@ -106,11 +106,8 @@ struct Cache {
         // VKTODO: maybe these should be moved from here to cache object?
         std::unordered_map<RenderpassKey, VkRenderPass, RenderPassHash<std::vector<std::pair<VkFormat, VkImageLayout>>>> _renderPassMap; // VKTODO: make sure render passes are retrieved from here
 
-        // These get set when stride gets set by setInputBuffer
+        // The stride of the buffer bound to each input channel, kept current by setInputBuffer
         std::array<Offset, MAX_NUM_INPUT_BUFFERS> _bufferStrides{ 0 };
-        std::bitset<MAX_NUM_INPUT_BUFFERS> _bufferStrideSet;
-
-        void clearStrides() { _bufferStrideSet.reset(); }
 
         void setPipeline(const gpu::PipelinePointer& pipeline);
 

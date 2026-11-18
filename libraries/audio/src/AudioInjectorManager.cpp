@@ -11,6 +11,9 @@
 
 #include "AudioInjectorManager.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include <QtCore/QCoreApplication>
 #include <QtCore/QSharedPointer>
 
@@ -288,6 +291,12 @@ AudioInjectorPointer AudioInjectorManager::playStream(const QUrl& url, const Aud
     if (!stream) {
         return nullptr;
     }
+    // A proxy that coalesces a chunked response delivers it in bursts of a few hundred milliseconds. The ring holds a
+    // burst on top of the prebuffer, so the oldest audio is dropped only when the producer runs ahead for longer.
+    const int STREAM_NETWORK_BUFFER_FRAMES = 50;  // 500 ms
+    stream->setNetworkBufferFrames(STREAM_NETWORK_BUFFER_FRAMES);
+    const float prebufferMs = std::min(options.prebufferMs, STREAM_NETWORK_BUFFER_FRAMES * AudioConstants::NETWORK_FRAME_MSECS);
+    stream->setPrebufferFrames((int)std::lround(prebufferMs / AudioConstants::NETWORK_FRAME_MSECS));
     AudioInjectorPointer injector(new AudioInjector(stream, options), &AudioInjector::deleteLater);
     injector->moveToThread(_thread);
     injector->inject(&AudioInjectorManager::threadInjector);

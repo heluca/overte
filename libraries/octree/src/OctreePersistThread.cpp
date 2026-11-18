@@ -103,6 +103,10 @@ void OctreePersistThread::start() {
 }
 
 void OctreePersistThread::handleOctreeDataFileReply(QSharedPointer<ReceivedMessage> message) {
+    if (!DependencyManager::get<NodeList>()->getDomainHandler().isFromDomainServer(*message)) {
+        return;
+    }
+
     if (_initialLoadComplete) {
         qCWarning(octree) << "Received OctreeDataFileReply after initial load had completed";
         return;

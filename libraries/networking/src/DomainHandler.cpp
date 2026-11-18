@@ -498,18 +498,6 @@ void DomainHandler::processICEPingReplyPacket(QSharedPointer<ReceivedMessage> me
     }
 }
 
-void DomainHandler::processDTLSRequirementPacket(QSharedPointer<ReceivedMessage> message) {
-    // figure out the port that the DS wants us to use for us to talk to them with DTLS
-    unsigned short dtlsPort;
-    message->readPrimitive(&dtlsPort);
-
-    qCDebug(networking) << "domain-server DTLS port changed to" << dtlsPort << "- Enabling DTLS.";
-
-    _sockAddr.setPort(dtlsPort);
-
-//    initializeDTLSSession();
-}
-
 void DomainHandler::processICEResponsePacket(QSharedPointer<ReceivedMessage> message) {
     if (_icePeer.hasSockets()) {
         qCDebug(networking_ice) << "Received an ICE peer packet for domain-server but we already have sockets. Not processing.";
