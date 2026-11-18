@@ -220,7 +220,10 @@ public slots:
 protected:
     // AvatarData ignores it so the mixer keeps its own; our avatar holds the name the mixer gave it, as MyAvatar does.
     void maybeUpdateSessionDisplayNameFromTransport(const QString& sessionDisplayName) override {
-        _sessionDisplayName = sessionDisplayName;
+        if (sessionDisplayName != _sessionDisplayName) {
+            _sessionDisplayName = sessionDisplayName;
+            emit sessionDisplayNameChanged();
+        }
     }
 
 private:
