@@ -72,7 +72,7 @@ private:
     using Lock = std::unique_lock<Mutex>;
 
     bool threadInjector(const AudioInjectorPointer& injector);
-    void notifyInjectorReadyCondition() { _injectorReady.notify_one(); }
+    void notifyInjectorReadyCondition();
     bool wouldExceedLimits();
 
     AudioInjectorManager() { createThread(); }
@@ -82,6 +82,7 @@ private:
 
     QThread* _thread { nullptr };
     bool _shouldStop { false };
+    bool _hasPostedCalls { false };
     InjectorQueue _injectors;
     Mutex _injectorsMutex;
     std::condition_variable _injectorReady;

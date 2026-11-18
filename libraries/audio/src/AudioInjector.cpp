@@ -93,6 +93,10 @@ void AudioInjector::finishNetworkInjection() {
 void AudioInjector::finishLocalInjection() {
     if (QThread::currentThread() != thread()) {
         QMetaObject::invokeMethod(this, "finishLocalInjection");
+        // A local-only injector is never queued on the manager, whose thread would otherwise sleep with this call pending
+        if (auto injectorManager = DependencyManager::get<AudioInjectorManager>()) {
+            injectorManager->notifyInjectorReadyCondition();
+        }
         return;
     }
 
