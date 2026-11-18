@@ -17,21 +17,21 @@ Item {
     id: root
     anchors.fill: parent
     property string url: ""
-    property string scriptUrl: ""
+    property string scriptURL: ""
     property bool useBackground: true
     property string userAgent: ""
 
     onUrlChanged: {
-        load(root.url, root.scriptUrl, root.useBackground, root.userAgent);
+        load(root.url, root.scriptURL, root.useBackground, root.userAgent);
     }
 
-    onScriptUrlChanged: {
+    onScriptURLChanged: {
         if (loader.item) {
             if (root.webViewLoaded) {
-                loader.item.scriptUrl = root.scriptUrl;
+                loader.item.scriptURL = root.scriptURL;
             }
         } else {
-            load(root.url, root.scriptUrl, root.useBackground, root.userAgent);
+            load(root.url, root.scriptURL, root.useBackground, root.userAgent);
         }
     }
 
@@ -41,7 +41,7 @@ Item {
                 loader.item.useBackground = root.useBackground;
             }
         } else {
-            load(root.url, root.scriptUrl, root.useBackground, root.userAgent);
+            load(root.url, root.scriptURL, root.useBackground, root.userAgent);
         }
     }
 
@@ -51,7 +51,7 @@ Item {
                 loader.item.userAgent = root.userAgent;
             }
         } else {
-            load(root.url, root.scriptUrl, root.useBackground, root.userAgent);
+            load(root.url, root.scriptURL, root.useBackground, root.userAgent);
         }
     }
 
@@ -77,7 +77,7 @@ Item {
         anchors.fill: parent
     }
 
-    function load(url, scriptUrl, useBackground, userAgent) {
+    function load(url, scriptURL, useBackground, userAgent) {
         // Ensure we reset any existing item to "about:blank" to ensure web audio stops: DEV-2375
         if (loader.item && root.webViewLoaded) {
             if (root.webViewLoaded) {
@@ -93,7 +93,7 @@ Item {
             root.webViewLoaded = true;
             loader.setSource("./controls/WebView.qml", {
                 url: url,
-                //scriptUrl: scriptUrl, // Qt6 TODO
+                scriptURL: scriptURL,
                 useBackground: useBackground,
                 userAgent: userAgent
             });
@@ -101,7 +101,7 @@ Item {
     }
 
     Component.onCompleted: {
-        load(root.url, root.scriptUrl, root.useBackground, root.userAgent);
+        load(root.url, root.scriptURL, root.useBackground, root.userAgent);
     }
 
     signal sendToScript(var message);
