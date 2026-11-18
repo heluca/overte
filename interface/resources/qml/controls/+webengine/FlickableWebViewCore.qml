@@ -177,7 +177,6 @@ Item {
         }
 
         Component.onCompleted: {
-            // QT6TODO: previous way of doing it crashes and this one doesn't? unless it crashes later
             setUserScripts();
             userScriptsReady = true;
             webChannel.registerObject("eventBridge", eventBridge);
