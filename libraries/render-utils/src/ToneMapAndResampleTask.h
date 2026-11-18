@@ -15,6 +15,7 @@
 #include <DependencyManager.h>
 #include <NumericalConstants.h>
 
+#include <gpu/Buffer.h>
 #include <gpu/Resource.h>
 #include <gpu/Pipeline.h>
 #include <render/Forward.h>
@@ -101,6 +102,19 @@ private:
     gpu::BufferView _parametersBuffer;
 
     void init();
+};
+
+// HDR output: the tone mapper scales its output by the swapchain's value of SDR white (RenderArgs::_hdrWhite), but
+// passes that draw straight into the final framebuffer write SDR white as 1.0. This multiplies the colour already in the
+// bound framebuffer by a factor, keeping its alpha, to bring such a pass to the swapchain's white.
+class ScaleFramebufferColor {
+public:
+    // Draws a full-viewport quad into the bound framebuffer
+    void render(gpu::Batch& batch, float scale);
+
+private:
+    // A uniform buffer holds one value for a whole frame, so each pass that scales by its own factor needs its own buffer
+    gpu::StructBuffer<glm::vec4> _color;
 };
 
 #endif // hifi_ToneMapAndResample_h

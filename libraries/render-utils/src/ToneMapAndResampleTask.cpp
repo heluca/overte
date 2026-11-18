@@ -171,3 +171,23 @@ void ToneMapAndResample::run(const RenderContextPointer& renderContext, const In
 
     output = destinationFramebuffer;
 }
+
+void ScaleFramebufferColor::render(gpu::Batch& batch, float scale) {
+    static gpu::PipelinePointer pipeline;
+    if (!pipeline) {
+        gpu::StatePointer state = std::make_shared<gpu::State>();
+        state->setDepthTest(gpu::State::DepthTest(false, false));
+        // destination colour times the source colour, destination alpha kept
+        state->setBlendFunction(true, gpu::State::DEST_COLOR, gpu::State::BLEND_OP_ADD, gpu::State::ZERO,
+                                gpu::State::ZERO, gpu::State::BLEND_OP_ADD, gpu::State::ONE);
+        pipeline = gpu::Pipeline::create(gpu::Shader::createProgram(scaleColor), state);
+    }
+
+    if (_color.get().x != scale) {
+        _color.edit() = glm::vec4(scale, scale, scale, 1.0f);
+    }
+
+    batch.setPipeline(pipeline);
+    batch.setUniformBuffer(0, _color);
+    batch.draw(gpu::TRIANGLE_STRIP, 4);
+}

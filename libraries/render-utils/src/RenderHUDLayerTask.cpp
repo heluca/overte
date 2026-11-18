@@ -37,6 +37,28 @@ void CompositeHUD::run(const RenderContextPointer& renderContext, const gpu::Fra
 #endif
 }
 
+void ScaleHUDLayerToHDRWhite::run(const RenderContextPointer& renderContext, const Inputs& inputs) {
+    RenderArgs* args = renderContext->args;
+    const auto& framebuffer = inputs.get0();
+
+    if (!framebuffer || (inputs.get1().empty() && inputs.get2().empty())) {
+        return;
+    }
+    // The same condition as the tone mapper's HDR output: mirrors and the secondary camera have 8-bit targets
+    const auto& color = framebuffer->getRenderBuffer(0);
+    const bool floatFramebuffer = color && color->getTexelFormat().getType() == gpu::HALF;
+    if (!floatFramebuffer || args->_mirrorDepth > 0 || args->_hdrPeak <= 0.0f || args->_hdrWhite == 1.0f) {
+        return;
+    }
+
+    gpu::doInBatch("ScaleHUDLayerToHDRWhite", args->_context, [&](gpu::Batch& batch) {
+        batch.enableStereo(false);
+        batch.setFramebuffer(framebuffer);
+        batch.setViewportTransform(glm::ivec4(0, 0, framebuffer->getSize()));
+        _scale.render(batch, _toSwapchainWhite ? args->_hdrWhite : 1.0f / args->_hdrWhite);
+    });
+}
+
 void RenderHUDLayerTask::build(JobModel& task, const render::Varying& input, render::Varying& output,
         render::ShapePlumberPointer shapePlumber, uint transformSlot) {
     const auto& inputs = input.get<Input>();
@@ -55,6 +77,9 @@ void RenderHUDLayerTask::build(JobModel& task, const render::Varying& input, ren
     const auto nullJitter = Varying(glm::vec2(0.0f, 0.0f));
     const auto hudOpaquesInputs = DrawLayered3D::Inputs(hudOpaque, deferredFrameTransform, lightingModel, hazeFrame).asVarying();
     const auto hudTransparentsInputs = DrawLayered3D::Inputs(hudTransparent, deferredFrameTransform, lightingModel, hazeFrame).asVarying();
+    const auto scaleInputs = ScaleHUDLayerToHDRWhite::Inputs(primaryFramebuffer, hudOpaque, hudTransparent).asVarying();
+    task.addJob<ScaleHUDLayerToHDRWhite>("HUDLayerToSDRWhiteUnits", scaleInputs, false);
     task.addJob<DrawLayered3D>("DrawHUDOpaque", hudOpaquesInputs, shapePlumber, true, false, transformSlot);
     task.addJob<DrawLayered3D>("DrawHUDTransparent", hudTransparentsInputs, shapePlumber, false, false, transformSlot);
+    task.addJob<ScaleHUDLayerToHDRWhite>("HUDLayerToSwapchainWhite", scaleInputs, true);
 }

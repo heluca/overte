@@ -284,6 +284,11 @@ void GraphicsEngine::render_performFrame() {
                 batch.clearDepthStencilFramebuffer(1.0, 0);
                 batch.setViewportTransform({ 0, 0, finalFramebuffer->getSize() });
                 _splashScreen->render(batch, viewFrustum, renderArgs._renderMethod == RenderArgs::RenderMethod::FORWARD, render::RenderEngine::TS_BACKGROUND_VIEW);
+                // The skybox writes SDR white as 1.0 straight into the final framebuffer, without the tone mapper
+                if (renderArgs._hdrPeak > 0.0f) {
+                    batch.enableStereo(false);
+                    _splashScreenHDRWhite.render(batch, renderArgs._hdrWhite);
+                }
             });
         }
     } else {
