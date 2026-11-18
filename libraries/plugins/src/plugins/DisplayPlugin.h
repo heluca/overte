@@ -198,6 +198,8 @@ public:
     // HDR output: when the plugin presents linear values with headroom above SDR white, the brightest value the
     // display shows as a multiple of SDR white (the tone mapper's peak); 0 when the output is SDR.
     virtual float getHDRPeak() const { return 0.0f; }
+    // HDR output: the swapchain value of SDR white while getHDRPeak() is above 0
+    virtual float getHDRWhite() const { return 1.0f; }
     // Ask the plugin to present in HDR when the display allows it; takes effect at the next frame.
     virtual void setHDROutputEnabled(bool enabled) {}
 

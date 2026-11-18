@@ -285,6 +285,9 @@ static float configuredHeadroom() {
     return headroom;
 }
 
+// binding of the params buffer in DrawHUDTextureHDR.slf
+static const int hudHDRParamsSlot = 0;
+
 static bool wantsHDRSwapchain(bool settingEnabled) {
 #ifdef Q_OS_MAC
     // macOS reports headroom only once extended-range content is on screen, so the swapchain has to come first
@@ -484,6 +487,10 @@ void VulkanDisplayPlugin::customizeContext() {
 
         _hudPipeline = gpu::Pipeline::create(gpu::Shader::createProgram(DrawTexturePremultipliedSRGBToLinear), blendState);
 
+        _hudHDRPipeline = gpu::Pipeline::create(gpu::Shader::createProgram(shader::display_plugins::program::DrawHUDTextureHDR), blendState);
+        const vec4 hudHDRParams(getHDRWhite(), 0.0f, 0.0f, 0.0f);
+        _hudHDRParams = gpu::BufferView(std::make_shared<gpu::Buffer>(gpu::Buffer::UniformBuffer, sizeof(hudHDRParams), (const gpu::Byte*)&hudHDRParams));
+
         _cursorPipeline = gpu::Pipeline::create(gpu::Shader::createProgram(DrawTransformedTexture), blendState);
     }
 
@@ -498,6 +505,7 @@ void VulkanDisplayPlugin::uncustomizeContext() {
     _SRGBToLinearPipeline.reset();
     _cursorPipeline.reset();
     _hudPipeline.reset();
+    _hudHDRPipeline.reset();
     _compositeFramebuffer.reset();
 
     withPresentThreadLock([&] {
@@ -694,11 +702,17 @@ void VulkanDisplayPlugin::updateFrameData() {
 }
 
 std::function<void(gpu::Batch&, const gpu::TexturePointer&)> VulkanDisplayPlugin::getHUDOperator() {
-    auto hudPipeline = _hudPipeline;
+    // The HUD is composited into the final framebuffer after tone mapping, so on an HDR frame it needs the same scale
+    const bool hdr = getHDRPeak() > 0.0f;
+    auto hudPipeline = hdr ? _hudHDRPipeline : _hudPipeline;
+    auto hudHDRParams = _hudHDRParams;
     auto hudCompositeFramebufferSize = getRecommendedRenderSize();
     return [=](gpu::Batch& batch, const gpu::TexturePointer& hudTexture) {
         if (hudPipeline && hudTexture) {
             batch.setPipeline(hudPipeline);
+            if (hdr) {
+                batch.setUniformBuffer(hudHDRParamsSlot, hudHDRParams);
+            }
             batch.setResourceTexture(0, hudTexture);
             batch.setViewportTransform(ivec4(uvec2(0), hudCompositeFramebufferSize));
             batch.draw(gpu::TRIANGLE_STRIP, 4);
@@ -1122,6 +1136,18 @@ void VulkanDisplayPlugin::setHDROutputEnabled(bool enabled) {
     }
 }
 
+float VulkanDisplayPlugin::getHDRWhite() const {
+#ifdef Q_OS_MAC
+    // EDR: 1.0 is SDR white, and the headroom is counted in SDR white
+    return 1.0f;
+#else
+    // Extended linear sRGB is scRGB here (Wayland's windows_scrgb): 1.0 is 80 cd/m2, while the compositor shows SDR
+    // white at the reference white of 203 cd/m2. Windows shares this path; its SDR white follows the display's SDR
+    // content brightness setting and should be read from the OS (DISPLAYCONFIG_SDR_WHITE_LEVEL) instead.
+    return 203.0f / 80.0f;
+#endif
+}
+
 void VulkanDisplayPlugin::updateHDRPeak() {
     const bool hdrSwapchain = _vkWindow && _vkWindow->_swapchain.isHDR();
     if (hdrSwapchain && --_headroomPollCountdown <= 0) {
@@ -1135,7 +1161,7 @@ void VulkanDisplayPlugin::updateHDRPeak() {
     const float peak = (hdrSwapchain && headroom > 1.01f) ? headroom : 0.0f;
     if (peak != _hdrPeak) {
         qCDebug(displayPlugins) << "HDR output peak" << peak << "( swapchain" << _vkWindow->_swapchain.describeFormat().c_str()
-                               << ", display headroom" << headroom << ")";
+                               << ", display headroom" << headroom << ", SDR white" << getHDRWhite() << ")";
         _hdrPeak = peak;
     }
 }
@@ -1164,7 +1190,7 @@ QImage VulkanDisplayPlugin::getScreenshot(float aspectRatio) {
         corner.y = round((size.y - bestSize.y) / 2.0f);
     }
     QImage screenshot(bestSize.x, bestSize.y, QImage::Format_ARGB32);
-    vkBackend->downloadOutputFramebuffer(ivec4(corner, bestSize), screenshot);
+    vkBackend->downloadOutputFramebuffer(ivec4(corner, bestSize), screenshot, getHDRWhite());
     return screenshot.mirrored(false, true);
 }
 

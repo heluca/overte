@@ -69,9 +69,12 @@ void ToneMapAndResample::setAutoExposure(const AutoExposureResultPointer& autoEx
     }
 }
 
-void ToneMapAndResample::setHDRPeak(float peak) {
-    if (_parametersBuffer.get<Parameters>()._hdrPeak != peak) {
-        _parametersBuffer.edit<Parameters>()._hdrPeak = peak;
+void ToneMapAndResample::setHDRPeak(float peak, float white) {
+    auto& params = _parametersBuffer.get<Parameters>();
+    if (params._hdrPeak != peak || params._hdrWhite != white) {
+        auto& edit = _parametersBuffer.edit<Parameters>();
+        edit._hdrPeak = peak;
+        edit._hdrWhite = white;
     }
 }
 
@@ -132,7 +135,7 @@ void ToneMapAndResample::run(const RenderContextPointer& renderContext, const In
     // mirrors and the secondary camera render into 8-bit buffers and keep the curve ending at white
     const auto& destinationColor = destinationFramebuffer->getRenderBuffer(0);
     const bool floatDestination = destinationColor && destinationColor->getTexelFormat().getType() == gpu::HALF;
-    setHDRPeak((floatDestination && args->_mirrorDepth == 0) ? args->_hdrPeak : 0.0f);
+    setHDRPeak((floatDestination && args->_mirrorDepth == 0) ? args->_hdrPeak : 0.0f, args->_hdrWhite);
 
     if (!_pipeline) {
         init();
