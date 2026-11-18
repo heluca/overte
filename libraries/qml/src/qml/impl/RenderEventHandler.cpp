@@ -172,13 +172,16 @@ void RenderEventHandler::qmlRender(bool sceneGraphSync) {
     _shared->_renderControl->beginFrame();
 
     if (!_shared->preRender(sceneGraphSync)) {
+        _shared->_renderControl->endFrame();
         gl::globalRelease();
         return;
     }
 
     resize();
 
-    if (_currentSize != QSize()) {
+    if (_currentSize == QSize()) {
+        _shared->_renderControl->endFrame();
+    } else {
         PROFILE_RANGE(render_qml_gl, "render");
         GLuint texture = SharedObject::getTextureCache().acquireTexture(_currentSize);
         GLuint renderTarget = _renderTexture ? _renderTexture : texture;
