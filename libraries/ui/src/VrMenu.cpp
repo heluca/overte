@@ -69,6 +69,14 @@ MenuUserData::MenuUserData(QAction* action, QObject* qmlObject, QObject* qmlPare
     };
 
     new ExclusionGroupSetter(action, qmlObject, qmlParent);
+
+    // Menu sets the exclusion group on most actions before the queued VrMenu initializers mirror them, so the
+    // property change the setter waits for has already happened.
+    QVariant exclusionGroup = action->property("exclusionGroup");
+    if (exclusionGroup.isValid()) {
+        QMetaObject::invokeMethod(qmlParent, "addExclusionGroup", Qt::DirectConnection,
+                                  Q_ARG(QVariant, QVariant::fromValue(qmlObject)), Q_ARG(QVariant, exclusionGroup));
+    }
 }
 
 MenuUserData::~MenuUserData() {
