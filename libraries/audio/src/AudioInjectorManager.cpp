@@ -133,16 +133,24 @@ void AudioInjectorManager::run() {
                 }
             }
 
-        } else {
+        } else if (!_hasPostedCalls) {
             // we have no current injectors, wait until we get at least one before we do anything
             _injectorReady.wait(lock);
         }
+        _hasPostedCalls = false;
 
         // unlock the lock in case something in process events needs to modify the queue
         lock.unlock();
 
         QCoreApplication::processEvents();
     }
+}
+
+void AudioInjectorManager::notifyInjectorReadyCondition() {
+    // The flag covers a call posted while run() is between processEvents and the wait, which a bare notify would miss
+    Lock lock(_injectorsMutex);
+    _hasPostedCalls = true;
+    _injectorReady.notify_one();
 }
 
 static const int MAX_INJECTORS_PER_THREAD = 40; // calculated based on AudioInjector time to send frame, with sufficient padding
