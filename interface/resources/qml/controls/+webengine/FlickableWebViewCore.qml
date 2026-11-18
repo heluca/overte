@@ -214,7 +214,7 @@ Item {
         // QT6TODO: useBackground was missing here in Qt5, but I cannot find it anywhere in Qt documentation, so I just defined it here.
         property bool useBackground: true
 
-        function onLoadingChanged(loadingInfo) {
+        onLoadingChanged: function(loadingInfo) {
             webViewCore.loadInfo = loadingInfo;
             webViewCore.safeLoading = webViewCore.loading && !loadingLatched;
             webViewCore.loadingLatched |= webViewCore.loading;
