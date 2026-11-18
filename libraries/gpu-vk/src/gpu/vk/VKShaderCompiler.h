@@ -22,7 +22,8 @@ namespace gpu { namespace vk {
 // Compiles the shader library's glsl450 dialect text to SPIR-V with glslang, under the same rules the build
 // uses for the shaders it ships (glslangValidator -V100: Vulkan 1.0 client, SPIR-V 1.0, VULKAN defined).
 // Procedural shaders arrive as GLSL from a domain at runtime, so they cannot be compiled ahead of time.
-// Returns false and fills `log` when the shader does not compile; `log` carries any warnings on success.
+// Returns false and fills `log` when the shader does not compile, or uses a push constant block, which the backend
+// cannot bind; `log` carries any warnings on success.
 // On success `reflection` holds the vertex inputs, uniform blocks, storage blocks and textures the shader uses.
 bool compileGlslToSpirv(const std::string& glsl, VkShaderStageFlagBits stage, std::vector<uint32_t>& spirv, std::string& log,
                         shader::Reflection& reflection);

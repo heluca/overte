@@ -70,8 +70,8 @@ Cache::BindingMap Cache::Pipeline::getBindingMap(const LocationMap& vertexMap, c
 // VKTODO: This needs to be used instead of getPipeline
 // Returns structure containing pipeline layout and descriptor set layouts
 Cache::PipelineLayout Cache::Pipeline::getPipelineAndDescriptorLayout(const vks::Context& context,
-                                                                       const shader::Reflection* vertexRuntimeReflection,
-                                                                       const shader::Reflection* fragmentRuntimeReflection) {
+                                                                       const shader::Reflection& vertexReflection,
+                                                                       const shader::Reflection& fragmentReflection) {
 
     std::vector<VkDescriptorSetLayoutBinding> uniLayout;
 #define SEP_DESC 1
@@ -84,16 +84,8 @@ Cache::PipelineLayout Cache::Pipeline::getPipelineAndDescriptorLayout(const vks:
 #endif
     PipelineLayout layout{};
 
-    layout.vertexReflection = program->getShaders()[0]->getReflection();
-    layout.fragmentReflection = program->getShaders()[1]->getReflection();
-    for (auto [reflection, runtimeReflection] : { std::pair{ &layout.vertexReflection, vertexRuntimeReflection },
-                                                  std::pair{ &layout.fragmentReflection, fragmentRuntimeReflection } }) {
-        if (runtimeReflection) {
-            // merge() leaves the inputs alone; a runtime vertex shader may read attributes its stub did not
-            reflection->inputs.insert(runtimeReflection->inputs.begin(), runtimeReflection->inputs.end());
-            reflection->merge(*runtimeReflection);
-        }
-    }
+    layout.vertexReflection = vertexReflection;
+    layout.fragmentReflection = fragmentReflection;
 
     layout.uniformBindingMap = getBindingMap(layout.vertexReflection.uniformBuffers, layout.fragmentReflection.uniformBuffers);
     layout.textureBindingMap = getBindingMap(layout.vertexReflection.textures, layout.fragmentReflection.textures);
@@ -484,6 +476,25 @@ const shader::Reflection* Cache::getRuntimeReflection(const shader::Source& sour
     return itr == runtimeReflections.end() ? nullptr : &itr->second;
 }
 
+// Adds what a runtime-compiled shader uses to the build-time reflection of the stub it replaced. Unlike
+// Reflection::merge it does not throw: the shader comes from domain content, and a name bound at two different
+// slots only means the shader cannot run. Returns false in that case.
+static bool mergeRuntimeReflection(shader::Reflection& reflection, const shader::Reflection& runtimeReflection) {
+    bool consistent = true;
+    using Map = shader::Reflection::LocationMap;
+    for (auto [target, source] : { std::pair<Map*, const Map*>{ &reflection.inputs, &runtimeReflection.inputs },
+                                   { &reflection.textures, &runtimeReflection.textures },
+                                   { &reflection.uniformBuffers, &runtimeReflection.uniformBuffers },
+                                   { &reflection.resourceBuffers, &runtimeReflection.resourceBuffers } }) {
+        for (const auto& [name, location] : *source) {
+            auto [itr, inserted] = target->emplace(name, location);
+            consistent = consistent && (inserted || itr->second == location);
+        }
+    }
+    reflection.updateValid();
+    return consistent;
+}
+
 const Cache::PipelineLayout& Cache::getPipeline(const vks::Context& context) {
     auto key = pipelineState.getKey(context);
     auto pipelineIterator = pipelineMap.find(key);
@@ -503,13 +514,27 @@ const Cache::PipelineLayout& Cache::getPipeline(const vks::Context& context) {
     bool fragmentCompileFailed = false;
     VkShaderModule vertexModule = getShaderModule(context, vertexShader, VK_SHADER_STAGE_VERTEX_BIT, vertexCompileFailed);
     VkShaderModule fragmentModule = getShaderModule(context, fragmentShader, VK_SHADER_STAGE_FRAGMENT_BIT, fragmentCompileFailed);
-    if (vertexCompileFailed || fragmentCompileFailed) {
+
+    auto vertexReflection = pipeline.getProgram()->getShaders()[0]->getReflection();
+    auto fragmentReflection = pipeline.getProgram()->getShaders()[1]->getReflection();
+    bool reflectionMismatch = false;
+    if (auto runtimeReflection = getRuntimeReflection(vertexShader)) {
+        reflectionMismatch |= !mergeRuntimeReflection(vertexReflection, *runtimeReflection);
+    }
+    if (auto runtimeReflection = getRuntimeReflection(fragmentShader)) {
+        reflectionMismatch |= !mergeRuntimeReflection(fragmentReflection, *runtimeReflection);
+    }
+    if (reflectionMismatch) {
+        qWarning() << "Vulkan backend: shader" << vertexShader.name.c_str() << "/" << fragmentShader.name.c_str()
+                   << "binds a resource at a different slot than the shader it replaces";
+    }
+
+    if (vertexCompileFailed || fragmentCompileFailed || reflectionMismatch) {
         // What the GL backends do when glCompileShader fails: Procedural reads this and draws its error shader
         pipeline.getProgram()->setCompilationHasFailed(true);
     }
 
-    auto pipelineLayout = pipelineState.getPipelineAndDescriptorLayout(context, getRuntimeReflection(vertexShader),
-                                                                       getRuntimeReflection(fragmentShader));
+    auto pipelineLayout = pipelineState.getPipelineAndDescriptorLayout(context, vertexReflection, fragmentReflection);
     // FIXME
 
     const gpu::State::Data& stateData = state.getValues();

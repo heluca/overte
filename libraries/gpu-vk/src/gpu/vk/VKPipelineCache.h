@@ -127,11 +127,11 @@ struct Cache {
         static BindingMap getBindingMap(const LocationMap& vertexMap, const LocationMap& fragmentMap);
 
         // VKTODO: This needs to be used instead of getPipeline
-        // Returns structure containing pipeline layout and descriptor set layouts. A runtime reflection, when given,
-        // adds the resources a runtime-compiled shader uses to its build-time reflection.
+        // Returns structure containing pipeline layout and descriptor set layouts, built from the given reflections
+        // (for a runtime-compiled shader, its build-time reflection plus what the compiled module uses)
         PipelineLayout getPipelineAndDescriptorLayout(const vks::Context& context,
-                                                      const shader::Reflection* vertexRuntimeReflection,
-                                                      const shader::Reflection* fragmentRuntimeReflection);
+                                                      const shader::Reflection& vertexReflection,
+                                                      const shader::Reflection& fragmentReflection);
 
         RenderpassKey getRenderPassKey(gpu::Framebuffer* framebuffer, const vks::Context &context) const;
 

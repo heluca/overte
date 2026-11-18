@@ -68,27 +68,44 @@ bool gpu::vk::compileGlslToSpirv(const std::string& glsl, VkShaderStageFlagBits 
 
     // The build reflects its shaders after spirv-opt, so the stub a runtime shader replaces may have used far
     // fewer resources than the replacement does; the pipeline layout needs what this shader actually uses.
+    // All IO variables, not only the live ones: glslang keeps every declared input in the entry point interface,
+    // and each of those needs a vertex attribute.
     reflection = shader::Reflection();
-    program.buildReflection(EShReflectionSeparateBuffers);
+    program.buildReflection(EShReflectionSeparateBuffers | EShReflectionAllIOVariables);
+    // A resource with no binding (a push constant block) has no place in the backend's descriptor sets, and the
+    // backend declares no push constant ranges: the shader cannot run, so treat it as a compile failure.
+    auto addBinding = [&](shader::Reflection::LocationMap& map, const glslang::TObjectReflection& object) {
+        if (object.getBinding() < 0) {
+            log = "Vulkan backend: '" + object.name + "' has no binding; push constants are not supported here";
+            return false;
+        }
+        map[object.name] = object.getBinding();
+        return true;
+    };
     for (int i = 0; i < program.getNumUniformBlocks(); ++i) {
-        const auto& block = program.getUniformBlock(i);
-        reflection.uniformBuffers[block.name] = block.getBinding();
+        if (!addBinding(reflection.uniformBuffers, program.getUniformBlock(i))) {
+            return false;
+        }
     }
     for (int i = 0; i < program.getNumBufferBlocks(); ++i) {
-        const auto& block = program.getBufferBlock(i);
-        reflection.resourceBuffers[block.name] = block.getBinding();
+        if (!addBinding(reflection.resourceBuffers, program.getBufferBlock(i))) {
+            return false;
+        }
     }
     for (int i = 0; i < program.getNumUniformVariables(); ++i) {
         const auto& uniform = program.getUniform(i);
         // Vulkan GLSL has no loose uniforms, so a uniform outside any block is a sampler
-        if (uniform.index < 0) {
-            reflection.textures[uniform.name] = uniform.getBinding();
+        if (uniform.index < 0 && !addBinding(reflection.textures, uniform)) {
+            return false;
         }
     }
     if (language == EShLangVertex) {
         for (int i = 0; i < program.getNumPipeInputs(); ++i) {
             const auto& input = program.getPipeInput(i);
-            reflection.inputs[input.name] = (int32_t)input.layoutLocation();
+            // Built-ins (gl_VertexIndex, gl_InstanceIndex) are not vertex attributes
+            if (input.name.rfind("gl_", 0) != 0) {
+                reflection.inputs[input.name] = (int32_t)input.layoutLocation();
+            }
         }
     }
     reflection.updateValid();
