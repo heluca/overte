@@ -403,16 +403,13 @@ if (APPLE)
 
   set(SCRIPTS_INSTALL_DIR "${INTERFACE_INSTALL_APP_PATH}/Contents/Resources")
   set(RESOURCES_DEV_DIR "$<TARGET_FILE_DIR:${TARGET_NAME}>/../Resources")
+  set(RESOURCES_RCC_DEPLOYED "${RESOURCES_DEV_DIR}/resources.rcc")
 
   add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
     # copy script files beside the executable
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
       "${CMAKE_SOURCE_DIR}/scripts"
       "${RESOURCES_DEV_DIR}/scripts"
-    # copy the resources files beside the executable
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-      "${RESOURCES_RCC}"
-      "${RESOURCES_DEV_DIR}"
     # FIXME, the edit script code loads HTML from the scripts folder
     # which in turn relies on CSS that refers to the fonts.  In theory
     # we should be able to modify the CSS to reference the QRC path to
@@ -444,6 +441,7 @@ if (APPLE)
 else()
   set(INTERFACE_EXEC_DIR "$<TARGET_FILE_DIR:${TARGET_NAME}>")
   set(RESOURCES_DEV_DIR "${INTERFACE_EXEC_DIR}/resources")
+  set(RESOURCES_RCC_DEPLOYED "${INTERFACE_EXEC_DIR}/resources.rcc")
 
   # copy the resources files beside the executable
   add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
@@ -464,9 +462,6 @@ else()
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       "${PROJECT_SOURCE_DIR}/resources/serverless/redirect.json"
       "${RESOURCES_DEV_DIR}/serverless/redirect.json"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-      "${RESOURCES_RCC}"
-      "${INTERFACE_EXEC_DIR}/resources.rcc"
   )
 
   if (JSDOC_ENABLED)
@@ -498,6 +493,19 @@ else()
     optional_win_executable_signing()
   endif()
 endif()
+
+# A POST_BUILD copy only runs when the executable relinks, which a resource-only change never causes.
+# The copy's output is a stamp because a custom command OUTPUT cannot name the target's directory.
+set(RESOURCES_RCC_DEPLOYED_STAMP "${CMAKE_CURRENT_BINARY_DIR}/resources_rcc_deployed_$<CONFIG>.stamp")
+add_custom_command(
+  OUTPUT "${RESOURCES_RCC_DEPLOYED_STAMP}"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${RESOURCES_RCC}" "${RESOURCES_RCC_DEPLOYED}"
+  COMMAND "${CMAKE_COMMAND}" -E touch "${RESOURCES_RCC_DEPLOYED_STAMP}"
+  DEPENDS "${RESOURCES_RCC}" resources
+  VERBATIM
+)
+add_custom_target(deploy_resources_rcc DEPENDS "${RESOURCES_RCC_DEPLOYED_STAMP}")
+add_dependencies(${TARGET_NAME} deploy_resources_rcc)
 
 if (SCRIPTS_INSTALL_DIR)
   # setup install of scripts beside interface executable
