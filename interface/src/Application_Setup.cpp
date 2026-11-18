@@ -1904,6 +1904,8 @@ void Application::setupSignalsAndOperators() {
                 // If it's going back into the cache make sure to explicitly set the URL to a blank page
                 // in order to stop any resource consumption or audio related to the page.
                 if (rootItem) {
+                    // Clear the script first so the previous entity's script is not injected into the blank page.
+                    rootItem->setProperty(render::entities::WebEntityRenderer::SCRIPT_URL_PROPERTY, "");
                     rootItem->setProperty("url", "about:blank");
                 }
                 auto offscreenCache = DependencyManager::get<OffscreenQmlSurfaceCache>();

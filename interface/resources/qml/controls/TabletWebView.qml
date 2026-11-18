@@ -10,7 +10,7 @@ Item {
     height: parent !== null ? parent.height : undefined
     property var parentStackItem: null
     property int headerHeight: 70
-    property string scriptURL
+    property alias scriptURL: web.userScriptUrl
     property bool keyboardEnabled: false
     property bool keyboardRaised: false
     onKeyboardRaisedChanged: {

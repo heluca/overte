@@ -45,6 +45,12 @@ Item {
         webViewCore.profile.httpUserAgent = flick.userAgent;
     }
 
+    onUserScriptUrlChanged: {
+        if (webViewCore.userScriptsReady) {
+            webViewCore.setUserScripts();
+        }
+    }
+
     StylesUIt.HifiConstants {
         id: hifi
     }
@@ -142,8 +148,10 @@ Item {
             },*/
         //]
 
-        Component.onCompleted: {
-            // QT6TODO: previous way of doing it crashes and this one doesn't? unless it crashes later
+        // The declarative collection above crashes, so the scripts are set once the view is complete and set
+        // again whenever userScriptUrl changes.
+        property bool userScriptsReady: false
+        function setUserScripts() {
             userScripts.collection = [
             // creates a global EventBridge object.
             {
@@ -166,6 +174,11 @@ Item {
                 worldId: WebEngineScript.MainWorld,
             },
             ]
+        }
+
+        Component.onCompleted: {
+            setUserScripts();
+            userScriptsReady = true;
             webChannel.registerObject("eventBridge", eventBridge);
             webChannel.registerObject("eventBridgeWrapper", eventBridgeWrapper);
 

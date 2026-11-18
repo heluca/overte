@@ -14,21 +14,21 @@ Item {
     id: root
     anchors.fill: parent
     property string url: ""
-    property string scriptUrl: null
+    property string scriptURL: ""
     property bool useBackground: true
     property string userAgent: ""
 
     onUrlChanged: {
-        load(root.url, root.scriptUrl, root.useBackground, root.userAgent);
+        load(root.url, root.scriptURL, root.useBackground, root.userAgent);
     }
 
-    onScriptUrlChanged: {
+    onScriptURLChanged: {
         if (loader.item) {
             if (root.webViewLoaded) {
-                loader.item.scriptUrl = root.scriptUrl;
+                loader.item.scriptUrl = root.scriptURL;
             }
         } else {
-            load(root.url, root.scriptUrl, root.useBackground, root.userAgent);
+            load(root.url, root.scriptURL, root.useBackground, root.userAgent);
         }
     }
 
@@ -38,7 +38,7 @@ Item {
                 loader.item.useBackground = root.useBackground;
             }
         } else {
-            load(root.url, root.scriptUrl, root.useBackground, root.userAgent);
+            load(root.url, root.scriptURL, root.useBackground, root.userAgent);
         }
     }
 
@@ -48,7 +48,7 @@ Item {
                 loader.item.userAgent = root.userAgent;
             }
         } else {
-            load(root.url, root.scriptUrl, root.useBackground, root.userAgent);
+            load(root.url, root.scriptURL, root.useBackground, root.userAgent);
         }
     }
 
@@ -95,7 +95,7 @@ Item {
     }
 
     Component.onCompleted: {
-        load(root.url, root.scriptUrl, root.useBackground, root.userAgent);
+        load(root.url, root.scriptURL, root.useBackground, root.userAgent);
     }
 
     signal sendToScript(var message);
