@@ -898,16 +898,20 @@ void VKBackend::updateVkDescriptorWriteSetsTexture(const Cache::PipelineLayout &
                 imageInfo = texture->getDescriptorImageInfo();
             }
             if (imageInfo.imageLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
-                qDebug() << "Writing descriptor " << i << " with texture: " << QString::fromStdString(_resource._textures[i].texture->source());
-                if (texture) {
-                    qDebug() << "Warning: Texture " + QString::fromStdString(_resource._textures[i].texture->source()) + " being bound at input slot "
-                                    << i << " is in VK_IMAGE_LAYOUT_UNDEFINED layout.";
-                } else if (_resource._textures[i].texture) {
-                    qDebug() << "Cannot sync texture during descriptor " << i
-                             << " write: " << QString::fromStdString(_resource._textures[i].texture->source());
-                } else {
-                    qDebug() << "Texture is null during descriptor " << i
-                             << " write.";
+                // A texture whose image could not be allocated was reported once by checkImageAllocation and
+                // stays on the default texture until memory is freed, so it is not logged on every write.
+                if (!texture || !texture->_allocationFailed) {
+                    qDebug() << "Writing descriptor " << i << " with texture: " << QString::fromStdString(_resource._textures[i].texture->source());
+                    if (texture) {
+                        qDebug() << "Warning: Texture " + QString::fromStdString(_resource._textures[i].texture->source()) + " being bound at input slot "
+                                        << i << " is in VK_IMAGE_LAYOUT_UNDEFINED layout.";
+                    } else if (_resource._textures[i].texture) {
+                        qDebug() << "Cannot sync texture during descriptor " << i
+                                 << " write: " << QString::fromStdString(_resource._textures[i].texture->source());
+                    } else {
+                        qDebug() << "Texture is null during descriptor " << i
+                                 << " write.";
+                    }
                 }
                 // VKTODO: is there a more reliable way of telling which one we need?
                 if (i == render_utils::slot::texture::Skybox) {
