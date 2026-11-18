@@ -58,8 +58,8 @@ FocusScope {
         objectName: "rootMenu" 
 
         property var exclusionGroups: ({});
+        // VrMenu adds Controls 2 MenuItems, which are buttons, so a ButtonGroup makes them exclusive.
         property Component exclusiveGroupMaker: Component {
-            //ExclusiveGroup { //QT6TODO
             ButtonGroup {
             }
         }
@@ -75,8 +75,7 @@ FocusScope {
                 exclusionGroups[exclusionGroupId] = exclusiveGroupMaker.createObject(rootMenuId);
             }
 
-            //QT6TODO:
-            qmlAction.exclusiveGroup = exclusionGroups[exclusionGroupId]
+            exclusionGroups[exclusionGroupId].addButton(qmlAction);
         }
     }
 

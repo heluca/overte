@@ -20,7 +20,6 @@
 #include <QtQml/QQmlContext>
 #include <QActionGroup>
 
-#include <AudioScriptingInterface.h>
 #include <display-plugins/CompositorHelper.h>
 #include <ErrorDialog.h>
 #include <FramebufferCache.h>
@@ -32,7 +31,6 @@
 #include <plugins/PluginManager.h>
 #include <Preferences.h>
 #include <RenderableWebEntityItem.h>
-#include <scripting/AccountServicesScriptingInterface.h>
 #include <scripting/HMDScriptingInterface.h>
 #include <scripting/PlatformInfoScriptingInterface.h>
 #include <scripting/RenderScriptingInterface.h>
@@ -391,18 +389,8 @@ void Application::initializeUi() {
     });
 
 #if !defined(DISABLE_QML)
-    // Pre-create a couple of offscreen surfaces to speed up tablet UI
+    // Pre-create a couple of offscreen surfaces to speed up Web entities
     auto offscreenSurfaceCache = DependencyManager::get<OffscreenQmlSurfaceCache>();
-    offscreenSurfaceCache->setOnRootContextCreated([&](const QString& rootObject, QQmlContext* surfaceContext) {
-        if (rootObject == TabletScriptingInterface::QML) {
-            // in Qt 5.10.0 there is already an "Audio" object in the QML context
-            // though I failed to find it (from QtMultimedia??). So..  let it be "AudioScriptingInterface"
-            surfaceContext->setContextProperty("AudioScriptingInterface", DependencyManager::get<AudioScriptingInterface>().data());
-            surfaceContext->setContextProperty("Account", AccountServicesScriptingInterface::getInstance()); // DEPRECATED - TO BE REMOVED
-        }
-    });
-
-    offscreenSurfaceCache->reserve(TabletScriptingInterface::QML, 1);
     offscreenSurfaceCache->reserve(render::entities::WebEntityRenderer::QML, 2);
 #endif
 
