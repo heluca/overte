@@ -197,7 +197,7 @@ private:
     bool _didLastVisualGeometryRequestSucceed { true };
 
     void processMaterials();
-    bool _allProceduralMaterialsLoaded { false };
+    bool _allMaterialsLoaded { false };
 
     static void metaBlendshapeOperator(render::ItemID renderItemID, int blendshapeNumber, const QVector<BlendshapeOffset>& blendshapeOffsets,
                                        const QVector<int>& blendedMeshSizes, const render::ItemIDs& subItemIDs);

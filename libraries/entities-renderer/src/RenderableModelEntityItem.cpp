@@ -1253,6 +1253,19 @@ bool ModelEntityRenderer::needsRenderUpdateFromTypedEntity(const TypedEntityPoin
     return Parent::needsRenderUpdateFromTypedEntity(entity);
 }
 
+// The shape key depends on material state that is only known once the material is ready and its
+// textures are defined (e.g. the splat map), so the render items must be updated again after that.
+static bool isMaterialLoading(const graphics::MaterialPointer& material) {
+    if (!material) {
+        return false;
+    }
+    if (material->isProcedural() && !material->isReady()) {
+        return true;
+    }
+    auto networkMaterial = std::dynamic_pointer_cast<NetworkMaterial>(material);
+    return networkMaterial && networkMaterial->isMissingTexture();
+}
+
 void ModelEntityRenderer::doRenderUpdateAsynchronousTyped(const TypedEntityPointer& entity) {
     DETAILED_PROFILE_RANGE(simulation_physics, __FUNCTION__);
 
@@ -1427,27 +1440,26 @@ void ModelEntityRenderer::doRenderUpdateAsynchronousTyped(const TypedEntityPoint
         emit requestRenderUpdate();
     }
 
-    if (!_allProceduralMaterialsLoaded) {
+    if (!_allMaterialsLoaded) {
         std::lock_guard<std::mutex> lock(_materialsLock);
-        bool allProceduralMaterialsLoaded = true;
+        bool allMaterialsLoaded = true;
         for (auto& shapeMaterialPair : _materials) {
             auto material = shapeMaterialPair.second;
             while (!material.empty()) {
-                auto mat = material.top();
-                if (mat.material && mat.material->isProcedural() && !mat.material->isReady()) {
-                    allProceduralMaterialsLoaded = false;
+                if (isMaterialLoading(material.top().material)) {
+                    allMaterialsLoaded = false;
                     break;
                 }
                 material.pop();
             }
-            if (!allProceduralMaterialsLoaded) {
+            if (!allMaterialsLoaded) {
                 break;
             }
         }
-        if (!allProceduralMaterialsLoaded) {
+        if (!allMaterialsLoaded) {
             emit requestRenderUpdate();
         } else {
-            _allProceduralMaterialsLoaded = true;
+            _allMaterialsLoaded = true;
             needsUpdate = true;
         }
     }
@@ -1579,8 +1591,8 @@ void ModelEntityRenderer::addMaterial(graphics::MaterialLayer material, const st
     if (_model && _model->fetchRenderItemIDs().size() > 0) {
         _model->addMaterial(material, parentMaterialName);
     }
-    if (material.material && material.material->isProcedural()) {
-        _allProceduralMaterialsLoaded = false;
+    if (material.material && (material.material->isProcedural() || isMaterialLoading(material.material))) {
+        _allMaterialsLoaded = false;
         emit requestRenderUpdate();
     }
 }
