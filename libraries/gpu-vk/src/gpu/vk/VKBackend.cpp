@@ -137,6 +137,8 @@ void VKBackend::shutdown() {
         _context.recycler.trashVkShaderModule(module.second);
     }
     _cache.moduleMap.clear();
+    _cache.runtimeReflections.clear();
+    _cache.failedModuleKeys.clear();
 
     for (auto &renderPass : _cache.pipelineState._renderPassMap) {
         _context.recycler.trashVkRenderPass(renderPass.second);

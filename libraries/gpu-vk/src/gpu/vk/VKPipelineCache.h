@@ -87,6 +87,9 @@ struct Cache {
     // Keys of runtime-compiled shaders (Procedural) whose GLSL did not compile; they hold the shader's build-time
     // module instead, and every pipeline built from them flags its program so Procedural shows its error shader.
     std::unordered_set<std::string> failedModuleKeys;
+    // What each runtime-compiled module uses, keyed like moduleMap; merged into the build-time reflection of the
+    // stub it replaced when a pipeline layout is built.
+    std::unordered_map<std::string, shader::Reflection> runtimeReflections;
     std::unordered_map<std::string, PipelineLayout> pipelineMap;
 
     struct Pipeline {
@@ -124,8 +127,11 @@ struct Cache {
         static BindingMap getBindingMap(const LocationMap& vertexMap, const LocationMap& fragmentMap);
 
         // VKTODO: This needs to be used instead of getPipeline
-        // Returns structure containing pipeline layout and descriptor set layouts
-        PipelineLayout getPipelineAndDescriptorLayout(const vks::Context& context);
+        // Returns structure containing pipeline layout and descriptor set layouts, built from the given reflections
+        // (for a runtime-compiled shader, its build-time reflection plus what the compiled module uses)
+        PipelineLayout getPipelineAndDescriptorLayout(const vks::Context& context,
+                                                      const shader::Reflection& vertexReflection,
+                                                      const shader::Reflection& fragmentReflection);
 
         RenderpassKey getRenderPassKey(gpu::Framebuffer* framebuffer, const vks::Context &context) const;
 
@@ -144,6 +150,9 @@ struct Cache {
     // The module for a Source: the SPIR-V from the build for a shipped shader, or one compiled now with glslang
     // for a Source carrying runtime replacements. `compileFailed` reports a runtime compile that did not succeed.
     VkShaderModule getShaderModule(const vks::Context& context, const shader::Source& source, VkShaderStageFlagBits stage, bool& compileFailed);
+
+    // The reflection of a Source's runtime-compiled module, or null when its module is the build's SPIR-V
+    const shader::Reflection* getRuntimeReflection(const shader::Source& source) const;
 
     const PipelineLayout& getPipeline(const vks::Context& context);
 };
