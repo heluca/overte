@@ -15,6 +15,7 @@
 #include <DependencyManager.h>
 #include <NumericalConstants.h>
 
+#include <gpu/Buffer.h>
 #include <gpu/Resource.h>
 #include <gpu/Pipeline.h>
 #include <render/Forward.h>
@@ -51,8 +52,9 @@ public:
 
     void setCurve(TonemappingCurve curve);
     void setExposure(float exposure);
-    // HDR output: the brightest value the display shows as a multiple of SDR white; 0 ends the curve at white
-    void setHDRPeak(float peak);
+    // HDR output: the brightest value the display shows as a multiple of SDR white; 0 ends the curve at white.
+    // white is the swapchain value of SDR white, which the output is scaled by while peak > 0.
+    void setHDRPeak(float peak, float white);
 
     // Inputs: lightingFramebuffer, destinationFramebuffer, tonemappingFrame, autoExposure (null when off)
     using Input = render::VaryingSet4<gpu::FramebufferPointer, gpu::FramebufferPointer, TonemappingStage::FramePointer, AutoExposureResultPointer>;
@@ -89,6 +91,7 @@ private:
         int _autoEnabled = 0;
         int _autoDebug = 0;
         float _hdrPeak = 0.0f;
+        float _hdrWhite = 1.0f;
 
         Parameters() {}
     };
@@ -99,6 +102,19 @@ private:
     gpu::BufferView _parametersBuffer;
 
     void init();
+};
+
+// HDR output: the tone mapper scales its output by the swapchain's value of SDR white (RenderArgs::_hdrWhite), but
+// passes that draw straight into the final framebuffer write SDR white as 1.0. This multiplies the colour already in the
+// bound framebuffer by a factor, keeping its alpha, to bring such a pass to the swapchain's white.
+class ScaleFramebufferColor {
+public:
+    // Draws a full-viewport quad into the bound framebuffer
+    void render(gpu::Batch& batch, float scale);
+
+private:
+    // A uniform buffer holds one value for a whole frame, so each pass that scales by its own factor needs its own buffer
+    gpu::StructBuffer<glm::vec4> _color;
 };
 
 #endif // hifi_ToneMapAndResample_h

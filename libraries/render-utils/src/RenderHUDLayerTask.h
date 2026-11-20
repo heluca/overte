@@ -13,6 +13,7 @@
 #include "LightingModel.h"
 #include "HazeStage.h"
 #include "DeferredFrameTransform.h"
+#include "ToneMapAndResampleTask.h"
 
 class CompositeHUD {
 public:
@@ -27,6 +28,25 @@ public:
 
 private:
     uint _transformSlot;
+};
+
+// HDR output: HUD-layer items are drawn after the tone mapper with SDR white at 1.0, so the final framebuffer is brought
+// to SDR white units before them and back to the swapchain's SDR white after them. Blending is linear, so transparent
+// items blend with the scene exactly as if they had been drawn scaled themselves.
+class ScaleHUDLayerToHDRWhite {
+public:
+    // Framebuffer the HUD layer draws into, opaque items, transparent items
+    using Inputs = render::VaryingSet3<gpu::FramebufferPointer, render::ItemBounds, render::ItemBounds>;
+    using JobModel = render::Job::ModelI<ScaleHUDLayerToHDRWhite, Inputs>;
+
+    // toSwapchainWhite false runs before the HUD-layer items, true after them
+    ScaleHUDLayerToHDRWhite(bool toSwapchainWhite) : _toSwapchainWhite(toSwapchainWhite) {}
+
+    void run(const render::RenderContextPointer& renderContext, const Inputs& inputs);
+
+private:
+    bool _toSwapchainWhite;
+    ScaleFramebufferColor _scale;
 };
 
 class RenderHUDLayerTask {

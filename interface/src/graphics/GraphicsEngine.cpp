@@ -20,6 +20,7 @@
 #include <TextureCache.h>
 #include <FramebufferCache.h>
 #include <UpdateSceneTask.h>
+#include <ToneMapAndResampleTask.h>
 #include <RenderViewTask.h>
 #include <SecondaryCamera.h>
 
@@ -268,6 +269,7 @@ void GraphicsEngine::render_performFrame() {
         // HDR output: the display plugin says whether it presents with headroom above SDR white; then the final
         // framebuffer is float and the tone mapper is told the peak
         renderArgs._hdrPeak = displayPlugin->getHDRPeak();
+        renderArgs._hdrWhite = displayPlugin->getHDRWhite();
         framebufferCache->setHDR(renderArgs._hdrPeak > 0.0f);
         // Final framebuffer that will be handed to the display-plugin
         finalFramebuffer = framebufferCache->getFramebuffer();
@@ -283,6 +285,12 @@ void GraphicsEngine::render_performFrame() {
                 batch.clearDepthStencilFramebuffer(1.0, 0);
                 batch.setViewportTransform({ 0, 0, finalFramebuffer->getSize() });
                 _splashScreen->render(batch, viewFrustum, renderArgs._renderMethod == RenderArgs::RenderMethod::FORWARD, render::RenderEngine::TS_BACKGROUND_VIEW);
+                // The skybox writes SDR white as 1.0 straight into the final framebuffer, without the tone mapper
+                if (renderArgs._hdrPeak > 0.0f) {
+                    static ScaleFramebufferColor splashScreenHDRWhite;
+                    batch.enableStereo(false);
+                    splashScreenHDRWhite.render(batch, renderArgs._hdrWhite);
+                }
             });
         }
     } else {

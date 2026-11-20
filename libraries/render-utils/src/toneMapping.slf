@@ -54,6 +54,8 @@ struct ToneMappingParams {
     int _autoDebug;
     // HDR output: the brightest value the display shows, as a multiple of SDR white; 0 when the output is SDR
     float _hdrPeak;
+    // HDR output: the swapchain value of SDR white; the curves work in SDR white units and the output is scaled by it
+    float _hdrWhite;
 };
 
 const float GAMMA_22 = 2.2;
@@ -187,5 +189,8 @@ void main(void) {
         tonedColor = vec3(pow(probe, GAMMA_22));
     }
 
+    if (peak > 0.0) {
+        tonedColor *= params._hdrWhite;
+    }
     outFragColor = vec4(tonedColor, 1.0);
 }
